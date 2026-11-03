@@ -314,8 +314,34 @@ class Instagram:
                 self.user_id = real
             me["id"] = real or me.get("id")
             return me
-        return self._req("GET", f"{self.base}/{self.user_id}",
-                         params={"fields": "id,username,media_count"})
+        try:
+            return self._req("GET", f"{self.base}/{self.user_id}",
+                             params={"fields": "id,username,media_count"})
+        except RuntimeError:
+            self.diagnose_facebook()
+            raise
+
+    def diagnose_facebook(self) -> None:
+        """Подсказка, чего не хватает токену Facebook Login."""
+        try:
+            me = self._req("GET", f"{self.base}/me", params={"fields": "id,name"})
+            log(f"Токен выдан на: {me.get('name')} (тип: Facebook)")
+            perms = self._req("GET", f"{self.base}/me/permissions").get("data", [])
+            granted = sorted(p["permission"] for p in perms if p.get("status") == "granted")
+            log(f"Разрешения токена: {', '.join(granted) or 'нет'}")
+            need = {"instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement"}
+            if need - set(granted):
+                log(f"НЕ ХВАТАЕТ разрешений: {', '.join(sorted(need - set(granted)))}")
+            pages = self._req("GET", f"{self.base}/me/accounts",
+                              params={"fields": "name,instagram_business_account{id,username}"}).get("data", [])
+            if not pages:
+                log("Токен не видит ни одной страницы Facebook. Instagram должен быть привязан к странице.")
+            for pg in pages:
+                ig = pg.get("instagram_business_account")
+                log(f"Страница «{pg.get('name')}»: Instagram "
+                    f"{'@' + ig.get('username', '?') + ' id ' + ig['id'] if ig else 'не привязан'}")
+        except RuntimeError as e:
+            log(f"Диагностика не удалась: {e}")
 
     def create_reel_container(self, caption: str, cover_url: str, thumb_offset: int | None,
                               share_to_feed: bool) -> str:
