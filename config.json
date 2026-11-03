@@ -1,0 +1,12 @@
+{
+  "timezone": "Europe/Moscow",
+  "day_start": "10:00",
+  "day_end": "22:00",
+  "max_posts_per_run": 3,
+  "caption_template": "{text}\n\n{hashtags}",
+  "hashtags": "",
+  "default_text": "",
+  "cover": "auto",
+  "thumb_offset_ms": 1000,
+  "share_to_feed": true
+}
