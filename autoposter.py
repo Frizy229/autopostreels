@@ -136,6 +136,47 @@ VIDEO_EXT = (".mp4", ".mov")
 COVER_EXT = (".jpg", ".jpeg", ".png")
 
 
+def parse_txt(text: str) -> tuple[str, str]:
+    """Вернуть (подпись, имя файла обложки).
+
+    Простой .txt: весь текст = подпись.
+    Формат с разделами (TITLE:, DESCRIPTION..., REELS CAPTION (Instagram):, COVER: ...):
+    подпись берётся из раздела REELS CAPTION, обложка из строки COVER:.
+    """
+    cover = ""
+    m = re.search(r"^\s*COVER:\s*(\S+)", text, re.M | re.I)
+    if m:
+        cover = m.group(1)
+    m = re.search(r"^\s*REELS CAPTION[^\n]*:\s*\n(.*?)(?=^\s*COVER:|^[A-Z][A-Z ()/]+:\s*$|\Z)",
+                  text, re.M | re.S)
+    if m:
+        return m.group(1).strip(), cover
+    if cover:
+        text = re.sub(r"^\s*COVER:.*$", "", text, flags=re.M | re.I)
+    return text.strip(), cover
+
+
+def first_number(name: str) -> str:
+    m = re.search(r"\d+", name)
+    return m.group(0).lstrip("0") or "0" if m else ""
+
+
+def find_cover(video: pathlib.Path, named: str) -> pathlib.Path | None:
+    folder = video.parent
+    if named and (folder / named).is_file():
+        return folder / named
+    for e in COVER_EXT + tuple(x.upper() for x in COVER_EXT):
+        if video.with_suffix(e).exists():
+            return video.with_suffix(e)
+    # cover-4.jpg для short-4-....mp4
+    num = first_number(video.stem)
+    if num:
+        for img in sorted(folder.iterdir()):
+            if img.suffix.lower() in COVER_EXT and first_number(img.stem) == num:
+                return img
+    return None
+
+
 def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
     """Рилсы одной папки по алфавиту (удобно нумеровать: 01_..., 02_...)."""
     items = []
@@ -144,14 +185,14 @@ def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
         if key in state["posted"] or key in state["skipped"]:
             continue
         txt = video.with_suffix(".txt")
-        cover = next((video.with_suffix(e) for e in COVER_EXT + tuple(x.upper() for x in COVER_EXT)
-                      if video.with_suffix(e).exists()), None)
+        raw = txt.read_text(encoding="utf-8-sig") if txt.exists() else ""
+        caption, cover_name = parse_txt(raw)
         items.append({
             "id": key,
             "video": video,
             "txt": txt if txt.exists() else None,
-            "cover": cover,
-            "text": txt.read_text(encoding="utf-8-sig") if txt.exists() else "",
+            "cover": find_cover(video, cover_name),
+            "text": caption,
         })
     return items
 
@@ -209,6 +250,19 @@ def cover_url_for(cfg: dict, cover: pathlib.Path | None) -> str:
             log(f"Временная ссылка для обложки не получилась: {e}")
     log("Обложка будет взята кадром из видео.")
     return ""
+
+
+def group_loose_files(cfg: dict, now: dt.datetime) -> None:
+    """Файлы, загруженные прямо в queue/ без папки, собрать в новую папку."""
+    q = ROOT / cfg["queue_dir"]
+    loose = [p for p in q.iterdir() if p.is_file() and not p.name.startswith(".")] if q.exists() else []
+    if not any(p.suffix.lower() in VIDEO_EXT for p in loose):
+        return
+    dest = q / f"{now:%Y%m%d_%H%M}_upload"
+    dest.mkdir(exist_ok=True)
+    for f in loose:
+        f.rename(dest / f.name)
+    log(f"Файлы без папки собраны в {cfg['queue_dir']}/{dest.name}/")
 
 
 def finish_folder(cfg: dict, folder: pathlib.Path) -> None:
@@ -425,6 +479,7 @@ def cmd_post(args) -> int:
                       f"{build_caption(cfg, i['text'])}\n")
         return 0
 
+    group_loose_files(cfg, now)
     folder, due = schedule(cfg, state, now)
     save_state(state)
     if not due:
