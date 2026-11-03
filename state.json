@@ -17,5 +17,8 @@
     }
   },
   "skipped": {},
-  "last_started": "2026-11-03"
+  "last_started": "2026-11-03",
+  "failures": {
+    "001_bunker/short-7-the-last-peaches.mp4": 1
+  }
 }
