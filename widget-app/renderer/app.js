@@ -1,6 +1,6 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
-const api = window.api;
+const bridge = window.api;
 const LABEL = { done: 'вышел', wait: 'ждёт', skipped: 'пропущен', queued: 'в очереди' };
 
 let cfg = {}, hasToken = false, version = '', snap = null, timer = null, busy = false;
@@ -81,7 +81,7 @@ document.addEventListener('click', (e) => {
     return;
   }
   const row = e.target.closest('.row-card[data-url]');
-  if (row) api.openUrl(row.dataset.url);
+  if (row) bridge.openUrl(row.dataset.url);
 });
 $('doneTitle').addEventListener('click', () => { doneOpen = !doneOpen; localStorage.setItem('doneOpen', doneOpen ? '1' : '0'); render(); });
 
@@ -92,7 +92,7 @@ function banner(text, info = false) {
 async function refresh() {
   const btn = $('btnRefresh'); btn.classList.add('spin');
   try {
-    const r = await api.refresh();
+    const r = await bridge.refresh();
     snap = r.snapshot; banner('');
     $('foot').textContent = `Обновлено ${timeOf(r.at)}`;
     render();
@@ -115,7 +115,7 @@ async function addFolders(paths) {
 async function showNext() {
   if (!pending.length) { $('sheet').hidden = true; return; }
   let info;
-  try { info = await api.inspect(pending[0]); } catch (e) { toast(e.message); pending.shift(); return showNext(); }
+  try { info = await bridge.inspect(pending[0]); } catch (e) { toast(e.message); pending.shift(); return showNext(); }
   const name = `${pad3((snap && snap.nextNum) || 1)}_${slug(info.name)}`;
   $('pvTitle').textContent = `queue/${name}`;
   const more = pending.length > 1 ? ` · ещё ${pending.length - 1} в ожидании` : '';
@@ -133,7 +133,7 @@ async function upload() {
   $('pvGo').disabled = true; $('pvGo').textContent = 'Загружаю…'; $('pvCancel').disabled = true;
   $('pvBar').hidden = false; $('pvBar').firstElementChild.style.width = '0%';
   try {
-    const name = await api.upload(pending[0]);
+    const name = await bridge.upload(pending[0]);
     toast(`Готово: ${name} в очереди`);
     pending.shift(); busy = false;
     refresh(); showNext();
@@ -143,20 +143,20 @@ async function upload() {
     $('pvGo').disabled = false; $('pvGo').textContent = 'Повторить'; $('pvCancel').disabled = false;
   }
 }
-api.onProgress(({ frac, text }) => {
+bridge.onProgress(({ frac, text }) => {
   $('pvBar').firstElementChild.style.width = `${Math.round(frac * 100)}%`;
   $('pvStatus').style.color = ''; $('pvStatus').textContent = text;
 });
 $('pvGo').addEventListener('click', upload);
 $('pvCancel').addEventListener('click', () => { pending.shift(); showNext(); });
-$('fab').addEventListener('click', async () => { const p = await api.pickFolder().catch(() => null); if (p) addFolders([p]); });
+$('fab').addEventListener('click', async () => { const p = await bridge.pickFolder().catch(() => null); if (p) addFolders([p]); });
 
 window.addEventListener('dragenter', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { dragDepth++; $('dropOverlay').hidden = false; } });
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $('dropOverlay').hidden = true; });
 window.addEventListener('drop', (e) => {
   e.preventDefault(); dragDepth = 0; $('dropOverlay').hidden = true;
-  const paths = [...e.dataTransfer.files].map((f) => api.pathFor(f));
+  const paths = [...e.dataTransfer.files].map((f) => bridge.pathFor(f));
   if (paths.length) addFolders(paths);
 });
 
@@ -178,13 +178,13 @@ function fillSettings() {
   $('about').textContent = `Reels Widget ${version}. Папка из одного длинного видео превращается в очередь рилсов, а автопостер на GitHub публикует их в Instagram в течение дня.`;
 }
 function openSettings() { fillSettings(); $('connResult').textContent = ''; $('settings').hidden = false; }
-const save = async (patch) => { cfg = await api.setConfig(patch); fillSettings(); schedule(); };
+const save = async (patch) => { cfg = await bridge.setConfig(patch); fillSettings(); schedule(); };
 
 $('btnSettings').addEventListener('click', openSettings);
 $('setBack').addEventListener('click', () => { $('settings').hidden = true; });
 $('btnRefresh').addEventListener('click', refresh);
-$('btnClose').addEventListener('click', () => api.hide());
-$('btnPin').addEventListener('click', async () => { cfg.alwaysOnTop = await api.pin(!cfg.alwaysOnTop); fillSettings(); });
+$('btnClose').addEventListener('click', () => bridge.hide());
+$('btnPin').addEventListener('click', async () => { cfg.alwaysOnTop = await bridge.pin(!cfg.alwaysOnTop); fillSettings(); });
 $('segTheme').addEventListener('click', (e) => { if (e.target.dataset.v) save({ theme: e.target.dataset.v }); });
 $('fMaterial').addEventListener('change', (e) => save({ material: e.target.value }));
 let tintT; $('fTint').addEventListener('input', (e) => {
@@ -209,7 +209,7 @@ $('btnPaste').addEventListener('click', async () => {
   } catch { toast('Не удалось прочитать буфер: нажми в поле и Ctrl+V.'); }
 });
 $('btnForget').addEventListener('click', async () => {
-  await api.setToken(''); hasToken = false; fillSettings();
+  await bridge.setToken(''); hasToken = false; fillSettings();
   $('connResult').className = 'small'; $('connResult').textContent = 'Токен удалён.';
 });
 $('btnSave').addEventListener('click', async () => {
@@ -217,24 +217,24 @@ $('btnSave').addEventListener('click', async () => {
   try {
     await save({ repo: $('fRepo').value.trim() || cfg.repo, branch: $('fBranch').value.trim() || cfg.branch });
     const t = $('fToken').value.trim();
-    if (t) { await api.setToken(t); hasToken = true; $('fToken').value = ''; }
-    const full = await api.checkConnection();
+    if (t) { await bridge.setToken(t); hasToken = true; $('fToken').value = ''; }
+    const full = await bridge.checkConnection();
     res.className = 'small ok'; res.textContent = `✓ Подключено к ${full}, запись разрешена.`;
     refresh();
   } catch (e) { res.className = 'small bad'; res.textContent = `✗ ${e.message}`; }
 });
 document.querySelectorAll('[data-link]').forEach((b) => b.addEventListener('click', () => {
   const base = `https://github.com/${cfg.repo}`;
-  api.openUrl({ repo: base, actions: `${base}/actions`, releases: `${base}/releases/tag/widget` }[b.dataset.link]);
+  bridge.openUrl({ repo: base, actions: `${base}/actions`, releases: `${base}/releases/tag/widget` }[b.dataset.link]);
 }));
-api.onAppearance(applyAppearance);
-api.onRefresh(refresh);
-api.onConfig((c) => { cfg = c; fillSettings(); });
+bridge.onAppearance(applyAppearance);
+bridge.onRefresh(refresh);
+bridge.onConfig((c) => { cfg = c; fillSettings(); });
 
 // ------------------------------------------------------------ старт
 (async function init() {
   tick(); setInterval(tick, 1000);
-  const r = await api.getConfig();
+  const r = await bridge.getConfig();
   cfg = r.cfg; hasToken = r.hasToken; version = r.version;
   applyAppearance(r.appearance); fillSettings(); schedule();
   refresh();
