@@ -8,7 +8,7 @@ const { GitHub } = require('./lib/github');
 
 const DEFAULTS = {
   repo: 'Frizy229/autopostreels', branch: 'main', theme: 'system', material: 'acrylic', tint: 55,
-  alwaysOnTop: false, autostart: true, refreshMin: 5, scheduleTz: 'Europe/Moscow', autoUpload: false,
+  alwaysOnTop: false, autostart: true, refreshMin: 5, scheduleTz: 'Asia/Tomsk', autoUpload: false,
   bounds: null, tokenEnc: '', tokenPlain: '',
 };
 const win11 = process.platform === 'win32' && parseInt(os.release().split('.')[2] || '0', 10) >= 22621;
@@ -19,6 +19,7 @@ let cfg = { ...DEFAULTS };
 
 function loadCfg() {
   try { cfg = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(configPath(), 'utf8')) }; } catch { cfg = { ...DEFAULTS }; }
+  if (cfg.scheduleTz === 'Europe/Moscow' && !cfg.tzMigrated) { cfg.scheduleTz = 'Asia/Tomsk'; cfg.tzMigrated = true; }
 }
 function saveCfg() {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });

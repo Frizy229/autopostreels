@@ -480,7 +480,19 @@ def cmd_post(args) -> int:
         return 0
 
     group_loose_files(cfg, now)
-    folder, due = schedule(cfg, state, now)
+    if args.only:
+        # разовая публикация выбранного рилса прямо сейчас, расписание не трогаем
+        folder, due = None, []
+        for f in queue_folders(cfg):
+            due = [i for i in folder_items(f, state) if args.only in i["id"]][:1]
+            if due:
+                break
+        if not due:
+            log(f"Рилс «{args.only}» не найден в очереди (или уже опубликован).")
+            return 1
+        log(f"Публикую сейчас: {due[0]['id']}")
+    else:
+        folder, due = schedule(cfg, state, now)
     if state.get("active"):
         act = state["active"]
         plans = state.setdefault("plans", {})
@@ -649,6 +661,7 @@ def main() -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sp = sub.add_parser("post")
     sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--only", help="опубликовать сейчас один рилс, часть имени, например short-4")
     sp.add_argument("--now", help="для проверки: подставить время, например 2026-11-03T14:00")
     sp.set_defaults(func=cmd_post)
     sub.add_parser("check").set_defaults(func=cmd_check)

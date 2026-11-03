@@ -11,6 +11,10 @@ on:
         type: choice
         default: post
         options: [post, dry-run, check]
+      only:
+        description: "Опубликовать сейчас один рилс (часть имени, например short-4). Только для action=post"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -38,7 +42,7 @@ jobs:
           case "${{ inputs.action || 'post' }}" in
             check)   python autoposter.py check ;;
             dry-run) python autoposter.py post --dry-run ;;
-            *)       python autoposter.py post ;;
+            *)       python autoposter.py post ${{ inputs.only && format('--only "{0}"', inputs.only) || '' }} ;;
           esac
 
       - name: Статистика
