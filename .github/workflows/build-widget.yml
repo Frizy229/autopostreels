@@ -1,0 +1,29 @@
+name: Сборка виджета для Windows
+
+on:
+  push:
+    paths: ["widget/**", ".github/workflows/build-widget.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r widget/requirements.txt pyinstaller
+      - name: Сборка .exe
+        run: pyinstaller --onefile --windowed --name ReelsWidget --collect-all tkinterdnd2 widget/reels_widget.py
+      - name: Опубликовать в Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release delete widget -y --cleanup-tag || true
+          gh release create widget dist/ReelsWidget.exe --title "Виджет для Windows" \
+            --notes "Скачай ReelsWidget.exe и запусти. Инструкция: README.md, раздел «Виджет для Windows»."
