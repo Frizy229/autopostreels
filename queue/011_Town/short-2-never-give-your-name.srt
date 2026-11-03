@@ -1,0 +1,14 @@
+1
+00:00:00,200 --> 00:00:03,400
+Welcome home! You must be tired.
+What's your name, friend?
+
+2
+00:00:03,900 --> 00:00:08,233
+Rule two. Never give your name. Not
+even a nickname. A name is a key.
+
+3
+00:00:08,733 --> 00:00:12,733
+So you say nothing. He smiles wider.
+And his smile doesn't change at all.
