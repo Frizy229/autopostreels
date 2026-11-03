@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reels Widget</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-material="none">
+<div id="app">
+  <header class="drag">
+    <div class="clocks">
+      <div class="clock"><span class="lbl">Ваше время <i id="tzLocal"></i></span><b id="clockLocal">--:--</b></div>
+      <div class="clock dim"><span class="lbl">Москва UTC+3</span><b id="clockMsk">--:--</b></div>
+    </div>
+    <div class="head-row">
+      <div id="dateLine" class="date"></div>
+      <div class="btns no-drag">
+        <button id="btnRefresh" class="ibtn" title="Обновить"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg></button>
+        <button id="btnPin" class="ibtn" title="Поверх окон"><svg viewBox="0 0 24 24"><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6zM12 15v5"/></svg></button>
+        <button id="btnSettings" class="ibtn" title="Настройки"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+        <button id="btnClose" class="ibtn" title="Свернуть в трей"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+    </div>
+  </header>
+
+  <main id="scroll">
+    <div id="banner" class="banner" hidden></div>
+    <section><h3 id="todayTitle">Сегодня</h3><div id="todayList" class="list"></div></section>
+    <section><h3 id="queueTitle">Очередь</h3><div id="queueList" class="list"></div></section>
+    <section><h3 id="doneTitle" class="toggle">Готово <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></h3><div id="doneList" class="list" hidden></div></section>
+    <div id="foot" class="foot"></div>
+  </main>
+
+  <button id="fab" class="fab" title="Добавить папку с рилсами"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+  <div id="dropOverlay" class="overlay" hidden><div><b>Отпусти папку здесь</b><span>видео, описания и обложки</span></div></div>
+
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-card">
+      <div id="pvTitle" class="pv-title"></div>
+      <div id="pvCounts" class="muted"></div>
+      <div id="pvNotes" class="notes"></div>
+      <div id="pvBar" class="bar" hidden><i></i></div>
+      <div id="pvStatus" class="muted"></div>
+      <div class="sheet-btns"><button id="pvGo" class="btn primary">Загрузить в очередь</button><button id="pvCancel" class="btn">Отмена</button></div>
+    </div>
+  </div>
+
+  <div id="settings" class="settings" hidden>
+    <div class="set-head drag"><button id="setBack" class="ibtn no-drag" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><b>Настройки</b></div>
+    <div class="set-body">
+      <h4>Подключение</h4>
+      <label>Репозиторий GitHub<input id="fRepo" spellcheck="false"></label>
+      <label>Ветка<input id="fBranch" spellcheck="false"></label>
+      <label>Токен GitHub
+        <div class="row"><input id="fToken" type="password" spellcheck="false" autocomplete="off"><button id="btnPaste" class="btn small">Вставить</button><button id="btnEye" class="btn small">Показать</button></div>
+      </label>
+      <p class="muted small" id="tokenHint">Fine-grained токен только на этот репозиторий с правом Contents: Read and write. Хранится зашифрованным (DPAPI Windows).</p>
+      <div class="row"><button id="btnSave" class="btn primary grow">Сохранить и проверить</button><button id="btnForget" class="btn danger small">Забыть токен</button></div>
+      <p id="connResult" class="small"></p>
+
+      <h4>Вид</h4>
+      <div class="seg" id="segTheme"><button data-v="system">Системная</button><button data-v="dark">Тёмная</button><button data-v="light">Светлая</button></div>
+      <label>Материал окна
+        <select id="fMaterial"><option value="acrylic">Acrylic (стекло)</option><option value="mica">Mica</option><option value="tabbed">Mica Alt</option><option value="none">Без прозрачности</option></select>
+      </label>
+      <p class="muted small" id="materialHint"></p>
+      <label>Плотность подложки <span id="tintVal" class="muted"></span><input id="fTint" type="range" min="0" max="100"></label>
+      <label class="check"><input id="fPin" type="checkbox"> Окно поверх остальных</label>
+
+      <h4>Система</h4>
+      <label class="check"><input id="fAutostart" type="checkbox"> Запускать вместе с Windows</label>
+      <label class="check"><input id="fAutoUpload" type="checkbox"> Загружать папку сразу после перетаскивания</label>
+      <label>Автообновление данных
+        <select id="fRefresh"><option value="0">Выкл</option><option value="1">Каждую минуту</option><option value="5">Каждые 5 минут</option><option value="15">Каждые 15 минут</option></select>
+      </label>
+      <label>Часовой пояс расписания (как в config.json)
+        <select id="fTz"><option value="Europe/Moscow">Москва</option><option value="Asia/Tomsk">Томск</option><option value="Europe/Kaliningrad">Калининград</option><option value="Asia/Yekaterinburg">Екатеринбург</option><option value="Asia/Novosibirsk">Новосибирск</option><option value="Asia/Vladivostok">Владивосток</option><option value="UTC">UTC</option></select>
+      </label>
+
+      <h4>О программе</h4>
+      <p class="muted small" id="about"></p>
+      <div class="row wrap"><button class="btn small" data-link="repo">Репозиторий</button><button class="btn small" data-link="actions">Запуски</button><button class="btn small" data-link="releases">Обновить виджет</button></div>
+    </div>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
