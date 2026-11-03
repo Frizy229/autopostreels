@@ -13,6 +13,18 @@ class GitHub {
   }
 
   async req(method, url, body, raw = false) {
+    let last;
+    for (let i = 0; i < 4; i++) {
+      try { return await this.req1(method, url, body, raw); } catch (e) {
+        last = e;
+        if (e.status && e.status < 500) throw e; // повторяем только сбои сервера и сети
+        await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+      }
+    }
+    throw last;
+  }
+
+  async req1(method, url, body, raw = false) {
     const res = await fetch(`${API}/repos/${this.repo}${url}`, {
       method,
       headers: {
@@ -28,7 +40,7 @@ class GitHub {
     if (!res.ok) {
       let msg = '';
       try { msg = (await res.json()).message; } catch { /* ignore */ }
-      const e = new Error(`GitHub ${res.status}: ${msg || res.statusText}`);
+      const e = new Error(`GitHub ${res.status}: ${msg || res.statusText} (${method} ${url.split('?')[0]})`);
       e.status = res.status;
       throw e;
     }
