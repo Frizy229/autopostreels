@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { slug, inspectFolder, VIDEO_EXT } = require('./core');
+const { push } = require('./gitpush');
 
 const API = 'https://api.github.com';
 
@@ -103,17 +104,24 @@ class GitHub {
     const info = inspectFolder(dir);
     if (info.errors.length) throw new Error(info.errors.join(' '));
     const name = `${String(await this.nextNumber()).padStart(3, '0')}_${slug(path.basename(dir))}`;
-    const total = Math.max(info.size, 1);
+    const files = {};
     let done = 0;
-    const shas = {};
+    const total = Math.max(info.size, 1);
     for (const f of info.files) {
       const size = fs.statSync(f).size;
-      progress(done / total, `${path.basename(f)} (${(size / 1e6).toFixed(1)} МБ)`);
-      shas[`queue/${name}/${path.basename(f)}`] = await this.blob(fs.readFileSync(f));
+      progress(0.3 * done / total, `Читаю ${path.basename(f)} (${(size / 1e6).toFixed(1)} МБ)`);
+      files[`queue/${name}/${path.basename(f)}`] = fs.readFileSync(f);
       done += size;
     }
-    progress(1, 'Сохраняю…');
-    await this.commitFiles(shas, `Новая папка рилсов: ${name} (${info.videos} видео)`);
+    progress(0.4, `Отправляю на GitHub: ${(info.size / 1e6).toFixed(0)} МБ, это может занять несколько минут…`);
+    await push({
+      repo: this.repo, token: this.token, branch: this.branch, files,
+      message: `Новая папка рилсов: ${name} (${info.videos} видео)`,
+      getHeadTree: async (commit) => (await this.req('GET', `/git/commits/${commit}`)).tree.sha,
+      getTree: async (sha) => (await this.req('GET', `/git/trees/${sha}`)).tree.map((e) => ({
+        mode: e.mode === '040000' ? '40000' : e.mode, name: e.path, sha: e.sha })),
+    });
+    progress(1, 'Готово');
     return name;
   }
 }
