@@ -304,7 +304,18 @@ class Instagram:
         raise RuntimeError(f"Instagram API: {err}")
 
     def whoami(self) -> dict:
-        return self._req("GET", f"{self.base}/{self.user_id}", params={"fields": "id,username,account_type,media_count"})
+        """Узнать аккаунт по токену. Для Instagram Login берём user_id из /me,
+        так надёжнее, чем ID из секрета."""
+        if self.host == "graph.instagram.com":
+            me = self._req("GET", f"{self.base}/me", params={"fields": "user_id,username,account_type,media_count"})
+            real = str(me.get("user_id") or "")
+            if real and real != self.user_id:
+                log(f"IG_USER_ID из секрета не совпадает с аккаунтом токена, использую {real}.")
+                self.user_id = real
+            me["id"] = real or me.get("id")
+            return me
+        return self._req("GET", f"{self.base}/{self.user_id}",
+                         params={"fields": "id,username,media_count"})
 
     def create_reel_container(self, caption: str, cover_url: str, thumb_offset: int | None,
                               share_to_feed: bool) -> str:
@@ -387,7 +398,8 @@ def cmd_post(args) -> int:
 
     token = env("IG_TOKEN")
     mask(token)
-    ig = Instagram(token, env("IG_USER_ID"), cfg)
+    ig = Instagram(token, env("IG_USER_ID", required=False), cfg)
+    ig.whoami()
     posted = failed = 0
     for item in due[: int(cfg["max_posts_per_run"])]:
         log(f"→ {item['id']}")
@@ -434,7 +446,8 @@ def cmd_check(args) -> int:
     cfg = load_config()
     token = env("IG_TOKEN")
     mask(token)
-    ig = Instagram(token, env("IG_USER_ID"), cfg)
+    ig = Instagram(token, env("IG_USER_ID", required=False), cfg)
+    log(f"API: {ig.host}")
     info = ig.whoami()
     log(f"Токен работает. Аккаунт: @{info.get('username')} (id {info.get('id')}, "
         f"тип {info.get('account_type', '?')}, публикаций {info.get('media_count', '?')}), API: {ig.host}")
