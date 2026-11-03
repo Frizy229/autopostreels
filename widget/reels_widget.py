@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import json
 import os
 import pathlib
 import re
 import sys
 import threading
+import webbrowser
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
@@ -35,6 +37,8 @@ POSTED = "posted"
 API = "https://api.github.com"
 VIDEO_EXT = {".mp4", ".mov"}
 ALLOWED_EXT = VIDEO_EXT | {".txt", ".jpg", ".jpeg", ".png", ".srt"}
+MSK = dt.timezone(dt.timedelta(hours=3))  # Москва без перехода на летнее время
+REFRESH_MS = 5 * 60 * 1000
 MAX_FILE = 95 * 1024 * 1024  # ограничение GitHub ~100 МБ на файл
 
 CONFIG_PATH = pathlib.Path(os.environ.get("APPDATA", pathlib.Path.home())) / APP / "config.json"
@@ -105,6 +109,15 @@ class GitHub:
                 return []
             raise
 
+    def read_json(self, path: str) -> dict:
+        r = self.s.get(f"{API}/repos/{self.repo}/contents/{path}", params={"ref": BRANCH},
+                       headers={"Accept": "application/vnd.github.raw+json"}, timeout=60)
+        if r.status_code == 404:
+            return {}
+        if r.status_code >= 400:
+            raise RuntimeError(f"GitHub {r.status_code}: {r.text[:200]}")
+        return json.loads(r.text or "{}")
+
     def next_number(self) -> int:
         nums = [0]
         for d in (QUEUE, POSTED):
@@ -153,14 +166,74 @@ def slug(name: str) -> str:
     return name or "reels"
 
 
+# ---------------------------------------------------------------- план дня и результаты
+
+def hhmm(iso: str) -> str:
+    return dt.datetime.fromisoformat(iso).astimezone(MSK).strftime("%H:%M")
+
+
+def today_plan(state: dict, now: dt.datetime) -> list[dict]:
+    """Рилсы на сегодня: время, название, статус (done / wait / skipped)."""
+    day = now.astimezone(MSK).date().isoformat()
+    plan = (state.get("plans") or {}).get(day)
+    if not plan and (state.get("active") or {}).get("date") == day:
+        plan = state["active"]
+    if not plan:
+        return []
+    rows = []
+    for name, when in sorted(plan["plan"].items(), key=lambda kv: kv[1]):
+        key = f"{plan['folder']}/{name}"
+        posted = state.get("posted", {}).get(key)
+        if posted:
+            status, shown = "done", hhmm(posted["at"])
+        elif key in state.get("skipped", {}):
+            status, shown = "skipped", hhmm(when)
+        else:
+            status, shown = "wait", hhmm(when)
+        rows.append({"key": key, "name": name, "time": shown, "status": status,
+                     "permalink": (posted or {}).get("permalink", "")})
+    return rows
+
+
+def summary(rows: list[dict]) -> str:
+    if not rows:
+        return "На сегодня плана нет"
+    done = sum(r["status"] == "done" for r in rows)
+    waiting = [r for r in rows if r["status"] == "wait"]
+    text = f"Сегодня: {done} из {len(rows)} опубликовано"
+    if waiting:
+        text += f", следующий в {waiting[0]['time']}"
+    elif done == len(rows):
+        text += ", день закрыт"
+    return text
+
+
+def results_rows(state: dict, stats: dict, limit: int = 40) -> list[dict]:
+    """Результаты по опубликованным рилсам, свежие сверху."""
+    items = sorted(state.get("posted", {}).items(), key=lambda kv: kv[1]["at"], reverse=True)[:limit]
+    out = []
+    for key, info in items:
+        st = stats.get(key, {})
+        dash = lambda v: "—" if v is None else str(v)  # noqa: E731
+        out.append({
+            "key": key,
+            "name": key.split("/", 1)[-1],
+            "when": dt.datetime.fromisoformat(info["at"]).astimezone(MSK).strftime("%d.%m %H:%M"),
+            "views": dash(st.get("views")), "likes": dash(st.get("likes")),
+            "comments": dash(st.get("comments")), "reach": dash(st.get("reach")),
+            "permalink": st.get("permalink") or info.get("permalink", ""),
+        })
+    return out
+
+
 # ---------------------------------------------------------------- окно
 
 class App:
     def __init__(self):
         self.root = TkinterDnD.Tk() if TkinterDnD else tk.Tk()
         self.root.title("Рилсы → Instagram")
-        self.root.geometry("420x460")
-        self.root.minsize(360, 400)
+        self.root.geometry("440x640")
+        self.root.minsize(380, 480)
         cfg = load_config()
         self.repo = cfg.get("repo", REPO)
         self.on_top = tk.BooleanVar(value=cfg.get("on_top", True))
@@ -183,6 +256,31 @@ class App:
         self.progress.pack(fill="x", **pad)
         self.status = tk.Label(self.root, text="", anchor="w", justify="left", wraplength=390)
         self.status.pack(fill="x", padx=12)
+
+        # --- мониторинг: плашка, которая раскрывается
+        self.today_open = False
+        self.today_btn = tk.Button(self.root, text="▶ Сегодня: загружаю…", anchor="w", relief="groove",
+                                   font=("Segoe UI", 10, "bold"), command=self.toggle_today)
+        self.today_btn.pack(fill="x", padx=12, pady=(10, 0))
+        self.today_box = ttk.Notebook(self.root, height=200)
+        plan_tab, res_tab = tk.Frame(self.today_box), tk.Frame(self.today_box)
+        self.today_box.add(plan_tab, text="План на сегодня")
+        self.today_box.add(res_tab, text="Результаты")
+        self.plan_tree = ttk.Treeview(plan_tab, columns=("time", "name", "status"), show="headings", height=8)
+        for col, title, w in (("time", "Время", 60), ("name", "Видео", 220), ("status", "Статус", 110)):
+            self.plan_tree.heading(col, text=title)
+            self.plan_tree.column(col, width=w, anchor="w")
+        self.plan_tree.pack(fill="both", expand=True)
+        self.res_tree = ttk.Treeview(res_tab, columns=("when", "name", "views", "likes", "comments"),
+                                     show="headings", height=8)
+        for col, title, w in (("when", "Вышел", 80), ("name", "Видео", 150), ("views", "Просм.", 55),
+                              ("likes", "Лайки", 50), ("comments", "Коммент.", 60)):
+            self.res_tree.heading(col, text=title)
+            self.res_tree.column(col, width=w, anchor="w")
+        self.res_tree.pack(fill="both", expand=True)
+        for tree in (self.plan_tree, self.res_tree):
+            tree.bind("<Double-1>", self.open_link)
+        self.links: dict = {self.plan_tree: {}, self.res_tree: {}}
 
         tk.Label(self.root, text="Очередь на GitHub (по дням):", anchor="w",
                  font=("Segoe UI", 10, "bold")).pack(fill="x", padx=12, pady=(12, 0))
@@ -231,6 +329,22 @@ class App:
         else:
             self.refresh()
 
+    def toggle_today(self):
+        self.today_open = not self.today_open
+        if self.today_open:
+            self.today_box.pack(fill="x", padx=12, pady=(0, 4), after=self.today_btn)
+        else:
+            self.today_box.pack_forget()
+        self.today_btn.config(text=self.today_btn.cget("text").replace("▶", "▼") if self.today_open
+                              else self.today_btn.cget("text").replace("▼", "▶"))
+
+    def open_link(self, event):
+        tree = event.widget
+        row = tree.identify_row(event.y)
+        url = self.links.get(tree, {}).get(row)
+        if url:
+            webbrowser.open(url)
+
     def refresh(self):
         def work():
             try:
@@ -238,11 +352,31 @@ class App:
                 if not gh:
                     return
                 items = gh.queue_status()
+                state = gh.read_json("state.json")
+                stats = gh.read_json("stats.json")
                 self.root.after(0, lambda: self.show_queue(items))
+                self.root.after(0, lambda: self.show_today(state, stats))
                 self.say("Очередь пустая." if not items else "")
             except Exception as e:  # noqa: BLE001
-                self.say(f"Не удалось получить очередь: {e}")
+                self.say(f"Не удалось обновить данные: {e}")
         threading.Thread(target=work, daemon=True).start()
+
+    def show_today(self, state: dict, stats: dict):
+        rows = today_plan(state, dt.datetime.now(dt.timezone.utc))
+        arrow = "▼" if self.today_open else "▶"
+        self.today_btn.config(text=f"{arrow} {summary(rows)}")
+        self.links = {self.plan_tree: {}, self.res_tree: {}}
+        self.plan_tree.delete(*self.plan_tree.get_children())
+        label = {"done": "✓ вышел", "wait": "⏳ ждёт", "skipped": "✗ пропущен"}
+        for r in rows:
+            iid = self.plan_tree.insert("", "end", values=(r["time"], r["name"], label[r["status"]]))
+            if r["permalink"]:
+                self.links[self.plan_tree][iid] = r["permalink"]
+        self.res_tree.delete(*self.res_tree.get_children())
+        for r in results_rows(state, stats):
+            iid = self.res_tree.insert("", "end", values=(r["when"], r["name"], r["views"], r["likes"], r["comments"]))
+            if r["permalink"]:
+                self.links[self.res_tree][iid] = r["permalink"]
 
     def show_queue(self, items: list[str]):
         self.queue.delete(0, "end")
@@ -308,7 +442,13 @@ class App:
         gh.commit_files(shas, f"Новая папка рилсов: {name} ({len(videos)} видео)")
         self.say(f"Готово: {name}, {len(videos)} видео в очереди.")
 
+    def tick(self):
+        if not self.busy:
+            self.refresh()
+        self.root.after(REFRESH_MS, self.tick)
+
     def run(self):
+        self.root.after(REFRESH_MS, self.tick)
         self.root.mainloop()
 
 

@@ -481,6 +481,12 @@ def cmd_post(args) -> int:
 
     group_loose_files(cfg, now)
     folder, due = schedule(cfg, state, now)
+    if state.get("active"):
+        act = state["active"]
+        plans = state.setdefault("plans", {})
+        plans[act["date"]] = {"folder": act["folder"], "plan": act["plan"]}
+        for old_day in sorted(plans)[:-14]:  # храним последние 14 дней
+            plans.pop(old_day)
     save_state(state)
     if not due:
         log("Сейчас публиковать нечего.")
@@ -530,6 +536,46 @@ def cmd_post(args) -> int:
         state["active"] = None
         save_state(state)
     return 1 if failed and not posted else 0
+
+
+def cmd_stats(args) -> int:
+    """Собрать лайки, комментарии и (если токен позволяет) просмотры в stats.json."""
+    cfg = load_config()
+    state = load_state()
+    token = env("IG_TOKEN")
+    mask(token)
+    ig = Instagram(token, env("IG_USER_ID", required=False), cfg)
+    stats_path = ROOT / "stats.json"
+    stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else {}
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
+    insights_ok = True
+    for key, info in state["posted"].items():
+        at = dt.datetime.fromisoformat(info["at"])
+        if at < cutoff and key in stats:
+            continue  # старые не обновляем
+        row = stats.get(key, {})
+        try:
+            m = ig._req("GET", f"{ig.base}/{info['media_id']}",
+                        params={"fields": "like_count,comments_count,permalink"})
+            row.update(likes=m.get("like_count"), comments=m.get("comments_count"),
+                       permalink=m.get("permalink") or info.get("permalink", ""))
+        except RuntimeError as e:
+            log(f"{key}: не удалось получить лайки: {str(e)[:200]}")
+            continue
+        if insights_ok:
+            try:
+                ins = ig._req("GET", f"{ig.base}/{info['media_id']}/insights",
+                              params={"metric": "views,reach,saved,shares"})
+                for d in ins.get("data", []):
+                    row[d["name"]] = (d.get("values") or [{}])[0].get("value")
+            except RuntimeError as e:
+                insights_ok = False
+                log(f"Просмотры недоступны (нужно разрешение instagram_manage_insights): {str(e)[:160]}")
+        row["updated"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        stats[key] = row
+    stats_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    log(f"Статистика обновлена для {len(stats)} рилсов.")
+    return 0
 
 
 def cmd_check(args) -> int:
@@ -592,6 +638,7 @@ def main() -> int:
     sp.add_argument("--now", help="для проверки: подставить время, например 2026-11-03T14:00")
     sp.set_defaults(func=cmd_post)
     sub.add_parser("check").set_defaults(func=cmd_check)
+    sub.add_parser("stats").set_defaults(func=cmd_stats)
     sub.add_parser("refresh-token").set_defaults(func=cmd_refresh)
     args = p.parse_args()
     return args.func(args)

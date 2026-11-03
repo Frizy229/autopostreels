@@ -41,12 +41,20 @@ jobs:
             *)       python autoposter.py post ;;
           esac
 
+      - name: Статистика
+        if: always() && (inputs.action || 'post') == 'post'
+        continue-on-error: true
+        env:
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+        run: python autoposter.py stats
+
       - name: Сохранить, что опубликовано
         if: always() && (inputs.action || 'post') == 'post'
         run: |
           git config user.name "autoposter"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A queue posted state.json
+          git add -A queue posted state.json stats.json
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "Автопостер: обновление очереди $(date -u +%F)"
           for i in 1 2 3; do git pull --rebase && git push && exit 0; sleep 5; done
