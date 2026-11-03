@@ -214,10 +214,10 @@ $('btnForget').addEventListener('click', async () => {
 });
 $('btnSave').addEventListener('click', async () => {
   const res = $('connResult'); res.className = 'small muted'; res.textContent = 'Проверяю…';
+  const t = $('fToken').value.trim();
   try {
-    await save({ repo: $('fRepo').value.trim() || cfg.repo, branch: $('fBranch').value.trim() || cfg.branch });
-    const t = $('fToken').value.trim();
     if (t) { await bridge.setToken(t); hasToken = true; $('fToken').value = ''; }
+    await save({ repo: $('fRepo').value.trim() || cfg.repo, branch: $('fBranch').value.trim() || cfg.branch });
     const full = await bridge.checkConnection();
     res.className = 'small ok'; res.textContent = `✓ Подключено к ${full}, запись разрешена.`;
     refresh();
