@@ -323,6 +323,15 @@ class Instagram:
 
     def diagnose_facebook(self) -> None:
         """Подсказка, чего не хватает токену Facebook Login."""
+        uid = self.user_id
+        log(f"IG_USER_ID: длина {len(uid)}, только цифры: {uid.isdigit()}, начало {uid[:4]}…, "
+            f"совпадает с dayzerorules: {uid == '17841431768361264'}")
+        for path in (f"{uid}?fields=id", f"{uid}/content_publishing_limit"):
+            try:
+                self._req("GET", f"{self.base}/{path}")
+                log(f"GET {path.replace(uid, '<id>')}: OK")
+            except RuntimeError as e:
+                log(f"GET {path.replace(uid, '<id>')}: {str(e)[:160]}")
         try:
             me = self._req("GET", f"{self.base}/me", params={"fields": "id,name"})
             log(f"Токен выдан на: {me.get('name')} (тип: Facebook)")
