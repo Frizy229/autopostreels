@@ -1,455 +1,688 @@
-"""Виджет автопостера: перетащи папку с рилсами, и она уйдёт в GitHub в queue/.
+"""Рилсы → Instagram: окно, в которое перетаскивается папка, плюс план дня и результаты.
 
 Одна папка = одно длинное видео = рилсы на один день (mp4 + txt + jpg).
-Папка загружается одним коммитом под следующим номером: 002_имя, 003_имя ...
+Папка загружается в GitHub одним коммитом под следующим номером: 002_имя, 003_имя ...
 """
 from __future__ import annotations
 
-import base64
 import datetime as dt
-import json
 import os
 import pathlib
-import re
 import sys
 import threading
 import webbrowser
-import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import filedialog
 
-import requests
+import customtkinter as ctk
+
+import core
+import glass
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
-except ImportError:  # без перетаскивания остаётся кнопка «Выбрать папку»
+except ImportError:  # без перетаскивания остаётся клик по зоне
     TkinterDnD = None
+    DND_FILES = None
 
-try:
-    import keyring
-except ImportError:
-    keyring = None
+DEMO = bool(os.environ.get("REELS_WIDGET_DEMO"))
+FONT = "Segoe UI" if sys.platform == "win32" else "DejaVu Sans"
 
-APP = "autopostreels-widget"
-REPO = "Frizy229/autopostreels"
-BRANCH = "main"
-QUEUE = "queue"
-POSTED = "posted"
-API = "https://api.github.com"
-VIDEO_EXT = {".mp4", ".mov"}
-ALLOWED_EXT = VIDEO_EXT | {".txt", ".jpg", ".jpeg", ".png", ".srt"}
-MSK = dt.timezone(dt.timedelta(hours=3))  # Москва без перехода на летнее время
-REFRESH_MS = 5 * 60 * 1000
-MAX_FILE = 95 * 1024 * 1024  # ограничение GitHub ~100 МБ на файл
+# (светлая тема, тёмная тема)
+BG = ("#eef0f6", "#0d0f14")
+CARD = ("#ffffff", "#171a22")
+CARD2 = ("#f3f4f9", "#1f232d")
+BORDER = ("#dfe2ec", "#2a2f3b")
+TEXT = ("#14171f", "#eef0f6")
+MUTED = ("#6b7385", "#8d95a9")
+ACCENT = ("#5b5ef0", "#6d70f5")
+ACCENT_HOVER = ("#4a4de0", "#7c7ff7")
+OK = ("#16a34a", "#4ade80")
+WARN = ("#d97706", "#fbbf24")
+ERR = ("#dc2626", "#f87171")
+CHIPS = {
+    "done": (("#dcfce7", "#12301d"), OK, "вышел"),
+    "wait": (("#fef3c7", "#33280f"), WARN, "ждёт"),
+    "skipped": (("#fee2e2", "#3a1a1a"), ERR, "пропущен"),
+}
 
-CONFIG_PATH = pathlib.Path(os.environ.get("APPDATA", pathlib.Path.home())) / APP / "config.json"
-
-
-# ---------------------------------------------------------------- настройки и токен
-
-def load_config() -> dict:
-    try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def save_config(cfg: dict) -> None:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+DEFAULTS = {
+    "repo": core.REPO, "branch": core.BRANCH, "theme": "Тёмная", "scale": 100, "on_top": True,
+    "refresh_min": 5, "auto_upload": False, "tz": 3, "glass": "acrylic", "alpha": 94,
+}
+THEMES = {"Системная": "system", "Тёмная": "dark", "Светлая": "light"}
+TZ_CHOICES = {f"UTC{h:+d}" + (" (Москва)" if h == 3 else ""): h for h in range(2, 11)}
+SCALES = ("90%", "100%", "115%", "130%")
+_BASES = (ctk.CTk, TkinterDnD.DnDWrapper) if TkinterDnD else (ctk.CTk,)
 
 
-def get_token() -> str:
-    if keyring:
-        try:
-            return keyring.get_password(APP, "github") or ""
-        except Exception:  # noqa: BLE001
-            pass
-    return load_config().get("token", "")
+def font(size: int = 13, weight: str = "normal") -> ctk.CTkFont:
+    return ctk.CTkFont(family=FONT, size=size, weight=weight)
 
 
-def set_token(token: str) -> None:
-    if keyring:
-        try:
-            keyring.set_password(APP, "github", token)
-            return
-        except Exception:  # noqa: BLE001
-            pass
-    cfg = load_config()
-    cfg["token"] = token
-    save_config(cfg)
+def human_size(n: int) -> str:
+    return f"{n / 1e6:.0f} МБ" if n < 1e9 else f"{n / 1e9:.1f} ГБ"
 
 
-# ---------------------------------------------------------------- GitHub
-
-class GitHub:
-    def __init__(self, token: str, repo: str):
-        self.repo = repo
-        self.s = requests.Session()
-        self.s.headers.update({
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        })
-
-    def _r(self, method: str, path: str, **kw):
-        r = self.s.request(method, f"{API}/repos/{self.repo}{path}", timeout=600, **kw)
-        if r.status_code >= 400:
-            try:
-                msg = r.json().get("message", r.text)
-            except ValueError:
-                msg = r.text
-            raise RuntimeError(f"GitHub {r.status_code}: {msg}")
-        return r.json() if r.content else {}
-
-    def list_dir(self, path: str) -> list[dict]:
-        try:
-            return self._r("GET", f"/contents/{path}", params={"ref": BRANCH})
-        except RuntimeError as e:
-            if "404" in str(e):
-                return []
-            raise
-
-    def read_json(self, path: str) -> dict:
-        r = self.s.get(f"{API}/repos/{self.repo}/contents/{path}", params={"ref": BRANCH},
-                       headers={"Accept": "application/vnd.github.raw+json"}, timeout=60)
-        if r.status_code == 404:
-            return {}
-        if r.status_code >= 400:
-            raise RuntimeError(f"GitHub {r.status_code}: {r.text[:200]}")
-        return json.loads(r.text or "{}")
-
-    def next_number(self) -> int:
-        nums = [0]
-        for d in (QUEUE, POSTED):
-            for item in self.list_dir(d):
-                m = re.match(r"(\d+)", item["name"])
-                if item["type"] == "dir" and m:
-                    nums.append(int(m.group(1)))
-        return max(nums) + 1
-
-    def queue_status(self) -> list[str]:
-        out = []
-        for item in self.list_dir(QUEUE):
-            if item["type"] == "dir":
-                files = self.list_dir(f"{QUEUE}/{item['name']}")
-                n = sum(1 for f in files if pathlib.Path(f["name"]).suffix.lower() in VIDEO_EXT)
-                out.append(f"{item['name']}  ({n} видео)")
-        return out
-
-    def blob(self, data: bytes) -> str:
-        return self._r("POST", "/git/blobs", json={
-            "content": base64.b64encode(data).decode(), "encoding": "base64"})["sha"]
-
-    def commit_files(self, files: dict[str, str], message: str) -> str:
-        """files: путь в репозитории -> sha блоба. Один коммит, с повтором при гонке."""
-        for _ in range(5):
-            ref = self._r("GET", f"/git/ref/heads/{BRANCH}")
-            head = ref["object"]["sha"]
-            base_tree = self._r("GET", f"/git/commits/{head}")["tree"]["sha"]
-            tree = self._r("POST", "/git/trees", json={
-                "base_tree": base_tree,
-                "tree": [{"path": p, "mode": "100644", "type": "blob", "sha": sha} for p, sha in files.items()],
-            })["sha"]
-            commit = self._r("POST", "/git/commits", json={"message": message, "tree": tree, "parents": [head]})["sha"]
-            try:
-                self._r("PATCH", f"/git/refs/heads/{BRANCH}", json={"sha": commit, "force": False})
-                return commit
-            except RuntimeError as e:
-                if "422" not in str(e):
-                    raise
-        raise RuntimeError("Не удалось записать коммит: репозиторий постоянно меняется, попробуйте ещё раз.")
+def plural(n: int, one: str, few: str, many: str) -> str:
+    n10, n100 = n % 10, n % 100
+    word = one if n10 == 1 and n100 != 11 else few if 2 <= n10 <= 4 and not 12 <= n100 <= 14 else many
+    return f"{n} {word}"
 
 
-def slug(name: str) -> str:
-    name = re.sub(r"^\d+[_\- ]*", "", name.strip())  # свой номер убираем, поставим следующий
-    name = re.sub(r"[^\w\-]+", "_", name, flags=re.U).strip("_")
-    return name or "reels"
+def demo_data() -> tuple[list, dict, dict]:
+    """Данные для скриншотов и проверки вида без сети."""
+    now = dt.datetime.now(core.TZ)
+    day = now.date().isoformat()
+    base = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    plan = {f"short-{i}.mp4": (base + dt.timedelta(hours=4 * k)).isoformat() for k, i in enumerate((4, 5, 6, 7))}
+    state = {
+        "plans": {day: {"folder": "001_bunker", "plan": plan}},
+        "posted": {
+            "001_bunker/short-4.mp4": {"media_id": "1", "permalink": "https://instagram.com/", "at": base.isoformat()},
+            "000_old/short-1.mp4": {"media_id": "2", "permalink": "", "at": (base - dt.timedelta(days=1)).isoformat()},
+        },
+        "skipped": {"001_bunker/short-5.mp4": "x"},
+    }
+    stats = {"001_bunker/short-4.mp4": {"views": 1897, "likes": 52, "comments": 4},
+             "000_old/short-1.mp4": {"views": 12400, "likes": 310, "comments": 27}}
+    return [("002_interview", 6), ("003_podcast", 7)], state, stats
 
 
-# ---------------------------------------------------------------- план дня и результаты
-
-def hhmm(iso: str) -> str:
-    return dt.datetime.fromisoformat(iso).astimezone(MSK).strftime("%H:%M")
-
-
-def today_plan(state: dict, now: dt.datetime) -> list[dict]:
-    """Рилсы на сегодня: время, название, статус (done / wait / skipped)."""
-    day = now.astimezone(MSK).date().isoformat()
-    plan = (state.get("plans") or {}).get(day)
-    if not plan and (state.get("active") or {}).get("date") == day:
-        plan = state["active"]
-    if not plan:
-        return []
-    rows = []
-    for name, when in sorted(plan["plan"].items(), key=lambda kv: kv[1]):
-        key = f"{plan['folder']}/{name}"
-        posted = state.get("posted", {}).get(key)
-        if posted:
-            status, shown = "done", hhmm(posted["at"])
-        elif key in state.get("skipped", {}):
-            status, shown = "skipped", hhmm(when)
-        else:
-            status, shown = "wait", hhmm(when)
-        rows.append({"key": key, "name": name, "time": shown, "status": status,
-                     "permalink": (posted or {}).get("permalink", "")})
-    return rows
-
-
-def summary(rows: list[dict]) -> str:
-    if not rows:
-        return "На сегодня плана нет"
-    done = sum(r["status"] == "done" for r in rows)
-    waiting = [r for r in rows if r["status"] == "wait"]
-    text = f"Сегодня: {done} из {len(rows)} опубликовано"
-    if waiting:
-        text += f", следующий в {waiting[0]['time']}"
-    elif done == len(rows):
-        text += ", день закрыт"
-    return text
-
-
-def results_rows(state: dict, stats: dict, limit: int = 40) -> list[dict]:
-    """Результаты по опубликованным рилсам, свежие сверху."""
-    items = sorted(state.get("posted", {}).items(), key=lambda kv: kv[1]["at"], reverse=True)[:limit]
-    out = []
-    for key, info in items:
-        st = stats.get(key, {})
-        dash = lambda v: "—" if v is None else str(v)  # noqa: E731
-        out.append({
-            "key": key,
-            "name": key.split("/", 1)[-1],
-            "when": dt.datetime.fromisoformat(info["at"]).astimezone(MSK).strftime("%d.%m %H:%M"),
-            "views": dash(st.get("views")), "likes": dash(st.get("likes")),
-            "comments": dash(st.get("comments")), "reach": dash(st.get("reach")),
-            "permalink": st.get("permalink") or info.get("permalink", ""),
-        })
-    return out
-
-
-# ---------------------------------------------------------------- окно
-
-class App:
+class App(*_BASES):
     def __init__(self):
-        self.root = TkinterDnD.Tk() if TkinterDnD else tk.Tk()
-        self.root.title("Рилсы → Instagram")
-        self.root.geometry("440x640")
-        self.root.minsize(380, 480)
-        cfg = load_config()
-        self.repo = cfg.get("repo", REPO)
-        self.on_top = tk.BooleanVar(value=cfg.get("on_top", True))
-        self.root.attributes("-topmost", self.on_top.get())
-        self.busy = False
-
-        pad = {"padx": 12, "pady": 6}
-        self.drop = tk.Label(
-            self.root, text="Перетащи сюда папку с рилсами\n\n(mp4 + txt + обложки)",
-            relief="ridge", bd=2, bg="#f3f4f6", fg="#374151", font=("Segoe UI", 12), height=6, cursor="hand2")
-        self.drop.pack(fill="x", **pad)
-        self.drop.bind("<Button-1>", lambda e: self.pick_folder())
+        super().__init__()
         if TkinterDnD:
-            self.drop.drop_target_register(DND_FILES)
-            self.drop.dnd_bind("<<Drop>>", self.on_drop)
-        else:
-            self.drop.config(text="Нажми, чтобы выбрать папку с рилсами")
-
-        self.progress = ttk.Progressbar(self.root, mode="determinate")
-        self.progress.pack(fill="x", **pad)
-        self.status = tk.Label(self.root, text="", anchor="w", justify="left", wraplength=390)
-        self.status.pack(fill="x", padx=12)
-
-        # --- мониторинг: плашка, которая раскрывается
+            self.TkdndVersion = TkinterDnD._require(self)
+        self.cfg = {**DEFAULTS, **core.load_config()}
+        core.set_tz(int(self.cfg["tz"]))
+        ctk.set_appearance_mode(THEMES.get(self.cfg["theme"], "dark"))
+        ctk.set_widget_scaling(self.cfg["scale"] / 100)
+        self.title("Рилсы → Instagram")
+        self.geometry("480x780")
+        self.minsize(430, 560)
+        self.busy = False
+        self.pending: list[pathlib.Path] = []
+        self.next_num = 1
         self.today_open = False
-        self.today_btn = tk.Button(self.root, text="▶ Сегодня: загружаю…", anchor="w", relief="groove",
-                                   font=("Segoe UI", 10, "bold"), command=self.toggle_today)
-        self.today_btn.pack(fill="x", padx=12, pady=(10, 0))
-        self.today_box = ttk.Notebook(self.root, height=200)
-        plan_tab, res_tab = tk.Frame(self.today_box), tk.Frame(self.today_box)
-        self.today_box.add(plan_tab, text="План на сегодня")
-        self.today_box.add(res_tab, text="Результаты")
-        self.plan_tree = ttk.Treeview(plan_tab, columns=("time", "name", "status"), show="headings", height=8)
-        for col, title, w in (("time", "Время", 60), ("name", "Видео", 220), ("status", "Статус", 110)):
-            self.plan_tree.heading(col, text=title)
-            self.plan_tree.column(col, width=w, anchor="w")
-        self.plan_tree.pack(fill="both", expand=True)
-        self.res_tree = ttk.Treeview(res_tab, columns=("when", "name", "views", "likes", "comments"),
-                                     show="headings", height=8)
-        for col, title, w in (("when", "Вышел", 80), ("name", "Видео", 150), ("views", "Просм.", 55),
-                              ("likes", "Лайки", 50), ("comments", "Коммент.", 60)):
-            self.res_tree.heading(col, text=title)
-            self.res_tree.column(col, width=w, anchor="w")
-        self.res_tree.pack(fill="both", expand=True)
-        for tree in (self.plan_tree, self.res_tree):
-            tree.bind("<Double-1>", self.open_link)
-        self.links: dict = {self.plan_tree: {}, self.res_tree: {}}
+        self.after_id = None
+        self.last_state: dict = {}
+        self.last_stats: dict = {}
+        self.view = "План"
+        self.settings_win = None
+        self.build()
+        self.apply_glass()
+        if TkinterDnD:
+            self.drop_target_register(DND_FILES)
+            self.dnd_bind("<<Drop>>", self.on_drop)
+            self.dnd_bind("<<DropEnter>>", lambda e: self.drop_zone.configure(border_color=ACCENT))
+            self.dnd_bind("<<DropLeave>>", lambda e: self.drop_zone.configure(border_color=BORDER))
+        self.after(250, self.startup)
 
-        tk.Label(self.root, text="Очередь на GitHub (по дням):", anchor="w",
-                 font=("Segoe UI", 10, "bold")).pack(fill="x", padx=12, pady=(12, 0))
-        self.queue = tk.Listbox(self.root, height=8)
-        self.queue.pack(fill="both", expand=True, **pad)
+    # ------------------------------------------------------------ вид
 
-        bar = tk.Frame(self.root)
-        bar.pack(fill="x", padx=12, pady=(0, 10))
-        ttk.Button(bar, text="Обновить", command=self.refresh).pack(side="left")
-        ttk.Button(bar, text="Токен GitHub", command=self.ask_token).pack(side="left", padx=6)
-        ttk.Checkbutton(bar, text="Поверх окон", variable=self.on_top, command=self.toggle_top).pack(side="right")
+    def card(self, parent) -> ctk.CTkFrame:
+        return ctk.CTkFrame(parent, fg_color=CARD, border_color=BORDER, border_width=1, corner_radius=18)
 
-        self.root.after(200, self.startup)
+    def build(self):
+        self.scroll = ctk.CTkScrollableFrame(self, fg_color=BG)
+        self.scroll.pack(fill="both", expand=True, padx=2, pady=2)
+        self.body = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.body.pack(fill="both", expand=True, padx=12, pady=8)
 
-    # --- helpers
-    def say(self, text: str) -> None:
-        self.root.after(0, lambda: self.status.config(text=text))
+        # шапка
+        head = ctk.CTkFrame(self.body, fg_color="transparent")
+        head.pack(fill="x", pady=(0, 12))
+        ctk.CTkLabel(head, text="Рилсы → Instagram", font=font(20, "bold"), text_color=TEXT).pack(side="left")
+        ctk.CTkButton(head, text="⚙", width=36, height=36, corner_radius=12, fg_color=CARD, hover_color=CARD2,
+                      border_width=1, border_color=BORDER, text_color=TEXT, font=font(16),
+                      command=self.open_settings).pack(side="right")
+        self.conn = ctk.CTkLabel(head, text="● не подключено", font=font(12), text_color=MUTED)
+        self.conn.pack(side="right", padx=10)
 
-    def gh(self) -> GitHub | None:
-        token = get_token()
-        if not token:
-            token = self.ask_token()
-        return GitHub(token, self.repo) if token else None
+        # зона для папки
+        self.drop_zone = ctk.CTkFrame(self.body, fg_color=CARD, border_color=BORDER, border_width=2,
+                                      corner_radius=22, height=150)
+        self.drop_zone.pack(fill="x")
+        self.drop_zone.pack_propagate(False)
+        inner = ctk.CTkFrame(self.drop_zone, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+        self.drop_title = ctk.CTkLabel(inner, text="Перетащи папку с рилсами", font=font(17, "bold"), text_color=TEXT)
+        self.drop_title.pack()
+        self.drop_sub = ctk.CTkLabel(inner, text="видео, описания и обложки, всё в одной папке",
+                                     font=font(12), text_color=MUTED)
+        self.drop_sub.pack(pady=(2, 10))
+        self.pick_btn = ctk.CTkButton(inner, text="Выбрать папку", width=150, height=34, corner_radius=12,
+                                      fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
+                                      font=font(13, "bold"), command=self.pick_folder)
+        self.pick_btn.pack()
 
-    def toggle_top(self):
-        self.root.attributes("-topmost", self.on_top.get())
-        cfg = load_config()
-        cfg["on_top"] = self.on_top.get()
-        save_config(cfg)
+        # предпросмотр перед загрузкой
+        self.preview = self.card(self.body)
+        self.pv_title = ctk.CTkLabel(self.preview, text="", font=font(15, "bold"), text_color=TEXT, anchor="w")
+        self.pv_title.pack(fill="x", padx=16, pady=(14, 0))
+        self.pv_counts = ctk.CTkLabel(self.preview, text="", font=font(12), text_color=MUTED, anchor="w",
+                                      justify="left", wraplength=390)
+        self.pv_counts.pack(fill="x", padx=16, pady=(2, 0))
+        self.pv_notes = ctk.CTkLabel(self.preview, text="", font=font(12), anchor="w", justify="left", wraplength=390)
+        self.pv_notes.pack(fill="x", padx=16, pady=(6, 0))
+        self.pv_bar = ctk.CTkProgressBar(self.preview, height=8, corner_radius=4, progress_color=ACCENT)
+        self.pv_bar.set(0)
+        self.pv_status = ctk.CTkLabel(self.preview, text="", font=font(12), text_color=MUTED, anchor="w",
+                                      justify="left", wraplength=390)
+        self.pv_buttons = ctk.CTkFrame(self.preview, fg_color="transparent")
+        self.pv_buttons.pack(fill="x", padx=16, pady=14)
+        self.pv_go = ctk.CTkButton(self.pv_buttons, text="Загрузить в очередь", height=36, corner_radius=12,
+                                   fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color="white",
+                                   font=font(13, "bold"), command=self.start_upload)
+        self.pv_go.pack(side="left", expand=True, fill="x")
+        self.pv_skip = ctk.CTkButton(self.pv_buttons, text="Отмена", width=90, height=36, corner_radius=12,
+                                     fg_color=CARD2, hover_color=BORDER, text_color=TEXT, font=font(13),
+                                     command=self.skip_pending)
+        self.pv_skip.pack(side="left", padx=(8, 0))
 
-    def ask_token(self) -> str:
-        token = simpledialog.askstring(
-            "Токен GitHub",
-            "Вставь GitHub токен (Fine-grained, доступ к репозиторию\n"
-            f"{self.repo}, право Contents: Read and write):",
-            parent=self.root, show="•")
-        if token:
-            set_token(token.strip())
-            self.refresh()
-            return token.strip()
-        return ""
+        # сегодня
+        self.today = self.card(self.body)
+        self.today.pack(fill="x", pady=(12, 0))
+        self.today_head = ctk.CTkFrame(self.today, fg_color="transparent", cursor="hand2")
+        self.today_head.pack(fill="x", padx=16, pady=14)
+        self.today_arrow = ctk.CTkLabel(self.today_head, text="▾", font=font(14), text_color=MUTED, cursor="hand2")
+        self.today_arrow.pack(side="right")
+        self.today_sum = ctk.CTkLabel(self.today_head, text="Сегодня", font=font(14, "bold"), text_color=TEXT,
+                                      anchor="w", cursor="hand2")
+        self.today_sum.pack(side="left")
+        for w in (self.today_head, self.today_sum, self.today_arrow):
+            w.bind("<Button-1>", lambda e: self.toggle_today())
+        self.today_body = ctk.CTkFrame(self.today, fg_color="transparent")
+        self.seg = ctk.CTkSegmentedButton(self.today_body, values=["План", "Результаты"], command=self.set_view,
+                                          font=font(12, "bold"), corner_radius=10, selected_color=ACCENT,
+                                          selected_hover_color=ACCENT_HOVER, unselected_color=CARD2,
+                                          unselected_hover_color=BORDER, text_color=TEXT)
+        self.seg.set("План")
+        self.seg.pack(fill="x", padx=16, pady=(0, 8))
+        self.list_frame = ctk.CTkScrollableFrame(self.today_body, fg_color="transparent", height=210)
+        self.list_frame.pack(fill="x", padx=8, pady=(0, 10))
 
-    def startup(self):
-        if not get_token():
-            self.ask_token()
-        else:
-            self.refresh()
+        # очередь
+        self.queue = self.card(self.body)
+        self.queue.pack(fill="x", pady=(12, 0))
+        qh = ctk.CTkFrame(self.queue, fg_color="transparent")
+        qh.pack(fill="x", padx=16, pady=(14, 4))
+        ctk.CTkLabel(qh, text="Очередь публикаций", font=font(14, "bold"), text_color=TEXT).pack(side="left")
+        self.queue_count = ctk.CTkLabel(qh, text="", font=font(12), text_color=MUTED)
+        self.queue_count.pack(side="right")
+        self.queue_list = ctk.CTkScrollableFrame(self.queue, fg_color="transparent", height=140)
+        self.queue_list.pack(fill="x", padx=8, pady=(0, 10))
+
+        # подвал
+        foot = ctk.CTkFrame(self.body, fg_color="transparent")
+        foot.pack(fill="x", pady=(10, 0))
+        self.updated = ctk.CTkLabel(foot, text="", font=font(11), text_color=MUTED)
+        self.updated.pack(side="left")
+        ctk.CTkButton(foot, text="Обновить", width=80, height=26, corner_radius=8, fg_color="transparent",
+                      hover_color=CARD2, text_color=ACCENT, font=font(12, "bold"), command=self.refresh
+                      ).pack(side="right")
+        self.status = ctk.CTkLabel(foot, text="", font=font(11), text_color=MUTED, anchor="e",
+                                   wraplength=240, justify="right")
+        self.status.pack(side="right", padx=8)
+        for w in (self.drop_zone, self.drop_title, self.drop_sub):
+            w.bind("<Button-1>", lambda e: self.pick_folder())
+
+    def apply_glass(self):
+        """Стекло: размытие фона и полупрозрачность. Вне Windows ничего не меняет."""
+        dark = ctk.get_appearance_mode() == "Dark"
+        active = glass.apply(self, self.cfg["glass"], dark, self.cfg["alpha"] / 100)
+        bg = glass.KEY_COLOR if active else BG
+        self.configure(fg_color=bg)
+        self.scroll.configure(fg_color=bg)
+        self.attributes("-topmost", bool(self.cfg["on_top"]))
+
+    def say(self, text: str, color=MUTED) -> None:
+        self.after(0, lambda: self.status.configure(text=text, text_color=color))
+
+    # ------------------------------------------------------------ сегодня и очередь
 
     def toggle_today(self):
         self.today_open = not self.today_open
         if self.today_open:
-            self.today_box.pack(fill="x", padx=12, pady=(0, 4), after=self.today_btn)
+            self.today_body.pack(fill="x", padx=2, pady=(0, 6))
         else:
-            self.today_box.pack_forget()
-        self.today_btn.config(text=self.today_btn.cget("text").replace("▶", "▼") if self.today_open
-                              else self.today_btn.cget("text").replace("▼", "▶"))
+            self.today_body.pack_forget()
+        self.today_arrow.configure(text="▴" if self.today_open else "▾")
+        self.render_list()
 
-    def open_link(self, event):
-        tree = event.widget
-        row = tree.identify_row(event.y)
-        url = self.links.get(tree, {}).get(row)
-        if url:
-            webbrowser.open(url)
-
-    def refresh(self):
-        def work():
-            try:
-                gh = self.gh()
-                if not gh:
-                    return
-                items = gh.queue_status()
-                state = gh.read_json("state.json")
-                stats = gh.read_json("stats.json")
-                self.root.after(0, lambda: self.show_queue(items))
-                self.root.after(0, lambda: self.show_today(state, stats))
-                self.say("Очередь пустая." if not items else "")
-            except Exception as e:  # noqa: BLE001
-                self.say(f"Не удалось обновить данные: {e}")
-        threading.Thread(target=work, daemon=True).start()
+    def set_view(self, value: str):
+        self.view = value
+        self.render_list()
 
     def show_today(self, state: dict, stats: dict):
-        rows = today_plan(state, dt.datetime.now(dt.timezone.utc))
-        arrow = "▼" if self.today_open else "▶"
-        self.today_btn.config(text=f"{arrow} {summary(rows)}")
-        self.links = {self.plan_tree: {}, self.res_tree: {}}
-        self.plan_tree.delete(*self.plan_tree.get_children())
-        label = {"done": "✓ вышел", "wait": "⏳ ждёт", "skipped": "✗ пропущен"}
-        for r in rows:
-            iid = self.plan_tree.insert("", "end", values=(r["time"], r["name"], label[r["status"]]))
-            if r["permalink"]:
-                self.links[self.plan_tree][iid] = r["permalink"]
-        self.res_tree.delete(*self.res_tree.get_children())
-        for r in results_rows(state, stats):
-            iid = self.res_tree.insert("", "end", values=(r["when"], r["name"], r["views"], r["likes"], r["comments"]))
-            if r["permalink"]:
-                self.links[self.res_tree][iid] = r["permalink"]
+        self.last_state, self.last_stats = state, stats
+        rows = core.today_plan(state, dt.datetime.now(dt.timezone.utc))
+        self.today_sum.configure(text=core.summary(rows))
+        self.render_list()
 
-    def show_queue(self, items: list[str]):
-        self.queue.delete(0, "end")
-        for i in items:
-            self.queue.insert("end", i)
+    @staticmethod
+    def clear(frame):
+        for w in frame.winfo_children():
+            w.destroy()
 
-    # --- загрузка
-    def pick_folder(self):
-        from tkinter import filedialog
-        path = filedialog.askdirectory(parent=self.root, title="Папка с рилсами")
-        if path:
-            self.start_upload([path])
-
-    def on_drop(self, event):
-        self.start_upload(list(self.root.tk.splitlist(event.data)))
-
-    def start_upload(self, paths: list[str]):
-        if self.busy:
-            messagebox.showinfo("Подожди", "Предыдущая папка ещё загружается.", parent=self.root)
+    def render_list(self):
+        if not self.today_open:
             return
-        folders = [pathlib.Path(p) for p in paths if pathlib.Path(p).is_dir()]
-        if not folders:
-            messagebox.showwarning("Нужна папка", "Перетащи именно папку, а не отдельные файлы.", parent=self.root)
+        self.clear(self.list_frame)
+        if self.view == "План":
+            rows = core.today_plan(self.last_state, dt.datetime.now(dt.timezone.utc))
+            if not rows:
+                self.empty(self.list_frame, "На сегодня плана нет.\nПлан появится, когда начнётся день публикаций.")
+            for r in rows:
+                self.plan_row(r)
+        else:
+            rows = core.results_rows(self.last_state, self.last_stats)
+            if not rows:
+                self.empty(self.list_frame, "Пока нет опубликованных рилсов.")
+            else:
+                self.results_header()
+            for r in rows:
+                self.result_row(r)
+
+    @staticmethod
+    def empty(parent, text: str):
+        ctk.CTkLabel(parent, text=text, font=font(12), text_color=MUTED, justify="center").pack(pady=26)
+
+    def row_frame(self, parent) -> ctk.CTkFrame:
+        row = ctk.CTkFrame(parent, fg_color=CARD2, corner_radius=12)
+        row.pack(fill="x", padx=6, pady=3)
+        return row
+
+    @staticmethod
+    def make_link(url: str, *widgets):
+        if not url:
             return
-        self.busy = True
-        threading.Thread(target=self.upload_all, args=(folders,), daemon=True).start()
+        for w in widgets:
+            w.configure(cursor="hand2")
+            w.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
 
-    def upload_all(self, folders: list[pathlib.Path]):
-        try:
-            gh = self.gh()
-            if not gh:
-                return
-            for folder in folders:
-                self.upload(gh, folder)
-            self.refresh()
-        except Exception as e:  # noqa: BLE001
-            msg = str(e)
-            self.say(f"Ошибка: {msg}")
-            self.root.after(0, lambda: messagebox.showerror("Ошибка", msg, parent=self.root))
-        finally:
-            self.busy = False
+    def plan_row(self, r: dict):
+        row = self.row_frame(self.list_frame)
+        a = ctk.CTkLabel(row, text=r["time"], font=font(14, "bold"), text_color=TEXT, width=52)
+        a.pack(side="left", padx=(12, 6), pady=9)
+        b = ctk.CTkLabel(row, text=r["name"], font=font(12), text_color=TEXT, anchor="w")
+        b.pack(side="left", fill="x", expand=True)
+        bg, fg, label = CHIPS[r["status"]]
+        c = ctk.CTkLabel(row, text=label, font=font(11, "bold"), text_color=fg, fg_color=bg, corner_radius=9,
+                         width=70, height=22)
+        c.pack(side="right", padx=10)
+        self.make_link(r["permalink"], row, a, b, c)
 
-    def upload(self, gh: GitHub, folder: pathlib.Path):
-        files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in ALLOWED_EXT)
-        videos = [p for p in files if p.suffix.lower() in VIDEO_EXT]
-        if not videos:
-            raise RuntimeError(f"В папке «{folder.name}» нет видео (.mp4 или .mov).")
-        big = [p.name for p in files if p.stat().st_size > MAX_FILE]
-        if big:
-            raise RuntimeError("Файлы больше 95 МБ GitHub не примет, сожми их:\n" + "\n".join(big))
+    def results_header(self):
+        h = ctk.CTkFrame(self.list_frame, fg_color="transparent")
+        h.pack(fill="x", padx=12)
+        for text, w in (("Комм.", 52), ("Лайки", 52), ("Просмотры", 76)):
+            ctk.CTkLabel(h, text=text, font=font(10), text_color=MUTED, width=w, anchor="e").pack(side="right")
 
-        self.say("Узнаю номер следующей папки…")
-        name = f"{gh.next_number():03d}_{slug(folder.name)}"
-        total = sum(p.stat().st_size for p in files)
-        done = 0
-        shas: dict[str, str] = {}
-        for p in files:
-            self.say(f"{name}: загружаю {p.name} ({p.stat().st_size / 1e6:.1f} МБ)")
-            shas[f"{QUEUE}/{name}/{p.name}"] = gh.blob(p.read_bytes())
-            done += p.stat().st_size
-            self.root.after(0, lambda v=done * 100 / total: self.progress.config(value=v))
-        self.say(f"{name}: сохраняю…")
-        gh.commit_files(shas, f"Новая папка рилсов: {name} ({len(videos)} видео)")
-        self.say(f"Готово: {name}, {len(videos)} видео в очереди.")
+    def result_row(self, r: dict):
+        row = self.row_frame(self.list_frame)
+        col = ctk.CTkFrame(row, fg_color="transparent")
+        col.pack(side="left", fill="x", expand=True, padx=(12, 0), pady=7)
+        n = ctk.CTkLabel(col, text=r["name"], font=font(12, "bold"), text_color=TEXT, anchor="w")
+        n.pack(fill="x")
+        d = ctk.CTkLabel(col, text=r["when"], font=font(10), text_color=MUTED, anchor="w")
+        d.pack(fill="x")
+        nums = []
+        for key, w in (("comments", 52), ("likes", 52), ("views", 76)):
+            lbl = ctk.CTkLabel(row, text=r[key], font=font(13, "bold"), text_color=TEXT, width=w, anchor="e")
+            lbl.pack(side="right")
+            nums.append(lbl)
+        ctk.CTkLabel(row, text="", width=6).pack(side="right")
+        self.make_link(r["permalink"], row, col, n, d, *nums)
+
+    def show_queue(self, items: list[tuple[str, int]], next_num: int):
+        self.next_num = next_num
+        self.queue_count.configure(text=plural(len(items), "папка", "папки", "папок") if items else "")
+        self.clear(self.queue_list)
+        if not items:
+            self.empty(self.queue_list, "Очередь пустая.\nПеретащи папку, чтобы добавить рилсы.")
+        for name, n in items:
+            row = ctk.CTkFrame(self.queue_list, fg_color=CARD2, corner_radius=12)
+            row.pack(fill="x", padx=6, pady=3)
+            ctk.CTkLabel(row, text=name, font=font(13, "bold"), text_color=TEXT, anchor="w").pack(
+                side="left", padx=12, pady=9)
+            ctk.CTkLabel(row, text=plural(n, "рилс", "рилса", "рилсов"), font=font(11, "bold"), text_color=ACCENT,
+                         fg_color=("#e4e5fd", "#23254a"), corner_radius=9, height=22, width=70).pack(side="right", padx=10)
+
+    # ------------------------------------------------------------ данные
+
+    def gh(self) -> core.GitHub | None:
+        token = core.get_token()
+        if not token:
+            self.after(0, self.open_settings)
+            return None
+        return core.GitHub(token, self.cfg["repo"], self.cfg["branch"])
+
+    def startup(self):
+        if not DEMO and not core.get_token():
+            self.open_settings()
+        self.refresh()
+        self.schedule_refresh()
+
+    def schedule_refresh(self):
+        if self.after_id:
+            self.after_cancel(self.after_id)
+            self.after_id = None
+        minutes = int(self.cfg["refresh_min"])
+        if minutes > 0:
+            self.after_id = self.after(minutes * 60 * 1000, self.tick)
 
     def tick(self):
         if not self.busy:
             self.refresh()
-        self.root.after(REFRESH_MS, self.tick)
+        self.schedule_refresh()
 
-    def run(self):
-        self.root.after(REFRESH_MS, self.tick)
-        self.root.mainloop()
+    def refresh(self):
+        def work():
+            try:
+                if DEMO:
+                    items, state, stats = demo_data()
+                    nxt = 4
+                else:
+                    gh = self.gh()
+                    if not gh:
+                        return
+                    items, state, stats = gh.queue_status(), gh.read_json("state.json"), gh.read_json("stats.json")
+                    nxt = gh.next_number()
+                stamp = dt.datetime.now().strftime("Обновлено %H:%M")
+                self.after(0, lambda: self.apply_data(items, state, stats, nxt, stamp))
+            except Exception as e:  # noqa: BLE001
+                msg = str(e)
+                self.after(0, lambda: self.conn.configure(text="● нет связи", text_color=ERR))
+                self.say(f"Не удалось обновить: {msg[:140]}", ERR)
+        threading.Thread(target=work, daemon=True).start()
+
+    def apply_data(self, items, state, stats, nxt, stamp):
+        self.conn.configure(text="● подключено", text_color=OK)
+        self.updated.configure(text=stamp)
+        self.show_queue(items, nxt)
+        self.show_today(state, stats)
+        if not self.busy:
+            self.status.configure(text="")
+
+    # ------------------------------------------------------------ загрузка папки
+
+    def pick_folder(self):
+        path = filedialog.askdirectory(parent=self, title="Папка с рилсами")
+        if path:
+            self.add_pending([pathlib.Path(path)])
+
+    def on_drop(self, event):
+        self.drop_zone.configure(border_color=BORDER)
+        paths = [pathlib.Path(p) for p in self.tk.splitlist(event.data)]
+        folders = [p for p in paths if p.is_dir()]
+        if not folders:
+            self.say("Перетащи именно папку, а не отдельные файлы.", WARN)
+            return
+        self.add_pending(folders)
+
+    def add_pending(self, folders: list[pathlib.Path]):
+        if self.busy:
+            self.say("Подожди, предыдущая папка ещё загружается.", WARN)
+            return
+        self.pending.extend(folders)
+        self.show_pending()
+
+    def show_pending(self):
+        if not self.pending:
+            self.preview.pack_forget()
+            return
+        folder = self.pending[0]
+        info = core.inspect_folder(folder)
+        name = f"{self.next_num:03d}_{core.slug(folder.name)}"
+        more = f"  ·  ещё {len(self.pending) - 1} в ожидании" if len(self.pending) > 1 else ""
+        self.pv_title.configure(text=f"queue/{name}")
+        self.pv_counts.configure(
+            text=f"{plural(info['videos'], 'видео', 'видео', 'видео')}  ·  описаний {info['texts']}  ·  "
+                 f"обложек {info['covers']}  ·  {human_size(info['size'])}{more}")
+        notes = [("✗ " + e, ERR) for e in info["errors"]] + [("! " + w, WARN) for w in info["warnings"]]
+        if not notes:
+            notes = [("✓ Всё на месте", OK)]
+        self.pv_notes.configure(text="\n".join(t for t, _ in notes), text_color=notes[0][1])
+        self.pv_go.configure(state="disabled" if info["errors"] else "normal", text="Загрузить в очередь")
+        self.pv_skip.configure(state="normal")
+        self.pv_bar.pack_forget()
+        self.pv_status.pack_forget()
+        self.preview.pack(fill="x", pady=(12, 0), after=self.drop_zone)
+        if self.cfg["auto_upload"] and not info["errors"]:
+            self.start_upload()
+
+    def skip_pending(self):
+        if self.pending:
+            self.pending.pop(0)
+        self.show_pending()
+
+    def start_upload(self):
+        if self.busy or not self.pending:
+            return
+        self.busy = True
+        folder = self.pending[0]
+        self.pv_go.configure(state="disabled", text="Загружаю…")
+        self.pv_skip.configure(state="disabled")
+        self.pv_bar.set(0)
+        self.pv_bar.pack(fill="x", padx=16, pady=(8, 0), before=self.pv_buttons)
+        self.pv_status.pack(fill="x", padx=16, before=self.pv_buttons)
+        threading.Thread(target=self.upload_work, args=(folder,), daemon=True).start()
+
+    def upload_work(self, folder: pathlib.Path):
+        def progress(frac: float, text: str):
+            self.after(0, lambda: (self.pv_bar.set(frac), self.pv_status.configure(text=text, text_color=MUTED)))
+        try:
+            gh = self.gh()
+            if not gh:
+                raise RuntimeError("Не задан токен GitHub (Настройки → Подключение).")
+            name = core.upload_folder(gh, folder, progress)
+        except Exception as e:  # noqa: BLE001
+            msg = str(e)
+            self.after(0, lambda: self.upload_failed(msg))
+            return
+        self.after(0, lambda: self.upload_done(name))
+
+    def upload_failed(self, msg: str):
+        self.busy = False
+        self.pv_status.configure(text=msg[:300], text_color=ERR)
+        self.pv_go.configure(state="normal", text="Повторить")
+        self.pv_skip.configure(state="normal")
+
+    def upload_done(self, name: str):
+        self.busy = False
+        self.say(f"Готово: {name} в очереди.", OK)
+        if self.pending:
+            self.pending.pop(0)
+        self.refresh()
+        self.show_pending()
+
+    # ------------------------------------------------------------ настройки
+
+    def save_cfg(self):
+        core.save_config({k: v for k, v in self.cfg.items() if k != "token"})
+
+    def open_settings(self):
+        if self.settings_win and self.settings_win.winfo_exists():
+            self.settings_win.focus()
+            return
+        win = ctk.CTkToplevel(self, fg_color=BG)
+        self.settings_win = win
+        win.title("Настройки")
+        win.geometry(f"460x600+{self.winfo_x() + 40}+{self.winfo_y() + 30}")
+        win.resizable(False, False)
+        win.transient(self)
+        win.attributes("-topmost", bool(self.cfg["on_top"]))
+        ctk.CTkLabel(win, text="Настройки", font=font(18, "bold"), text_color=TEXT).pack(anchor="w", padx=20, pady=(16, 6))
+        tabs = ctk.CTkTabview(win, fg_color=CARD, corner_radius=16, border_width=1, border_color=BORDER,
+                              segmented_button_selected_color=ACCENT, segmented_button_selected_hover_color=ACCENT_HOVER,
+                              segmented_button_unselected_color=CARD2, segmented_button_unselected_hover_color=BORDER,
+                              text_color=TEXT)
+        tabs.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        for t in ("Подключение", "Вид", "Работа", "О программе"):
+            tabs.add(t)
+        self.tab_connection(tabs.tab("Подключение"))
+        self.tab_look(tabs.tab("Вид"))
+        self.tab_behavior(tabs.tab("Работа"))
+        self.tab_about(tabs.tab("О программе"))
+        win.after(200, win.focus)
+
+    @staticmethod
+    def label(parent, text: str, muted: bool = False, size: int = 13, bold: bool = False):
+        ctk.CTkLabel(parent, text=text, font=font(size, "bold" if bold else "normal"),
+                     text_color=MUTED if muted else TEXT, anchor="w", justify="left", wraplength=370
+                     ).pack(fill="x", padx=14, pady=(2, 0) if muted else (12, 0))
+
+    @staticmethod
+    def entry(parent, value: str = "", show: str = "") -> ctk.CTkEntry:
+        e = ctk.CTkEntry(parent, height=34, corner_radius=10, fg_color=CARD2, border_color=BORDER, text_color=TEXT,
+                         font=font(12), show=show)
+        e.insert(0, value)
+        e.pack(fill="x", padx=14, pady=(4, 0))
+        return e
+
+    @staticmethod
+    def menu(parent, values, current, command) -> ctk.CTkOptionMenu:
+        m = ctk.CTkOptionMenu(parent, values=list(values), height=34, corner_radius=10, fg_color=CARD2,
+                              button_color=ACCENT, button_hover_color=ACCENT_HOVER, text_color=TEXT,
+                              dropdown_fg_color=CARD, dropdown_text_color=TEXT, font=font(12), command=command)
+        m.set(current)
+        m.pack(fill="x", padx=14, pady=(6, 0))
+        return m
+
+    @staticmethod
+    def segmented(parent, values, current, command) -> ctk.CTkSegmentedButton:
+        s = ctk.CTkSegmentedButton(parent, values=list(values), font=font(12), selected_color=ACCENT,
+                                   selected_hover_color=ACCENT_HOVER, unselected_color=CARD2,
+                                   unselected_hover_color=BORDER, text_color=TEXT, command=command)
+        s.set(current)
+        s.pack(fill="x", padx=14, pady=(6, 0))
+        return s
+
+    def switch(self, parent, text: str, key: str, after=None):
+        sw = ctk.CTkSwitch(parent, text=text, font=font(13), text_color=TEXT, progress_color=ACCENT,
+                           command=lambda: self.set_cfg(key, bool(sw.get()), after))
+        sw.pack(anchor="w", padx=14, pady=(16, 0))
+        if self.cfg[key]:
+            sw.select()
+
+    def tab_connection(self, tab):
+        self.label(tab, "Репозиторий GitHub", bold=True)
+        repo = self.entry(tab, self.cfg["repo"])
+        self.label(tab, "Ветка")
+        branch = self.entry(tab, self.cfg["branch"])
+        self.label(tab, "Токен GitHub")
+        token = self.entry(tab, "", show="•")
+        token.configure(placeholder_text="сохранён: оставь пустым, чтобы не менять" if core.get_token() else "вставь токен")
+        self.label(tab, "Fine-grained токен только на этот репозиторий с правом Contents: Read and write. "
+                        "Хранится в диспетчере учётных данных Windows.", muted=True, size=11)
+        result = ctk.CTkLabel(tab, text="", font=font(12), anchor="w", justify="left", wraplength=370)
+        result.pack(fill="x", padx=14, pady=(10, 0))
+
+        def save():
+            self.cfg["repo"] = repo.get().strip() or core.REPO
+            self.cfg["branch"] = branch.get().strip() or core.BRANCH
+            if token.get().strip():
+                core.set_token(token.get().strip())
+                token.delete(0, "end")
+            self.save_cfg()
+            result.configure(text="Проверяю…", text_color=MUTED)
+
+            def work():
+                try:
+                    gh = self.gh()
+                    if not gh:
+                        raise RuntimeError("Токен не задан.")
+                    full = gh.check()
+                    self.after(0, lambda: result.configure(text=f"✓ Подключено к {full}, запись разрешена.", text_color=OK))
+                    self.refresh()
+                except Exception as e:  # noqa: BLE001
+                    msg = str(e)
+                    self.after(0, lambda: result.configure(text="✗ " + msg[:200], text_color=ERR))
+            threading.Thread(target=work, daemon=True).start()
+
+        row = ctk.CTkFrame(tab, fg_color="transparent")
+        row.pack(fill="x", padx=14, pady=14)
+        ctk.CTkButton(row, text="Сохранить и проверить", height=36, corner_radius=12, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER, text_color="white", font=font(13, "bold"),
+                      command=save).pack(side="left", expand=True, fill="x")
+        ctk.CTkButton(row, text="Забыть токен", width=110, height=36, corner_radius=12, fg_color=CARD2,
+                      hover_color=BORDER, text_color=ERR, font=font(12),
+                      command=lambda: (core.set_token(""), result.configure(text="Токен удалён.", text_color=MUTED))
+                      ).pack(side="left", padx=(8, 0))
+
+    def tab_look(self, tab):
+        self.label(tab, "Тема", bold=True)
+        self.segmented(tab, THEMES, self.cfg["theme"], lambda v: self.set_cfg("theme", v, self.apply_theme))
+
+        self.label(tab, "Эффект стекла", bold=True)
+        if not glass.supported():
+            self.label(tab, "Работает только в Windows 10 и 11.", muted=True, size=11)
+        titles = [glass.MODE_TITLES[m] for m in glass.MODES]
+        self.menu(tab, titles, glass.MODE_TITLES.get(self.cfg["glass"], titles[0]),
+                  lambda t: self.set_cfg("glass", next(k for k, v in glass.MODE_TITLES.items() if v == t),
+                                         self.apply_glass))
+
+        self.label(tab, "Прозрачность окна (при включённом стекле)")
+        alpha = ctk.CTkSlider(tab, from_=70, to=100, number_of_steps=30, progress_color=ACCENT, button_color=ACCENT,
+                              button_hover_color=ACCENT_HOVER,
+                              command=lambda v: self.set_cfg("alpha", int(v), self.apply_glass))
+        alpha.set(self.cfg["alpha"])
+        alpha.pack(fill="x", padx=14, pady=(8, 0))
+
+        self.label(tab, "Размер интерфейса")
+        cur = f"{self.cfg['scale']}%"
+        self.segmented(tab, SCALES, cur if cur in SCALES else "100%",
+                       lambda v: self.set_cfg("scale", int(v[:-1]), self.apply_scale))
+        self.switch(tab, "Окно поверх остальных", "on_top", self.apply_glass)
+
+    def tab_behavior(self, tab):
+        self.label(tab, "Автообновление данных", bold=True)
+        values = {"Выкл": 0, "Каждую минуту": 1, "Каждые 5 минут": 5, "Каждые 15 минут": 15}
+        cur = next((k for k, v in values.items() if v == int(self.cfg["refresh_min"])), "Каждые 5 минут")
+        self.menu(tab, values, cur, lambda t: self.set_cfg("refresh_min", values[t], self.schedule_refresh))
+
+        self.label(tab, "Часовой пояс для плана и времени публикаций", bold=True)
+        cur = next((k for k, v in TZ_CHOICES.items() if v == int(self.cfg["tz"])), "UTC+3 (Москва)")
+        self.menu(tab, TZ_CHOICES, cur, lambda t: self.set_cfg("tz", TZ_CHOICES[t], self.apply_tz))
+        self.label(tab, "Только отображение. Расписание публикаций задаётся в config.json в репозитории.",
+                   muted=True, size=11)
+
+        self.switch(tab, "Загружать сразу после перетаскивания", "auto_upload")
+        self.label(tab, "Без этого перед загрузкой показывается предпросмотр с проверкой папки.", muted=True, size=11)
+
+    def tab_about(self, tab):
+        self.label(tab, f"Рилсы → Instagram, версия {core.VERSION}", bold=True)
+        self.label(tab, "Папка из одного длинного видео превращается в очередь рилсов, "
+                        "а автопостер на GitHub публикует их в Instagram в течение дня.", muted=True, size=12)
+        repo = self.cfg["repo"]
+        for text, url in (("Открыть репозиторий", f"https://github.com/{repo}"),
+                          ("Открыть запуски (Actions)", f"https://github.com/{repo}/actions"),
+                          ("Страница релизов (обновить виджет)", f"https://github.com/{repo}/releases/tag/widget")):
+            ctk.CTkButton(tab, text=text, height=34, corner_radius=10, fg_color=CARD2, hover_color=BORDER,
+                          text_color=TEXT, font=font(12), anchor="w",
+                          command=lambda u=url: webbrowser.open(u)).pack(fill="x", padx=14, pady=(10, 0))
+
+    def set_cfg(self, key: str, value, after=None):
+        self.cfg[key] = value
+        self.save_cfg()
+        if after:
+            after()
+
+    def apply_theme(self):
+        ctk.set_appearance_mode(THEMES[self.cfg["theme"]])
+        self.after(50, self.apply_glass)
+
+    @staticmethod
+    def apply_scale_value(scale: int):
+        ctk.set_widget_scaling(scale / 100)
+
+    def apply_scale(self):
+        self.apply_scale_value(self.cfg["scale"])
+
+    def apply_tz(self):
+        core.set_tz(int(self.cfg["tz"]))
+        self.show_today(self.last_state, self.last_stats)
 
 
 if __name__ == "__main__":
@@ -459,4 +692,4 @@ if __name__ == "__main__":
             ctypes.windll.shcore.SetProcessDpiAwareness(1)  # чёткий текст на HiDPI
         except Exception:  # noqa: BLE001
             pass
-    App().run()
+    App().mainloop()

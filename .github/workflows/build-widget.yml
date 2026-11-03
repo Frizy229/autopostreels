@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -r widget/requirements.txt pyinstaller
       - name: Сборка .exe
-        run: pyinstaller --onefile --windowed --name ReelsWidget --collect-all tkinterdnd2 widget/reels_widget.py
+        run: pyinstaller --onefile --windowed --name ReelsWidget --collect-all tkinterdnd2 --collect-all customtkinter widget/reels_widget.py
       - name: Опубликовать в Releases
         env:
           GH_TOKEN: ${{ github.token }}
