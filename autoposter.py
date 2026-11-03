@@ -493,6 +493,9 @@ def cmd_refresh(args) -> int:
     token = env("IG_TOKEN")
     mask(token)
     if token.startswith("EAA"):
+        if not (os.environ.get("FB_APP_ID") and os.environ.get("FB_APP_SECRET")):
+            log("Токен Facebook (системный пользователь). Если он бессрочный, продлевать не нужно. Пропускаю.")
+            return 0
         app_id, secret = env("FB_APP_ID"), env("FB_APP_SECRET")
         mask(secret)
         r = requests.get("https://graph.facebook.com/oauth/access_token", timeout=60, params={
