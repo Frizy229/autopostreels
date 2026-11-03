@@ -587,6 +587,20 @@ def cmd_check(args) -> int:
     info = ig.whoami()
     log(f"Токен работает. Аккаунт: @{info.get('username')} (id {info.get('id')}, "
         f"тип {info.get('account_type', '?')}, публикаций {info.get('media_count', '?')}), API: {ig.host}")
+    # проверка статистики на последнем медиа аккаунта
+    try:
+        media = ig._req("GET", f"{ig.base}/{ig.user_id}/media", params={"limit": "1", "fields": "id,media_product_type"})
+        last = (media.get("data") or [None])[0]
+        if not last:
+            log("Статистика: у аккаунта пока нет публикаций для проверки.")
+        else:
+            ins = ig._req("GET", f"{ig.base}/{last['id']}/insights",
+                          params={"metric": "reach,saved,shares" if last.get("media_product_type") != "REELS"
+                                  else "views,reach,saved,shares"})
+            vals = {d["name"]: (d.get("values") or [{}])[0].get("value") for d in ins.get("data", [])}
+            log(f"Статистика (просмотры и охват) доступна: {vals}")
+    except RuntimeError as e:
+        log(f"Статистика (просмотры и охват) недоступна: {str(e)[:250]}")
     return 0
 
 
