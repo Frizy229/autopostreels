@@ -69,11 +69,12 @@ function createWindow() {
     frame: false, show: false, hasShadow: true, backgroundColor: '#00000000',
     ...(win11 && cfg.material !== 'none' ? { backgroundMaterial: cfg.material } : { backgroundColor: nativeTheme.shouldUseDarkColors ? '#14161c' : '#f2f3f8' }),
     alwaysOnTop: !!cfg.alwaysOnTop, title: 'Reels Widget', icon: path.join(__dirname, 'assets', 'icon.png'),
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    skipTaskbar: true, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
   });
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.once('ready-to-show', () => { if (!process.argv.includes('--hidden')) win.show(); });
+  win.on('minimize', (e) => { e.preventDefault(); win.hide(); });
   win.on('close', (e) => { if (!quitting) { e.preventDefault(); win.hide(); } });
   const saveBounds = () => { if (win && !win.isMinimized()) { cfg.bounds = win.getBounds(); saveCfg(); } };
   let t; const later = () => { clearTimeout(t); t = setTimeout(saveBounds, 600); };
@@ -82,7 +83,7 @@ function createWindow() {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
 }
 
-const showWin = () => { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); };
+const showWin = () => { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.setSkipTaskbar(true); win.focus(); };
 const trayMenu = () => Menu.buildFromTemplate([
   { label: 'Показать виджет', click: showWin },
   { label: 'Обновить данные', click: () => win && win.webContents.send('refresh') },
