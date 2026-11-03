@@ -10,6 +10,7 @@ import os
 import pathlib
 import sys
 import threading
+import tkinter as tk
 import webbrowser
 from tkinter import filedialog
 
@@ -47,7 +48,7 @@ CHIPS = {
 
 DEFAULTS = {
     "repo": core.REPO, "branch": core.BRANCH, "theme": "Тёмная", "scale": 100, "on_top": True,
-    "refresh_min": 5, "auto_upload": False, "tz": 3, "glass": "acrylic", "alpha": 94,
+    "refresh_min": 5, "auto_upload": False, "tz": 3, "glass": "off", "alpha": 100, "cfg_version": 2,
 }
 THEMES = {"Системная": "system", "Тёмная": "dark", "Светлая": "light"}
 TZ_CHOICES = {f"UTC{h:+d}" + (" (Москва)" if h == 3 else ""): h for h in range(2, 11)}
@@ -93,7 +94,11 @@ class App(*_BASES):
         super().__init__()
         if TkinterDnD:
             self.TkdndVersion = TkinterDnD._require(self)
-        self.cfg = {**DEFAULTS, **core.load_config()}
+        saved = core.load_config()
+        self.cfg = {**DEFAULTS, **saved}
+        if int(saved.get("cfg_version", 1)) < 2:  # прошлая версия включала стекло по умолчанию, оно давало пиксельный текст
+            self.cfg.update(glass="off", alpha=100, cfg_version=2)
+            core.save_config({k: v for k, v in self.cfg.items() if k != "token"})
         core.set_tz(int(self.cfg["tz"]))
         ctk.set_appearance_mode(THEMES.get(self.cfg["theme"], "dark"))
         ctk.set_widget_scaling(self.cfg["scale"] / 100)
@@ -130,13 +135,14 @@ class App(*_BASES):
         self.body.pack(fill="both", expand=True, padx=12, pady=8)
 
         # шапка
-        head = ctk.CTkFrame(self.body, fg_color="transparent")
+        head = self.card(self.body)
         head.pack(fill="x", pady=(0, 12))
-        ctk.CTkLabel(head, text="Рилсы → Instagram", font=font(20, "bold"), text_color=TEXT).pack(side="left")
-        ctk.CTkButton(head, text="⚙", width=36, height=36, corner_radius=12, fg_color=CARD, hover_color=CARD2,
-                      border_width=1, border_color=BORDER, text_color=TEXT, font=font(16),
-                      command=self.open_settings).pack(side="right")
-        self.conn = ctk.CTkLabel(head, text="● не подключено", font=font(12), text_color=MUTED)
+        hin = ctk.CTkFrame(head, fg_color="transparent")
+        hin.pack(fill="x", padx=14, pady=10)
+        ctk.CTkLabel(hin, text="Рилсы → Instagram", font=font(18, "bold"), text_color=TEXT).pack(side="left")
+        ctk.CTkButton(hin, text="⚙", width=34, height=34, corner_radius=12, fg_color=CARD2, hover_color=BORDER,
+                      text_color=TEXT, font=font(16), command=self.open_settings).pack(side="right")
+        self.conn = ctk.CTkLabel(hin, text="● не подключено", font=font(12), text_color=MUTED)
         self.conn.pack(side="right", padx=10)
 
         # зона для папки
@@ -214,15 +220,17 @@ class App(*_BASES):
         self.queue_list.pack(fill="x", padx=8, pady=(0, 10))
 
         # подвал
-        foot = ctk.CTkFrame(self.body, fg_color="transparent")
-        foot.pack(fill="x", pady=(10, 0))
-        self.updated = ctk.CTkLabel(foot, text="", font=font(11), text_color=MUTED)
+        foot = self.card(self.body)
+        foot.pack(fill="x", pady=(12, 0))
+        fin = ctk.CTkFrame(foot, fg_color="transparent")
+        fin.pack(fill="x", padx=14, pady=8)
+        self.updated = ctk.CTkLabel(fin, text="", font=font(11), text_color=MUTED)
         self.updated.pack(side="left")
-        ctk.CTkButton(foot, text="Обновить", width=80, height=26, corner_radius=8, fg_color="transparent",
-                      hover_color=CARD2, text_color=ACCENT, font=font(12, "bold"), command=self.refresh
+        ctk.CTkButton(fin, text="Обновить", width=84, height=28, corner_radius=10, fg_color=CARD2,
+                      hover_color=BORDER, text_color=ACCENT, font=font(12, "bold"), command=self.refresh
                       ).pack(side="right")
-        self.status = ctk.CTkLabel(foot, text="", font=font(11), text_color=MUTED, anchor="e",
-                                   wraplength=240, justify="right")
+        self.status = ctk.CTkLabel(fin, text="", font=font(11), text_color=MUTED, anchor="e",
+                                   wraplength=230, justify="right")
         self.status.pack(side="right", padx=8)
         for w in (self.drop_zone, self.drop_title, self.drop_sub):
             w.bind("<Button-1>", lambda e: self.pick_folder())
@@ -534,11 +542,39 @@ class App(*_BASES):
                      ).pack(fill="x", padx=14, pady=(2, 0) if muted else (12, 0))
 
     @staticmethod
-    def entry(parent, value: str = "", show: str = "") -> ctk.CTkEntry:
+    def enable_clipboard(entry: ctk.CTkEntry) -> None:
+        """Ctrl+V/C/X/A и правая кнопка мыши на любой раскладке (на русской Tk сам их не ловит)."""
+        inner = entry._entry  # noqa: SLF001
+
+        def on_key(ev):
+            if not ev.state & 0x4:
+                return None
+            action = {86: "<<Paste>>", 67: "<<Copy>>", 88: "<<Cut>>"}.get(ev.keycode)
+            if action:
+                inner.event_generate(action)
+                return "break"
+            if ev.keycode == 65:
+                inner.select_range(0, "end")
+                inner.icursor("end")
+                return "break"
+            return None
+
+        def menu(ev):
+            m = tk.Menu(inner, tearoff=0)
+            m.add_command(label="Вставить", command=lambda: inner.event_generate("<<Paste>>"))
+            m.add_command(label="Копировать", command=lambda: inner.event_generate("<<Copy>>"))
+            m.add_command(label="Вырезать", command=lambda: inner.event_generate("<<Cut>>"))
+            m.tk_popup(ev.x_root, ev.y_root)
+
+        inner.bind("<Control-KeyPress>", on_key, add="+")
+        inner.bind("<Button-3>", menu, add="+")
+
+    def entry(self, parent, value: str = "", show: str = "") -> ctk.CTkEntry:
         e = ctk.CTkEntry(parent, height=34, corner_radius=10, fg_color=CARD2, border_color=BORDER, text_color=TEXT,
                          font=font(12), show=show)
         e.insert(0, value)
         e.pack(fill="x", padx=14, pady=(4, 0))
+        self.enable_clipboard(e)
         return e
 
     @staticmethod
@@ -572,11 +608,39 @@ class App(*_BASES):
         self.label(tab, "Ветка")
         branch = self.entry(tab, self.cfg["branch"])
         self.label(tab, "Токен GitHub")
-        token = self.entry(tab, "", show="•")
-        token.configure(placeholder_text="сохранён: оставь пустым, чтобы не менять" if core.get_token() else "вставь токен")
-        self.label(tab, "Fine-grained токен только на этот репозиторий с правом Contents: Read and write. "
-                        "Хранится в диспетчере учётных данных Windows.", muted=True, size=11)
         result = ctk.CTkLabel(tab, text="", font=font(12), anchor="w", justify="left", wraplength=370)
+        trow = ctk.CTkFrame(tab, fg_color="transparent")
+        trow.pack(fill="x", padx=14, pady=(4, 0))
+        token = ctk.CTkEntry(trow, height=34, corner_radius=10, fg_color=CARD2, border_color=BORDER, text_color=TEXT,
+                             font=font(12), show="•")
+        token.pack(side="left", fill="x", expand=True)
+        self.enable_clipboard(token)
+
+        def paste_token():
+            try:
+                text = self.clipboard_get().strip()
+            except tk.TclError:
+                text = ""
+            if text:
+                token.delete(0, "end")
+                token.insert(0, text)
+                result.configure(text=f"Вставлено {len(text)} символов.", text_color=MUTED)
+            else:
+                result.configure(text="Буфер обмена пуст: сначала скопируй токен.", text_color=WARN)
+
+        def toggle_eye():
+            token.configure(show="" if token.cget("show") else "•")
+            eye.configure(text="Скрыть" if not token.cget("show") else "Показать")
+
+        ctk.CTkButton(trow, text="Вставить", width=82, height=34, corner_radius=10, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER, text_color="white", font=font(12, "bold"),
+                      command=paste_token).pack(side="left", padx=(6, 0))
+        eye = ctk.CTkButton(trow, text="Показать", width=80, height=34, corner_radius=10, fg_color=CARD2,
+                            hover_color=BORDER, text_color=TEXT, font=font(12), command=toggle_eye)
+        eye.pack(side="left", padx=(6, 0))
+        have = "Сейчас токен сохранён. Оставь поле пустым, чтобы его не менять. " if core.get_token() else ""
+        self.label(tab, have + "Fine-grained токен только на этот репозиторий с правом Contents: Read and write. "
+                             "Хранится в диспетчере учётных данных Windows.", muted=True, size=11)
         result.pack(fill="x", padx=14, pady=(10, 0))
 
         def save():
@@ -615,7 +679,7 @@ class App(*_BASES):
         self.label(tab, "Тема", bold=True)
         self.segmented(tab, THEMES, self.cfg["theme"], lambda v: self.set_cfg("theme", v, self.apply_theme))
 
-        self.label(tab, "Эффект стекла", bold=True)
+        self.label(tab, "Эффект стекла (экспериментально)", bold=True)
         if not glass.supported():
             self.label(tab, "Работает только в Windows 10 и 11.", muted=True, size=11)
         titles = [glass.MODE_TITLES[m] for m in glass.MODES]

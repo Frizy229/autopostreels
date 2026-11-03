@@ -70,7 +70,8 @@ def apply(window, mode: str, dark: bool, alpha: float) -> bool:
         else:
             _accent(hwnd, 3, tint)
         window.wm_attributes("-transparentcolor", KEY_COLOR)
-        window.wm_attributes("-alpha", max(0.6, min(1.0, alpha)))
+        # общая прозрачность делает текст пиксельным, поэтому включается только по просьбе (меньше 100%)
+        window.wm_attributes("-alpha", max(0.7, min(1.0, alpha)))
         return True
     except Exception:  # noqa: BLE001
         return False
