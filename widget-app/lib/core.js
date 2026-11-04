@@ -29,6 +29,8 @@ function buildSnapshot(state, stats, queue, now = new Date(), opts = {}) {
   const scheduleTz = opts.scheduleTz || 'Europe/Moscow';
   state = state || {}; stats = stats || {};
   const posted = state.posted || {}, skipped = state.skipped || {}, plans = state.plans || {};
+  const postedAcc = state.posted_acc || {};
+  const accNames = (opts.accounts && opts.accounts.length) ? opts.accounts : ['main'];
   const today = dayIn(now, scheduleTz);
 
   // время по плану для каждого видео (любой день), ключ folder/name
@@ -42,15 +44,30 @@ function buildSnapshot(state, stats, queue, now = new Date(), opts = {}) {
     const s = stats[key] || {};
     return { views: s.views ?? null, likes: s.likes ?? null, comments: s.comments ?? null, reach: s.reach ?? null };
   };
+  // состояние рилса в одном аккаунте (первый аккаунт хранится по-старому: state.posted, ключ без имени)
+  const perAccount = (name, idx, key) => {
+    const p = idx === 0 ? posted[key] : (postedAcc[name] || {})[key];
+    const skKey = idx === 0 ? key : `${name}|${key}`;
+    const stKey = idx === 0 ? key : `${name}|${key}`;
+    const st = stats[stKey] || {};
+    return {
+      name, status: p ? 'done' : (skKey in skipped ? 'skipped' : 'wait'), at: p ? p.at : null,
+      permalink: st.permalink || (p && p.permalink) || '', ...metrics(stKey),
+    };
+  };
   const video = (folder, name) => {
     const key = `${folder}/${name}`;
-    const p = posted[key];
     const pl = planned[key];
+    const accounts = accNames.map((n, i) => perAccount(n, i, key));
+    const first = accounts[0];
+    const doneCount = accounts.filter((a) => a.status === 'done').length;
     let status = 'queued', at = null;
-    if (p) { status = 'done'; at = p.at; }
-    else if (key in skipped) { status = 'skipped'; at = pl ? pl.when : null; }
+    if (doneCount === accounts.length) { status = 'done'; at = first.at; }
+    else if (doneCount > 0) { status = 'part'; at = first.at || (accounts.find((a) => a.at) || {}).at || null; }
+    else if (first.status === 'skipped') { status = 'skipped'; at = pl ? pl.when : null; }
     else if (pl) { status = 'wait'; at = pl.when; }
-    return { key, name, status, at, permalink: (stats[key] && stats[key].permalink) || (p && p.permalink) || '', ...metrics(key) };
+    return { key, name, status, at, accounts, permalink: first.permalink || (accounts.find((a) => a.permalink) || {}).permalink || '',
+      views: first.views, likes: first.likes, comments: first.comments, reach: first.reach };
   };
 
   const folders = [];

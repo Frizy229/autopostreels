@@ -35,4 +35,13 @@ const i = inspectFolder(dir);
 assert.strictEqual(i.videos, 2); assert.strictEqual(i.texts, 1); assert.strictEqual(i.covers, 1);
 assert.strictEqual(i.warnings.length, 2);
 assert.throws(() => assert.ok(inspectFolder(fs.mkdtempSync(path.join(os.tmpdir(), 'rw-'))).errors.length === 0));
+// три аккаунта
+const st3 = { ...state, posted_acc: { b: { '001_b/a.mp4': { at: '2026-11-03T08:00:00+00:00', permalink: 'https://ig/b' } } } };
+const stats3 = { ...stats, 'b|001_b/a.mp4': { views: 9, likes: 3, comments: 0 } };
+const s3 = buildSnapshot(st3, stats3, queue, new Date('2026-11-03T12:00:00Z'), { accounts: ['a', 'b', 'c'] });
+const v0 = s3.todayRows[0];
+assert.strictEqual(v0.status, 'part');
+assert.deepStrictEqual(v0.accounts.map((x) => [x.name, x.status, x.views]), [['a', 'done', 5], ['b', 'done', 9], ['c', 'wait', null]]);
+const s1 = buildSnapshot(state, stats, queue, new Date('2026-11-03T12:00:00Z'), { accounts: ['a'] });
+assert.strictEqual(s1.todayRows[0].status, 'done');
 console.log('ok');

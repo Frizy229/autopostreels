@@ -1,7 +1,7 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 const bridge = window.api;
-const LABEL = { done: 'вышел', wait: 'ждёт', skipped: 'пропущен', queued: 'в очереди' };
+const LABEL = { done: 'вышел', part: 'частично', wait: 'ждёт', skipped: 'пропущен', queued: 'в очереди' };
 
 let cfg = {}, hasToken = false, version = '', snap = null, timer = null, busy = false;
 let pending = [], dragDepth = 0;
@@ -32,16 +32,29 @@ function tick() {
 }
 
 // ------------------------------------------------------------ список
+const IC = {
+  v: '<svg viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  l: '<svg viewBox="0 0 24 24"><path d="M12 20s-8-4.7-8-10.5A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8 2.5C20 15.3 12 20 12 20z"/></svg>',
+  c: '<svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>',
+};
+const nums = (o) => `<span title="просмотры">${IC.v}<b>${nf(o.views)}</b></span><span title="лайки">${IC.l}<b>${nf(o.likes)}</b></span><span title="комментарии">${IC.c}<b>${nf(o.comments)}</b></span>`;
 function metrics(v) {
-  if (v.status !== 'done') return '';
-  return `<div class="m"><span><b>${nf(v.views)}</b> просм.</span><span><b>${nf(v.likes)}</b> лайков</span><span><b>${nf(v.comments)}</b> комм.</span></div>`;
+  if (v.status !== 'done' && v.status !== 'part') return '';
+  const accs = v.accounts || [];
+  if (accs.length < 2) {
+    if (v.status !== 'done') return '';
+    return `<div class="m">${nums(v)}</div>`;
+  }
+  return accs.map((a) => a.status === 'done'
+    ? `<div class="m"${a.permalink ? ` data-url="${esc(a.permalink)}"` : ''}><span class="an" title="${esc(a.name)}">${esc(a.name)}</span>${nums(a)}</div>`
+    : `<div class="m off"><span class="an" title="${esc(a.name)}">${esc(a.name)}</span><span>${a.status === 'skipped' ? 'пропущен' : 'ждёт'}</span></div>`).join('');
 }
 function rowHtml(v, sub) {
   const url = v.permalink ? ` data-url="${esc(v.permalink)}"` : '';
   return `<div class="row-card ${v.status}${v.permalink ? ' link' : ''}"${url}>
     <span class="t">${timeOf(v.time || v.at)}</span>
     <div class="nm">${esc(v.name)}${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${metrics(v)}</div>
-    <span class="chip ${v.status}">${LABEL[v.status]}</span></div>`;
+    <span class="chip ${v.status}">${v.status === 'part' ? `${(v.accounts || []).filter((a) => a.status === 'done').length}/${(v.accounts || []).length}` : LABEL[v.status]}</span></div>`;
 }
 function folderHtml(f) {
   const pct = f.total ? Math.round((f.done / f.total) * 100) : 0;
@@ -80,6 +93,8 @@ document.addEventListener('click', (e) => {
     localStorage.setItem('open', JSON.stringify([...openSet]));
     return;
   }
+  const line = e.target.closest('.m[data-url]');
+  if (line) { bridge.openUrl(line.dataset.url); return; }
   const row = e.target.closest('.row-card[data-url]');
   if (row) bridge.openUrl(row.dataset.url);
 });

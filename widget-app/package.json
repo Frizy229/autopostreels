@@ -1,7 +1,7 @@
 {
   "name": "reels-widget",
   "productName": "Reels Widget",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "Виджет автопостера рилсов: очередь, план дня и результаты",
   "main": "main.js",
   "author": "Alex",

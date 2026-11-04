@@ -50,15 +50,18 @@ h3.toggle { cursor: pointer; } h3 .chev { width: 14px; height: 14px; transition:
 
 .row-card { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); }
 .row-card::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 3px; background: var(--queued); }
-.row-card.done::before { background: var(--ok); } .row-card.wait::before { background: var(--warn); } .row-card.skipped::before { background: var(--err); }
+.row-card.done::before { background: var(--ok); } .row-card.wait::before { background: var(--warn); } .row-card.part::before { background: var(--accent); } .row-card.skipped::before { background: var(--err); }
 .row-card.link { cursor: pointer; } .row-card.link:hover { background: var(--card-hover); }
 .t { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 42px; }
 .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub { display: block; font-size: 11px; color: var(--muted); margin-top: 1px; }
 .chip { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--field); color: var(--queued); white-space: nowrap; }
 .chip.done { color: var(--ok); background: rgba(74,222,128,.14); } .chip.wait { color: var(--warn); background: rgba(251,191,36,.14); }
+.chip.part { color: var(--accent); background: rgba(124,131,255,.18); }
+.m svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; vertical-align: -1px; margin-right: 2px; opacity: .8; } .m span:not(.an) { white-space: nowrap; }
+.m .an { width: 68px; flex: none; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); opacity: .85; } .m.off { opacity: .6; } .m[data-url] { cursor: pointer; } .m[data-url]:hover .an { text-decoration: underline; }
 .chip.skipped { color: var(--err); background: rgba(248,113,113,.14); } .chip.today { color: var(--accent); background: rgba(124,131,255,.18); }
-.m { display: flex; gap: 10px; font-size: 11px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; } .m b { color: var(--text); font-weight: 600; }
+.m { display: flex; gap: 6px; font-size: 11px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; } .m b { color: var(--text); font-weight: 600; }
 
 .folder { border-radius: 14px; background: var(--card); border: 1px solid var(--line); overflow: hidden; }
 .f-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; }

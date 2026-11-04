@@ -118,8 +118,9 @@ handle('token:set', (t) => { setToken(String(t || '').trim()); return true; });
 handle('conn:check', async () => gh().check());
 handle('data:refresh', async () => {
   const g = gh();
-  const [queue, state, stats] = await Promise.all([g.queue(), g.readJson('state.json'), g.readJson('stats.json')]);
-  return { snapshot: buildSnapshot(state, stats, queue, new Date(), { scheduleTz: cfg.scheduleTz }), at: new Date().toISOString() };
+  const [queue, state, stats, igCfg] = await Promise.all([g.queue(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json')]);
+  const accounts = ((igCfg && igCfg.accounts) || []).map((a) => a.name).filter(Boolean);
+  return { snapshot: buildSnapshot(state, stats, queue, new Date(), { scheduleTz: cfg.scheduleTz, accounts }), at: new Date().toISOString() };
 });
 handle('folder:pick', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Папка с рилсами' });
