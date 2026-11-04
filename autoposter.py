@@ -127,6 +127,7 @@ def configure_accounts(cfg: dict) -> list[dict]:
         acc = {"name": a.get("name") or f"acc{i + 1}",
                "token_env": a.get("token_env") or ("IG_TOKEN" if i == 0 else f"IG_TOKEN_{i + 1}"),
                "user_id_env": a.get("user_id_env") or ("IG_USER_ID" if i == 0 else f"IG_USER_ID_{i + 1}"),
+               "user_id": str(a.get("user_id") or ""),
                "primary": i == 0}
         if not acc["primary"] and not secret(acc["token_env"]):
             log(f"Аккаунт «{acc['name']}»: нет секрета {acc['token_env']}, пропускаю.")
@@ -156,7 +157,7 @@ def make_ig(acc: dict, cfg: dict) -> "Instagram":
     if not token:
         sys.exit(f"Ошибка: не задан секрет {acc['token_env']} (аккаунт «{acc['name']}»).")
     mask(token)
-    return Instagram(token, secret(acc["user_id_env"]), cfg)
+    return Instagram(token, secret(acc["user_id_env"]) or acc.get("user_id", ""), cfg)
 
 
 # ---------------------------------------------------------------- caption

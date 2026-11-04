@@ -14,6 +14,11 @@
       "name": "dayzerorules",
       "token_env": "IG_TOKEN",
       "user_id_env": "IG_USER_ID"
+    },
+    {
+      "name": "rulezerosurvivel",
+      "token_env": "IG_TOKEN_RULEZEROSURVIVEL",
+      "user_id": "17841467205646764"
     }
   ]
 }
