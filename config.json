@@ -19,6 +19,11 @@
       "name": "rulezerosurvivel",
       "token_env": "IG_TOKEN_RULEZEROSURVIVEL",
       "user_id": "17841467205646764"
+    },
+    {
+      "name": "survivelzerorule",
+      "token_env": "IG_TOKEN_SURVIVELZERORULE",
+      "user_id": "17841458959352503"
     }
   ]
 }
