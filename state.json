@@ -28,7 +28,9 @@
   },
   "skipped": {},
   "last_started": "2026-11-04",
-  "failures": {},
+  "failures": {
+    "rulezerosurvivel|002_Night-Shift/short-1-the-notebook.mp4": 1
+  },
   "active": {
     "folder": "002_Night-Shift",
     "date": "2026-11-04",
@@ -53,6 +55,16 @@
         "short-5-3-10-am.mp4": "2026-11-04T18:55+07:00",
         "short-6-the-regular.mp4": "2026-11-04T20:27+07:00",
         "short-7-camera-four.mp4": "2026-11-04T21:59+07:00"
+      }
+    }
+  },
+  "posted_acc": {
+    "rulezerosurvivel": {},
+    "survivelzerorule": {
+      "002_Night-Shift/short-1-the-notebook.mp4": {
+        "media_id": "18022665245939416",
+        "permalink": "https://www.instagram.com/reel/DfT4Rh5Dv4E/",
+        "at": "2026-11-04T07:05:46+00:00"
       }
     }
   }
