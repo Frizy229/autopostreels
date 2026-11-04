@@ -6,6 +6,7 @@ const path = require('path');
 const VIDEO_EXT = new Set(['.mp4', '.mov']);
 const IMG_EXT = new Set(['.jpg', '.jpeg', '.png']);
 const ALLOWED_EXT = new Set([...VIDEO_EXT, ...IMG_EXT, '.txt', '.srt']);
+const LATE_MS = 15 * 60 * 1000;
 const MAX_FILE = 95 * 1024 * 1024; // ограничение GitHub ~100 МБ на файл
 
 const slug = (name) => {
@@ -66,7 +67,9 @@ function buildSnapshot(state, stats, queue, now = new Date(), opts = {}) {
     else if (doneCount > 0) { status = 'part'; at = first.at || (accounts.find((a) => a.at) || {}).at || null; }
     else if (first.status === 'skipped') { status = 'skipped'; at = pl ? pl.when : null; }
     else if (pl) { status = 'wait'; at = pl.when; }
-    return { key, name, status, at, accounts, permalink: first.permalink || (accounts.find((a) => a.permalink) || {}).permalink || '',
+    // «задерживается»: по плану время вышло больше 15 минут назад, а рилс ещё не вышел везде
+    const late = (status === 'wait' || status === 'part') && !!pl && (now.getTime() - new Date(pl.when).getTime()) > LATE_MS;
+    return { key, name, status, at, late, accounts, permalink: first.permalink || (accounts.find((a) => a.permalink) || {}).permalink || '',
       views: first.views, likes: first.likes, comments: first.comments, reach: first.reach };
   };
 
@@ -112,7 +115,8 @@ function buildSnapshot(state, stats, queue, now = new Date(), opts = {}) {
   }
   const nextNum = Math.max(0, ...[...all.map((f) => f.name), ...(queue || []).map((q) => q.name)]
     .map((n) => (/^(\d+)/.exec(n) || [0, 0])[1]).map(Number)) + 1;
-  return { today, todayRows, folders: all, nextNum, summary: summary(todayRows) };
+  const lateCount = todayRows.filter((r) => r.late).length;
+  return { today, todayRows, folders: all, nextNum, summary: { ...summary(todayRows), late: lateCount } };
 }
 
 function summary(rows) {

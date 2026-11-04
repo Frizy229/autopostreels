@@ -44,4 +44,12 @@ assert.strictEqual(v0.status, 'part');
 assert.deepStrictEqual(v0.accounts.map((x) => [x.name, x.status, x.views]), [['a', 'done', 5], ['b', 'done', 9], ['c', 'wait', null]]);
 const s1 = buildSnapshot(state, stats, queue, new Date('2026-11-03T12:00:00Z'), { accounts: ['a'] });
 assert.strictEqual(s1.todayRows[0].status, 'done');
+// задержка: слот прошёл больше 15 минут назад
+const sl = buildSnapshot({ plans: { '2026-11-03': { folder: '001_b', plan: { 'c.mp4': '2026-11-03T18:00+03:00', 'd.mp4': '2026-11-03T22:00+03:00' } } }, posted: {}, skipped: {} },
+  {}, [{ name: '001_b', videos: ['c.mp4', 'd.mp4'] }], new Date('2026-11-03T15:20:00Z'));
+assert.deepStrictEqual(sl.todayRows.map((r) => r.late), [true, false]);
+assert.strictEqual(sl.summary.late, 1);
+const sl2 = buildSnapshot({ plans: { '2026-11-03': { folder: '001_b', plan: { 'c.mp4': '2026-11-03T18:00+03:00' } } }, posted: {}, skipped: {} },
+  {}, [{ name: '001_b', videos: ['c.mp4'] }], new Date('2026-11-03T15:10:00Z'));
+assert.strictEqual(sl2.todayRows[0].late, false);
 console.log('ok');

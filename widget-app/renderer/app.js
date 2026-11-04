@@ -1,7 +1,7 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 const bridge = window.api;
-const LABEL = { done: 'вышел', part: 'частично', wait: 'ждёт', skipped: 'пропущен', queued: 'в очереди' };
+const LABEL = { done: 'вышел', part: 'частично', late: 'задерживается', wait: 'ждёт', skipped: 'пропущен', queued: 'в очереди' };
 
 let cfg = {}, hasToken = false, version = '', snap = null, timer = null, busy = false;
 let pending = [], dragDepth = 0;
@@ -51,10 +51,10 @@ function metrics(v) {
 }
 function rowHtml(v, sub) {
   const url = v.permalink ? ` data-url="${esc(v.permalink)}"` : '';
-  return `<div class="row-card ${v.status}${v.permalink ? ' link' : ''}"${url}>
+  return `<div class="row-card ${v.late ? 'late' : v.status}${v.permalink ? ' link' : ''}"${url}>
     <span class="t">${timeOf(v.time || v.at)}</span>
     <div class="nm">${esc(v.name)}${sub ? `<span class="sub">${esc(sub)}</span>` : ''}${metrics(v)}</div>
-    <span class="chip ${v.status}">${v.status === 'part' ? `${(v.accounts || []).filter((a) => a.status === 'done').length}/${(v.accounts || []).length}` : LABEL[v.status]}</span></div>`;
+    <span class="chip ${v.late ? 'late' : v.status}">${v.late ? LABEL.late : v.status === 'part' ? `${(v.accounts || []).filter((a) => a.status === 'done').length}/${(v.accounts || []).length}` : LABEL[v.status]}</span></div>`;
 }
 function folderHtml(f) {
   const pct = f.total ? Math.round((f.done / f.total) * 100) : 0;
@@ -108,7 +108,9 @@ async function refresh() {
   const btn = $('btnRefresh'); btn.classList.add('spin');
   try {
     const r = await bridge.refresh();
-    snap = r.snapshot; banner('');
+    snap = r.snapshot;
+    const late = (snap.summary && snap.summary.late) || 0;
+    banner(late ? `Задерживается рилсов: ${late}. Автопостер ещё не запустился, GitHub опаздывает. Догонит на ближайшем запуске.` : '', !!late);
     $('foot').textContent = `Обновлено ${timeOf(r.at)}`;
     render();
   } catch (e) {
