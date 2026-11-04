@@ -29,11 +29,18 @@
       "media_id": "18099963335661213",
       "permalink": "https://www.instagram.com/reel/DfT81Ognfbn/",
       "at": "2026-11-04T07:45:32+00:00"
+    },
+    "002_Night-Shift/short-3-count-the-cars.mp4": {
+      "media_id": "18121149271752123",
+      "permalink": "https://www.instagram.com/reel/DfUMXDhiWIb/",
+      "at": "2026-11-04T10:01:15+00:00"
     }
   },
   "skipped": {},
   "last_started": "2026-11-04",
-  "failures": {},
+  "failures": {
+    "rulezerosurvivel|002_Night-Shift/short-3-count-the-cars.mp4": 1
+  },
   "active": {
     "folder": "002_Night-Shift",
     "date": "2026-11-04",
@@ -84,6 +91,11 @@
         "media_id": "17989035875881069",
         "permalink": "https://www.instagram.com/reel/DfT9EmZoZbw/",
         "at": "2026-11-04T07:47:45+00:00"
+      },
+      "002_Night-Shift/short-3-count-the-cars.mp4": {
+        "media_id": "18220930957356156",
+        "permalink": "https://www.instagram.com/reel/DfUMs0EiSLM/",
+        "at": "2026-11-04T10:04:13+00:00"
       }
     }
   }
