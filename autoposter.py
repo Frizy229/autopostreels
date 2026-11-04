@@ -631,9 +631,19 @@ def cmd_post(args) -> int:
                 if named and (item["video"].parent / named).is_file():
                     cover = item["video"].parent / named
                 cover_url = cover_url_for(cfg, cover)
-                cid = ig.create_reel_container(caption, cover_url, int(cfg["thumb_offset_ms"]),
-                                               bool(cfg["share_to_feed"]))
-                ig.upload_video(cid, item["video"])
+                for attempt in range(3):
+                    try:
+                        cid = ig.create_reel_container(caption, cover_url, int(cfg["thumb_offset_ms"]),
+                                                       bool(cfg["share_to_feed"]))
+                        ig.upload_video(cid, item["video"])
+                        break
+                    except RuntimeError as e:
+                        # Instagram иногда отвечает «ProcessingFailedError» на первую попытку: пробуем заново
+                        if "ProcessingFailedError" in str(e) and attempt < 2:
+                            log(f"Instagram не принял видео (попытка {attempt + 1}), пробую ещё раз.")
+                            time.sleep(20)
+                            continue
+                        raise
                 ig.wait_ready(cid)
                 media_id = ig.publish(cid)
             except Exception as e:  # noqa: BLE001
