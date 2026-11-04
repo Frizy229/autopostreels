@@ -53,6 +53,7 @@ DEFAULT_CONFIG = {
     "cover": "auto",                 # auto | github_raw | temp_link | frame
     "thumb_offset_ms": 1000,         # кадр для обложки (мс), если нет .jpg
     "share_to_feed": True,           # показывать рилс в сетке профиля
+    "accounts": [],                  # список аккаунтов, см. README; пусто = один аккаунт (IG_TOKEN, IG_USER_ID)
     "api_version": "v23.0",
     "status_timeout_sec": 900,
 }
@@ -101,6 +102,63 @@ def mask(secret: str) -> None:
         print(f"::add-mask::{secret}", flush=True)
 
 
+# ---------------------------------------------------------------- accounts
+
+ACTIVE_ACCOUNTS: list[dict] = [{"name": "main", "token_env": "IG_TOKEN", "user_id_env": "IG_USER_ID", "primary": True}]
+
+
+def secret(name: str) -> str:
+    """Секрет из переменной окружения или из ALL_SECRETS (JSON со всеми секретами репозитория)."""
+    val = os.environ.get(name, "").strip()
+    if val:
+        return val
+    try:
+        return str(json.loads(os.environ.get("ALL_SECRETS") or "{}").get(name, "")).strip()
+    except ValueError:
+        return ""
+
+
+def configure_accounts(cfg: dict) -> list[dict]:
+    """Какие аккаунты сейчас работают: первый обязателен, остальные включаются, когда задан их токен."""
+    global ACTIVE_ACCOUNTS
+    raw = cfg.get("accounts") or [{"name": "main"}]
+    out = []
+    for i, a in enumerate(raw):
+        acc = {"name": a.get("name") or f"acc{i + 1}",
+               "token_env": a.get("token_env") or ("IG_TOKEN" if i == 0 else f"IG_TOKEN_{i + 1}"),
+               "user_id_env": a.get("user_id_env") or ("IG_USER_ID" if i == 0 else f"IG_USER_ID_{i + 1}"),
+               "primary": i == 0}
+        if not acc["primary"] and not secret(acc["token_env"]):
+            log(f"Аккаунт «{acc['name']}»: нет секрета {acc['token_env']}, пропускаю.")
+            continue
+        out.append(acc)
+    ACTIVE_ACCOUNTS = out
+    return out
+
+
+def acc_posted(state: dict, acc: dict) -> dict:
+    """Опубликованные рилсы аккаунта. Для первого аккаунта это state['posted'] (как раньше)."""
+    if acc["primary"]:
+        return state["posted"]
+    return state.setdefault("posted_acc", {}).setdefault(acc["name"], {})
+
+
+def acc_key(acc: dict, item_id: str) -> str:
+    return item_id if acc["primary"] else f"{acc['name']}|{item_id}"
+
+
+def acc_done(state: dict, acc: dict, item_id: str) -> bool:
+    return item_id in acc_posted(state, acc) or acc_key(acc, item_id) in state["skipped"]
+
+
+def make_ig(acc: dict, cfg: dict) -> "Instagram":
+    token = secret(acc["token_env"])
+    if not token:
+        sys.exit(f"Ошибка: не задан секрет {acc['token_env']} (аккаунт «{acc['name']}»).")
+    mask(token)
+    return Instagram(token, secret(acc["user_id_env"]), cfg)
+
+
 # ---------------------------------------------------------------- caption
 
 def build_caption(cfg: dict, text: str) -> str:
@@ -147,13 +205,36 @@ def parse_txt(text: str) -> tuple[str, str]:
     m = re.search(r"^\s*COVER:\s*(\S+)", text, re.M | re.I)
     if m:
         cover = m.group(1)
-    m = re.search(r"^\s*REELS CAPTION[^\n]*:\s*\n(.*?)(?=^\s*COVER:|^[A-Z][A-Z ()/]+:\s*$|\Z)",
+    m = re.search(r"^\s*REELS CAPTION[^\n]*:\s*\n(.*?)(?=^\s*COVER:|^\s*REELS CAPTION|^[A-Z][A-Z ()/]+:\s*$|\Z)",
                   text, re.M | re.S)
     if m:
         return m.group(1).strip(), cover
     if cover:
         text = re.sub(r"^\s*COVER:.*$", "", text, flags=re.M | re.I)
     return text.strip(), cover
+
+
+def parse_captions(text: str) -> list[tuple[str, str]]:
+    """Все блоки REELS CAPTION: [(заголовок, текст)]. Заголовок вида «REELS CAPTION (Instagram @имя):»."""
+    out = []
+    for m in re.finditer(r"^\s*(REELS CAPTION[^\n]*):\s*\n(.*?)(?=^\s*COVER:|^\s*REELS CAPTION|^[A-Z][A-Z ()/@._-]+:\s*$|\Z)",
+                         text, re.M | re.S):
+        out.append((m.group(1), m.group(2).strip()))
+    return out
+
+
+def caption_for(item: dict, acc: dict, index: int) -> str:
+    """Подпись для аккаунта: блок, где в заголовке есть имя аккаунта; иначе блок без имён
+    нужного порядка; иначе общий текст."""
+    caps = item.get("captions") or []
+    name = acc["name"].lower().lstrip("@")
+    for head, body in caps:
+        if name and name in head.lower():
+            return body
+    plain = [b for h, b in caps if "@" not in h]
+    if plain:
+        return plain[0] if len(plain) == 1 or index >= len(plain) else plain[index]
+    return item["text"]
 
 
 def first_number(name: str) -> str:
@@ -182,7 +263,8 @@ def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
     items = []
     for video in sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXT):
         key = f"{folder.name}/{video.name}"
-        if key in state["posted"] or key in state["skipped"]:
+        pending = [a for a in ACTIVE_ACCOUNTS if not acc_done(state, a, key)]
+        if not pending:
             continue
         txt = video.with_suffix(".txt")
         raw = txt.read_text(encoding="utf-8-sig") if txt.exists() else ""
@@ -193,6 +275,8 @@ def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
             "txt": txt if txt.exists() else None,
             "cover": find_cover(video, cover_name),
             "text": caption,
+            "captions": parse_captions(raw),
+            "pending": pending,
         })
     return items
 
@@ -485,8 +569,9 @@ def cmd_post(args) -> int:
             print(f"=== Папка {folder.name}: {len(items)} рилсов")
             for i in items:
                 cover = i["cover"].name if i["cover"] else f"кадр {cfg['thumb_offset_ms']} мс"
-                print(f"--- {plan[i['video'].name][11:16]}  {i['video'].name}  (обложка: {cover})\n"
-                      f"{build_caption(cfg, i['text'])}\n")
+                print(f"--- {plan[i['video'].name][11:16]}  {i['video'].name}  (обложка: {cover})")
+                for n, acc in enumerate(ACTIVE_ACCOUNTS):
+                    print(f"[@{acc['name']}]\n{build_caption(cfg, caption_for(i, acc, n))}\n")
         return 0
 
     group_loose_files(cfg, now)
@@ -515,44 +600,50 @@ def cmd_post(args) -> int:
         log("Сейчас публиковать нечего.")
         return 0
 
-    token = env("IG_TOKEN")
-    mask(token)
-    ig = Instagram(token, env("IG_USER_ID", required=False), cfg)
-    ig.whoami()
+    igs = {}
+    for acc in ACTIVE_ACCOUNTS:
+        igs[acc["name"]] = make_ig(acc, cfg)
+        igs[acc["name"]].whoami()
     posted = failed = 0
+    dead: set[str] = set()  # аккаунты с недействительным токеном в этом запуске
     for item in due[: int(cfg["max_posts_per_run"])]:
-        log(f"→ {item['id']}")
-        try:
-            caption = build_caption(cfg, item["text"])
-            cover_url = cover_url_for(cfg, item["cover"])
-            cid = ig.create_reel_container(caption, cover_url, int(cfg["thumb_offset_ms"]),
-                                           bool(cfg["share_to_feed"]))
-            ig.upload_video(cid, item["video"])
-            ig.wait_ready(cid)
-            media_id = ig.publish(cid)
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            log(f"ОШИБКА с {item['id']}: {e}")
-            fails = state.setdefault("failures", {})
-            fails[item["id"]] = fails.get(item["id"], 0) + 1
-            if fails[item["id"]] >= 3:
-                state["skipped"][item["id"]] = f"3 неудачные попытки: {str(e)[:300]}"
-                log("Ролик пропущен после 3 попыток, смотрите state.json -> skipped.")
+        for index, acc in enumerate(ACTIVE_ACCOUNTS):
+            if acc not in item["pending"] or acc["name"] in dead:
+                continue
+            ig = igs[acc["name"]]
+            fkey = acc_key(acc, item["id"])
+            log(f"→ {item['id']} → @{acc['name']}")
+            try:
+                caption = build_caption(cfg, caption_for(item, acc, index))
+                cover_url = cover_url_for(cfg, item["cover"])
+                cid = ig.create_reel_container(caption, cover_url, int(cfg["thumb_offset_ms"]),
+                                               bool(cfg["share_to_feed"]))
+                ig.upload_video(cid, item["video"])
+                ig.wait_ready(cid)
+                media_id = ig.publish(cid)
+            except Exception as e:  # noqa: BLE001
+                failed += 1
+                log(f"ОШИБКА с {item['id']} (@{acc['name']}): {e}")
+                fails = state.setdefault("failures", {})
+                fails[fkey] = fails.get(fkey, 0) + 1
+                if fails[fkey] >= 3:
+                    state["skipped"][fkey] = f"3 неудачные попытки: {str(e)[:300]}"
+                    log("Ролик пропущен после 3 попыток, смотрите state.json -> skipped.")
+                save_state(state)
+                if "OAuthException" in str(e) or "access token" in str(e).lower():
+                    log(f"Похоже, токен недействителен. Обновите секрет {acc['token_env']}.")
+                    dead.add(acc["name"])
+                continue
+            link = ig.permalink(media_id)
+            acc_posted(state, acc)[item["id"]] = {
+                "media_id": media_id,
+                "permalink": link,
+                "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+            }
+            state.get("failures", {}).pop(fkey, None)
             save_state(state)
-            if "OAuthException" in str(e) or "access token" in str(e).lower():
-                log("Похоже, токен недействителен. Обновите секрет IG_TOKEN.")
-                break
-            continue
-        link = ig.permalink(media_id)
-        state["posted"][item["id"]] = {
-            "media_id": media_id,
-            "permalink": link,
-            "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-        }
-        state.get("failures", {}).pop(item["id"], None)
-        save_state(state)
-        posted += 1
-        log(f"Опубликовано: {link or media_id}")
+            posted += 1
+            log(f"Опубликовано: {link or media_id}")
 
     sweep_finished(cfg, state)
     save_state(state)
@@ -560,40 +651,41 @@ def cmd_post(args) -> int:
 
 
 def cmd_stats(args) -> int:
-    """Собрать лайки, комментарии и (если токен позволяет) просмотры в stats.json."""
+    """Собрать лайки, комментарии и (если токен позволяет) просмотры в stats.json.
+    Ключ для первого аккаунта: queue-id рилса, для остальных: «аккаунт|queue-id»."""
     cfg = load_config()
     state = load_state()
-    token = env("IG_TOKEN")
-    mask(token)
-    ig = Instagram(token, env("IG_USER_ID", required=False), cfg)
     stats_path = ROOT / "stats.json"
     stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else {}
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
-    insights_ok = True
-    for key, info in state["posted"].items():
-        at = dt.datetime.fromisoformat(info["at"])
-        if at < cutoff and key in stats:
-            continue  # старые не обновляем
-        row = stats.get(key, {})
-        try:
-            m = ig._req("GET", f"{ig.base}/{info['media_id']}",
-                        params={"fields": "like_count,comments_count,permalink"})
-            row.update(likes=m.get("like_count"), comments=m.get("comments_count"),
-                       permalink=m.get("permalink") or info.get("permalink", ""))
-        except RuntimeError as e:
-            log(f"{key}: не удалось получить лайки: {str(e)[:200]}")
-            continue
-        if insights_ok:
+    for acc in configure_accounts(cfg):
+        ig = make_ig(acc, cfg)
+        insights_ok = True
+        for pid, info in acc_posted(state, acc).items():
+            key = acc_key(acc, pid)
+            at = dt.datetime.fromisoformat(info["at"])
+            if at < cutoff and key in stats:
+                continue  # старые не обновляем
+            row = stats.get(key, {})
             try:
-                ins = ig._req("GET", f"{ig.base}/{info['media_id']}/insights",
-                              params={"metric": "views,reach,saved,shares"})
-                for d in ins.get("data", []):
-                    row[d["name"]] = (d.get("values") or [{}])[0].get("value")
+                m = ig._req("GET", f"{ig.base}/{info['media_id']}",
+                            params={"fields": "like_count,comments_count,permalink"})
+                row.update(likes=m.get("like_count"), comments=m.get("comments_count"),
+                           permalink=m.get("permalink") or info.get("permalink", ""))
             except RuntimeError as e:
-                insights_ok = False
-                log(f"Просмотры недоступны (нужно разрешение instagram_manage_insights): {str(e)[:160]}")
-        row["updated"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-        stats[key] = row
+                log(f"{key}: не удалось получить лайки: {str(e)[:200]}")
+                continue
+            if insights_ok:
+                try:
+                    ins = ig._req("GET", f"{ig.base}/{info['media_id']}/insights",
+                                  params={"metric": "views,reach,saved,shares"})
+                    for d in ins.get("data", []):
+                        row[d["name"]] = (d.get("values") or [{}])[0].get("value")
+                except RuntimeError as e:
+                    insights_ok = False
+                    log(f"Просмотры недоступны (нужно разрешение instagram_manage_insights): {str(e)[:160]}")
+            row["updated"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+            stats[key] = row
     stats_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     log(f"Статистика обновлена для {len(stats)} рилсов.")
     return 0
@@ -601,9 +693,19 @@ def cmd_stats(args) -> int:
 
 def cmd_check(args) -> int:
     cfg = load_config()
-    token = env("IG_TOKEN")
-    mask(token)
-    ig = Instagram(token, env("IG_USER_ID", required=False), cfg)
+    code = 0
+    for acc in configure_accounts(cfg):
+        log(f"=== Аккаунт «{acc['name']}» ({acc['token_env']})")
+        try:
+            _check_one(cfg, acc)
+        except (RuntimeError, SystemExit) as e:
+            log(f"ОШИБКА: {e}")
+            code = 1
+    return code
+
+
+def _check_one(cfg: dict, acc: dict) -> int:
+    ig = make_ig(acc, cfg)
     log(f"API: {ig.host}")
     info = ig.whoami()
     log(f"Токен работает. Аккаунт: @{info.get('username')} (id {info.get('id')}, "
@@ -677,6 +779,8 @@ def main() -> int:
     sub.add_parser("stats").set_defaults(func=cmd_stats)
     sub.add_parser("refresh-token").set_defaults(func=cmd_refresh)
     args = p.parse_args()
+    if args.cmd == "post":
+        configure_accounts(load_config())
     return args.func(args)
 
 

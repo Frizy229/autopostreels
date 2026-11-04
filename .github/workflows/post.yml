@@ -38,6 +38,7 @@ jobs:
         env:
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          ALL_SECRETS: ${{ toJSON(secrets) }}
         run: |
           case "${{ inputs.action || 'post' }}" in
             check)   python autoposter.py check ;;
@@ -51,6 +52,7 @@ jobs:
         env:
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          ALL_SECRETS: ${{ toJSON(secrets) }}
         run: python autoposter.py stats
 
       - name: Сохранить, что опубликовано

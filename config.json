@@ -8,5 +8,12 @@
   "default_text": "",
   "cover": "auto",
   "thumb_offset_ms": 1000,
-  "share_to_feed": true
+  "share_to_feed": true,
+  "accounts": [
+    {
+      "name": "dayzerorules",
+      "token_env": "IG_TOKEN",
+      "user_id_env": "IG_USER_ID"
+    }
+  ]
 }
