@@ -275,6 +275,16 @@ def finish_folder(cfg: dict, folder: pathlib.Path) -> None:
     log(f"Папка {folder.name} опубликована полностью и перенесена в {cfg['posted_dir']}/")
 
 
+def sweep_finished(cfg: dict, state: dict) -> None:
+    """Перенести в posted/ все папки, где каждый рилс уже опубликован или пропущен."""
+    for f in queue_folders(cfg):
+        has_video = any(p.is_file() and p.suffix.lower() in VIDEO_EXT for p in f.iterdir())
+        if has_video and not folder_items(f, state):
+            finish_folder(cfg, f)
+            if (state.get("active") or {}).get("folder") == f.name:
+                state["active"] = None
+
+
 def schedule(cfg: dict, state: dict, now: dt.datetime) -> tuple[pathlib.Path | None, list[dict]]:
     """Решить, какая папка сегодня в работе и какие рилсы пора публиковать."""
     tz = now.tzinfo
@@ -480,6 +490,7 @@ def cmd_post(args) -> int:
         return 0
 
     group_loose_files(cfg, now)
+    sweep_finished(cfg, state)
     if args.only:
         # разовая публикация выбранного рилса прямо сейчас, расписание не трогаем
         folder, due = None, []
@@ -543,10 +554,8 @@ def cmd_post(args) -> int:
         posted += 1
         log(f"Опубликовано: {link or media_id}")
 
-    if folder and folder.is_dir() and not folder_items(folder, state):
-        finish_folder(cfg, folder)
-        state["active"] = None
-        save_state(state)
+    sweep_finished(cfg, state)
+    save_state(state)
     return 1 if failed and not posted else 0
 
 
