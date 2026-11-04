@@ -19,9 +19,41 @@
       "media_id": "17960983359015409",
       "permalink": "https://www.instagram.com/reel/DfSWLfcgRcn/",
       "at": "2026-11-03T16:48:40+00:00"
+    },
+    "002_Night-Shift/short-1-the-notebook.mp4": {
+      "media_id": "18083526941546813",
+      "permalink": "https://www.instagram.com/reel/DfTvS-eEgNF/",
+      "at": "2026-11-04T05:47:16+00:00"
     }
   },
   "skipped": {},
-  "last_started": "2026-11-03",
-  "failures": {}
+  "last_started": "2026-11-04",
+  "failures": {},
+  "active": {
+    "folder": "002_Night-Shift",
+    "date": "2026-11-04",
+    "plan": {
+      "short-1-the-notebook.mp4": "2026-11-04T12:46+07:00",
+      "short-2-two-bells.mp4": "2026-11-04T14:18+07:00",
+      "short-3-count-the-cars.mp4": "2026-11-04T15:51+07:00",
+      "short-4-the-pay-phone.mp4": "2026-11-04T17:23+07:00",
+      "short-5-3-10-am.mp4": "2026-11-04T18:55+07:00",
+      "short-6-the-regular.mp4": "2026-11-04T20:27+07:00",
+      "short-7-camera-four.mp4": "2026-11-04T21:59+07:00"
+    }
+  },
+  "plans": {
+    "2026-11-04": {
+      "folder": "002_Night-Shift",
+      "plan": {
+        "short-1-the-notebook.mp4": "2026-11-04T12:46+07:00",
+        "short-2-two-bells.mp4": "2026-11-04T14:18+07:00",
+        "short-3-count-the-cars.mp4": "2026-11-04T15:51+07:00",
+        "short-4-the-pay-phone.mp4": "2026-11-04T17:23+07:00",
+        "short-5-3-10-am.mp4": "2026-11-04T18:55+07:00",
+        "short-6-the-regular.mp4": "2026-11-04T20:27+07:00",
+        "short-7-camera-four.mp4": "2026-11-04T21:59+07:00"
+      }
+    }
+  }
 }
