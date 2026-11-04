@@ -206,19 +206,28 @@ def parse_txt(text: str) -> tuple[str, str]:
     m = re.search(r"^\s*COVER:\s*(\S+)", text, re.M | re.I)
     if m:
         cover = m.group(1)
-    m = re.search(r"^\s*REELS CAPTION[^\n]*:\s*\n(.*?)(?=^\s*COVER:|^\s*REELS CAPTION|^[A-Z][A-Z ()/]+:\s*$|\Z)",
+    m = re.search(r"^\s*REELS CAPTION[^\n]*:\s*\n(.*?)(?=^\s*COVER\b|^\s*REELS CAPTION|^[A-Z][A-Z ()/]+:\s*$|\Z)",
                   text, re.M | re.S)
     if m:
         return m.group(1).strip(), cover
     if cover:
-        text = re.sub(r"^\s*COVER:.*$", "", text, flags=re.M | re.I)
+        text = re.sub(r"^\s*COVER\b.*$", "", text, flags=re.M | re.I)
     return text.strip(), cover
+
+
+def parse_covers(text: str) -> dict[str, str]:
+    """Обложки по аккаунтам: строки вида «COVER (Instagram @имя): файл.jpg»."""
+    out = {}
+    for m in re.finditer(r"^\s*COVER\s*\(([^)]*)\)\s*:\s*(\S+)", text, re.M | re.I):
+        for name in re.findall(r"@([\w.]+)", m.group(1)):
+            out[name.lower()] = m.group(2)
+    return out
 
 
 def parse_captions(text: str) -> list[tuple[str, str]]:
     """Все блоки REELS CAPTION: [(заголовок, текст)]. Заголовок вида «REELS CAPTION (Instagram @имя):»."""
     out = []
-    for m in re.finditer(r"^\s*(REELS CAPTION[^\n]*):\s*\n(.*?)(?=^\s*COVER:|^\s*REELS CAPTION|^[A-Z][A-Z ()/@._-]+:\s*$|\Z)",
+    for m in re.finditer(r"^\s*(REELS CAPTION[^\n]*):\s*\n(.*?)(?=^\s*COVER\b|^\s*REELS CAPTION|^[A-Z][A-Z ()/@._-]+:\s*$|\Z)",
                          text, re.M | re.S):
         out.append((m.group(1), m.group(2).strip()))
     return out
@@ -277,6 +286,7 @@ def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
             "cover": find_cover(video, cover_name),
             "text": caption,
             "captions": parse_captions(raw),
+            "covers": parse_covers(raw),
             "pending": pending,
         })
     return items
@@ -616,7 +626,11 @@ def cmd_post(args) -> int:
             log(f"→ {item['id']} → @{acc['name']}")
             try:
                 caption = build_caption(cfg, caption_for(item, acc, index))
-                cover_url = cover_url_for(cfg, item["cover"])
+                cover = item["cover"]
+                named = item.get("covers", {}).get(acc["name"].lower())
+                if named and (item["video"].parent / named).is_file():
+                    cover = item["video"].parent / named
+                cover_url = cover_url_for(cfg, cover)
                 cid = ig.create_reel_container(caption, cover_url, int(cfg["thumb_offset_ms"]),
                                                bool(cfg["share_to_feed"]))
                 ig.upload_video(cid, item["video"])
