@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: file: https:; media-src 'self' file:; style-src 'self' 'unsafe-inline'; font-src 'self' file:; script-src 'self'">
+  <title>Reels Studio</title>
+  <link rel="stylesheet" href="../node_modules/@fontsource-variable/onest/index.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <aside class="side">
+      <div class="brand drag">
+        <img src="../assets/icon.png" alt="">
+        <div><b>Reels Studio</b><small id="ver"></small></div>
+      </div>
+      <nav id="nav"></nav>
+      <div class="side-foot" id="sideFoot"></div>
+    </aside>
+    <main>
+      <header class="top drag">
+        <div class="crumbs"><h1 id="pageTitle"></h1><span id="pageSub"></span></div>
+        <div class="top-actions no-drag" id="topActions"></div>
+      </header>
+      <section id="page" class="page"></section>
+    </main>
+  </div>
+  <div id="dock" class="dock"></div>
+  <div id="modal" class="modal" hidden></div>
+  <script src="helpers.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
