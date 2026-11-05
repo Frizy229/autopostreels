@@ -39,8 +39,8 @@ global.fetch = async (url, opt = {}) => {
 (async () => {
   const g = new GitHub('t', 'o/r');
   assert.deepStrictEqual(await g.queue(), [
-    { name: '003_batch', videos: ['dayzerorules/short-1.mp4', 'rulezerosurvivel/short-1.mp4'] },
-    { name: '004_flat', videos: ['a.mp4'] },
+    { name: '003_batch', tiktok: [], videos: ['dayzerorules/short-1.mp4', 'rulezerosurvivel/short-1.mp4'] },
+    { name: '004_flat', tiktok: [], videos: ['a.mp4'] },
   ]);
   trees.root[0].sha = 'q';
   // 'base' tree = root

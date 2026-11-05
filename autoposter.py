@@ -332,6 +332,48 @@ def has_videos(folder: pathlib.Path) -> bool:
     return bool(_videos(folder)) or bool(_subdirs(folder))
 
 
+def load_tt_settings(video: pathlib.Path) -> dict | None:
+    """Настройки поста TikTok, подтверждённые человеком в виджете: <имя>.tiktok.json рядом с видео."""
+    f = video.with_suffix(".tiktok.json")
+    if not f.exists():
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        log(f"{f.name}: не читается, ролик пойдёт в черновики.")
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def tt_post_info(settings: dict, caption: str, creator: dict) -> dict:
+    """post_info для прямой публикации из подтверждённых настроек. Любое нарушение правил TikTok -> ValueError."""
+    if not settings.get("consent"):
+        raise ValueError("нет подтверждения пользователя (consent)")
+    privacy = settings.get("privacy_level") or ""
+    options = creator.get("privacy_level_options") or []
+    if not privacy:
+        raise ValueError("не выбрана приватность")
+    if options and privacy not in options:
+        raise ValueError(f"приватность {privacy} недоступна (доступно: {', '.join(options)})")
+    commercial = settings.get("commercial") or {}
+    own, branded = bool(commercial.get("your_brand")), bool(commercial.get("branded"))
+    if commercial.get("on") and not (own or branded):
+        raise ValueError("коммерческий контент включён, но не выбран тип")
+    if branded and privacy == "SELF_ONLY":
+        raise ValueError("брендированный контент нельзя сделать приватным")
+    return {
+        "title": str(settings.get("title") or caption)[:2200],
+        "privacy_level": privacy,
+        "disable_comment": bool(settings.get("disable_comment", True)) or bool(creator.get("comment_disabled")),
+        "disable_duet": bool(settings.get("disable_duet", True)) or bool(creator.get("duet_disabled")),
+        "disable_stitch": bool(settings.get("disable_stitch", True)) or bool(creator.get("stitch_disabled")),
+        "brand_content_toggle": branded,
+        "brand_organic_toggle": own,
+        "video_cover_timestamp_ms": 1000,
+        "is_aigc": bool(settings.get("is_aigc", False)),
+    }
+
+
 def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], group: str) -> list[dict]:
     items = []
     for video in _videos(d):
@@ -343,6 +385,7 @@ def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], 
         raw = txt.read_text(encoding="utf-8-sig") if txt.exists() else ""
         caption, cover_name = parse_txt(raw)
         items.append({
+            "tiktok": load_tt_settings(video),
             "id": key,
             "plan_key": key.split("/", 1)[1],   # путь внутри папки дня: имя файла или «подпапка/файл»
             "group": group,                      # рилсы одного аккаунта планируются отдельно
@@ -750,33 +793,30 @@ class TikTok:
         u = self._req("/v2/user/info/?fields=open_id,display_name", method="GET").get("user", {})
         # username нужен scope user.info.profile, а у нас только user.info.basic: берём display_name
         info = {"username": u.get("display_name") or self.name, "id": u.get("open_id", "")}
+        info["nickname"] = info["username"]
         if self.mode == "direct":
             ci = self._req("/v2/post/publish/creator_info/query/", {})
             info["privacy_options"] = ci.get("privacy_level_options") or []
             info["max_duration"] = ci.get("max_video_post_duration_sec")
+            info["creator"] = {k: ci.get(k) for k in ("privacy_level_options", "comment_disabled", "duet_disabled",
+                                                       "stitch_disabled", "max_video_post_duration_sec")}
         return info
 
     # --- публикация
-    def upload(self, path: pathlib.Path, caption: str) -> str:
+    def upload(self, path: pathlib.Path, caption: str, settings: dict | None = None) -> str:
         size = path.stat().st_size
         chunk, count = tt_chunks(size)
         source = {"source": "FILE_UPLOAD", "video_size": size, "chunk_size": chunk, "total_chunk_count": count}
-        if self.mode == "direct":
+        if self.mode == "direct" and settings is not None:
             ci = self._req("/v2/post/publish/creator_info/query/", {})
-            options = ci.get("privacy_level_options") or []
-            privacy = self.acc.get("privacy") or "PUBLIC_TO_EVERYONE"
-            if options and privacy not in options:
-                log(f"TikTok не разрешает приватность {privacy} (доступно: {', '.join(options)}). "
-                    f"Без аудита приложения доступно только SELF_ONLY.")
-                privacy = "SELF_ONLY" if "SELF_ONLY" in options else options[0]
-            post = {"title": caption[:2200], "privacy_level": privacy,
-                    "disable_comment": self.acc.get("disable_comment", False) or bool(ci.get("comment_disabled")),
-                    "disable_duet": self.acc.get("disable_duet", False) or bool(ci.get("duet_disabled")),
-                    "disable_stitch": self.acc.get("disable_stitch", False) or bool(ci.get("stitch_disabled")),
-                    "video_cover_timestamp_ms": 1000, "is_aigc": self.acc.get("is_aigc", False)}
+            post = tt_post_info(settings, caption, ci)
             init = self._req("/v2/post/publish/video/init/", {"post_info": post, "source_info": source})
+            self.sent_mode = "direct"
         else:
+            if self.mode == "direct":
+                log("Нет подтверждённых настроек поста (.tiktok.json): отправляю в черновики TikTok.")
             init = self._req("/v2/post/publish/inbox/video/init/", {"source_info": source})
+            self.sent_mode = "inbox"
         publish_id, url = init["publish_id"], init["upload_url"]
         log(f"Загружаю видео в TikTok ({size / 1e6:.1f} МБ, частей: {count})")
         with path.open("rb") as f:
@@ -808,9 +848,9 @@ class TikTok:
             time.sleep(10)
         raise RuntimeError("TikTok слишком долго обрабатывает видео (таймаут)")
 
-    def post(self, path: pathlib.Path, caption: str) -> dict:
+    def post(self, path: pathlib.Path, caption: str, settings: dict | None = None) -> dict:
         self.post_id = ""
-        publish_id = self.upload(path, caption)
+        publish_id = self.upload(path, caption, settings)
         status = self.wait_ready(publish_id)
         link = f"https://www.tiktok.com/@{self.acc.get('username') or self.name}/video/{self.post_id}" if self.post_id else ""
         return {"media_id": publish_id, "permalink": link, "platform": "tiktok",
@@ -909,7 +949,7 @@ def cmd_post(args) -> int:
             log(f"→ {item['id']} → @{acc['name']}")
             if acc.get("platform") == "tiktok":
                 try:
-                    res = ig.post(item["video"], build_caption(cfg, caption_for(item, acc, index)))
+                    res = ig.post(item["video"], build_caption(cfg, caption_for(item, acc, index)), item.get("tiktok"))
                 except TikTokLimit as e:
                     log(f"TikTok @{acc['name']}: лимит, попробую в следующий раз. {e}")
                     if "pending_share" in str(e):
@@ -988,6 +1028,22 @@ def cmd_post(args) -> int:
     return 1 if failed and not posted else 0
 
 
+def export_tt_creator(cfg: dict, acc: dict) -> None:
+    """Для экрана подтверждения в виджете: ник и допустимые настройки автора (creator_info) -> tiktok_creator.json."""
+    if acc.get("mode") != "direct":
+        return
+    path = ROOT / "tiktok_creator.json"
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    try:
+        info = make_ig(acc, cfg).whoami()
+    except RuntimeError as e:
+        log(f"TikTok @{acc['name']}: не получил настройки автора: {str(e)[:200]}")
+        return
+    data[acc["name"]] = {"nickname": info.get("nickname"), **(info.get("creator") or {}),
+                         "updated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def cmd_stats(args) -> int:
     """Собрать лайки, комментарии и (если токен позволяет) просмотры в stats.json.
     Ключ для первого аккаунта: queue-id рилса, для остальных: «аккаунт|queue-id»."""
@@ -998,6 +1054,7 @@ def cmd_stats(args) -> int:
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
     for acc in configure_accounts(cfg):
         if acc.get("platform") == "tiktok":
+            export_tt_creator(cfg, acc)
             continue  # статистику TikTok пока не собираем
         ig = make_ig(acc, cfg)
         insights_ok = True

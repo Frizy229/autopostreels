@@ -5,6 +5,7 @@ const LABEL = { done: 'вышел', part: 'частично', late: 'задер�
 
 let cfg = {}, hasToken = false, version = '', snap = null, timer = null, busy = false;
 let pending = [], dragDepth = 0;
+let ttData = { pending: [], creators: {} };
 const openSet = new Set(JSON.parse(localStorage.getItem('open') || '[]'));
 let doneOpen = localStorage.getItem('doneOpen') === '1';
 
@@ -122,6 +123,8 @@ async function refresh() {
   try {
     const r = await bridge.refresh();
     snap = r.snapshot;
+    ttData = r.tt || ttData;
+    renderTt();
     const late = (snap.summary && snap.summary.late) || 0;
     banner(late ? `Задерживается рилсов: ${late}. Автопостер ещё не запустился, GitHub опаздывает. Догонит на ближайшем запуске.` : '', !!late);
     $('foot').textContent = `Обновлено ${timeOf(r.at)}`;
@@ -163,6 +166,84 @@ $('delGo').addEventListener('click', async () => {
     $('delStatus').textContent = e.message; $('delStatus').style.color = 'var(--err)';
     $('delGo').disabled = false; $('delGo').textContent = 'Повторить'; $('delCancel').disabled = false;
   }
+});
+
+// ------------------------------------------------------------ TikTok: подтверждение перед публикацией
+const TT = {
+  labels: { PUBLIC_TO_EVERYONE: 'Все', MUTUAL_FOLLOW_FRIENDS: 'Друзья (взаимные подписки)', FOLLOWER_OF_CREATOR: 'Подписчики', SELF_ONLY: 'Только я' },
+  music: 'https://www.tiktok.com/legal/page/global/music-usage-confirmation/en',
+  brand: 'https://www.tiktok.com/legal/page/global/bc-policy/en',
+};
+let ttCur = null;
+function renderTt() {
+  const list = ttData.pending || [];
+  $('ttSection').hidden = !list.length;
+  $('ttList').innerHTML = list.map((p, i) => `<div class="tt-row"><span>${esc(p.folder)}/${esc(p.video)}<br><span class="muted small">@${esc(p.account)}</span></span><button class="btn small" data-tt="${i}">Проверить</button></div>`).join('');
+}
+$('ttList').addEventListener('click', (e) => { const b = e.target.closest('[data-tt]'); if (b) openTt(ttData.pending[+b.dataset.tt]); });
+function ttForm() {
+  const privacy = $('ttPrivacy').value;
+  return {
+    title: $('ttTitle').value, privacy_level: privacy,
+    allow_comment: $('ttComment').checked, allow_duet: $('ttDuet').checked, allow_stitch: $('ttStitch').checked,
+    commercial: { on: $('ttComm').checked, your_brand: $('ttOwn').checked, branded: $('ttBranded').checked },
+    is_aigc: $('ttAigc').checked, consent: $('ttAgree').checked,
+  };
+}
+function ttErrors(f, cr) {
+  const e = [];
+  if (!f.title.trim()) e.push('Укажите название ролика.');
+  if (!f.privacy_level) e.push('Выберите, кто может смотреть ролик.');
+  if (f.commercial.on && !(f.commercial.your_brand || f.commercial.branded)) e.push('Выберите тип коммерческого контента.');
+  if (f.commercial.on && f.commercial.branded && f.privacy_level === 'SELF_ONLY') e.push('Брендированный контент нельзя сделать приватным.');
+  if (!f.consent) e.push('Подтвердите согласие.');
+  return e;
+}
+function ttSync() {
+  if (!ttCur) return;
+  const f = ttForm(), c = f.commercial;
+  $('ttCommBox').hidden = !c.on;
+  // брендированный контент нельзя сделать приватным: блокируем «Только я», пока он выбран
+  for (const o of $('ttPrivacy').options) if (o.value === 'SELF_ONLY') o.disabled = !!(c.on && c.branded);
+  if (c.on && c.branded && $('ttPrivacy').value === 'SELF_ONLY') $('ttPrivacy').value = '';
+  $('ttCommNote').textContent = !c.on ? '' : c.branded ? 'Ваш ролик будет помечен как «Платное партнёрство».' : c.your_brand ? 'Ваш ролик будет помечен как «Продвижение собственного бренда».' : '';
+  $('ttConsent').innerHTML = (c.on && c.branded
+    ? `Публикуя, я принимаю <a data-url="${TT.brand}">Политику брендированного контента</a> и <a data-url="${TT.music}">Подтверждение использования музыки</a> TikTok.`
+    : `Публикуя, я принимаю <a data-url="${TT.music}">Подтверждение использования музыки</a> TikTok.`);
+  const errs = ttErrors(f, ttCur.creator);
+  $('ttErr').textContent = f.consent ? errs.join(' ') : '';
+  $('ttGo').disabled = errs.length > 0;
+}
+async function openTt(p) {
+  const cr = (ttData.creators || {})[p.account] || {};
+  ttCur = { p, creator: cr };
+  $('ttWho').textContent = cr.nickname ? `Публикация в аккаунт: ${cr.nickname}` : `Публикация в аккаунт @${p.account} (запустите «Запуск → check/stats», чтобы подтянуть ник)`;
+  $('ttFile').textContent = `${p.folder}/${p.video}`;
+  $('ttTitle').value = ''; $('ttAgree').checked = false; $('ttComm').checked = false; $('ttOwn').checked = false; $('ttBranded').checked = false; $('ttAigc').checked = false;
+  for (const [id, key, note] of [['ttComment', 'comment_disabled', 'ttCommentNote'], ['ttDuet', 'duet_disabled', 'ttDuetNote'], ['ttStitch', 'stitch_disabled', 'ttStitchNote']]) {
+    $(id).checked = false; $(id).disabled = !!cr[key]; $(note).textContent = cr[key] ? '(отключено в настройках TikTok)' : '';
+  }
+  // приватность: только варианты из TikTok, значения по умолчанию нет
+  $('ttPrivacy').innerHTML = '<option value="">— выберите —</option>' + (cr.privacy_level_options || []).map((v) => `<option value="${esc(v)}">${esc(TT.labels[v] || v)}</option>`).join('');
+  $('ttErr').textContent = ''; $('ttGo').textContent = 'Подтвердить'; $('ttGo').disabled = true; $('ttCancel').disabled = false;
+  $('ttVideo').removeAttribute('src');
+  $('ttSheet').hidden = false; ttSync();
+  try { $('ttTitle').value = await bridge.ttCaption(`${p.folder}/${p.video}`); } catch { /* без подсказки */ }
+  try { $('ttVideo').src = 'file:///' + (await bridge.ttPreview(`${p.folder}/${p.video}`)).replace(/\\/g, '/'); } catch (e) { $('ttErr').textContent = `Не удалось загрузить превью: ${e.message}`; }
+  ttSync();
+}
+$('ttSheet').addEventListener('input', ttSync);
+$('ttSheet').addEventListener('change', ttSync);
+$('ttSheet').addEventListener('click', (e) => { const a = e.target.closest('[data-url]'); if (a) bridge.openUrl(a.dataset.url); });
+const ttClose = () => { $('ttVideo').pause(); $('ttSheet').hidden = true; ttCur = null; };
+$('ttBack').addEventListener('click', ttClose); $('ttCancel').addEventListener('click', ttClose);
+$('ttGo').addEventListener('click', async () => {
+  const f = ttForm(); $('ttGo').disabled = true; $('ttGo').textContent = 'Сохраняю…';
+  try {
+    await bridge.ttConfirm({ path: ttCur.p.path, form: f, creator: ttCur.creator });
+    toast('Подтверждено. Ролик уйдёт в TikTok по расписанию');
+    ttClose(); refresh();
+  } catch (e) { $('ttErr').textContent = e.message; $('ttGo').disabled = false; $('ttGo').textContent = 'Повторить'; }
 });
 
 // ------------------------------------------------------------ загрузка папки

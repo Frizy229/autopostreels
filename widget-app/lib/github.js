@@ -73,8 +73,27 @@ class GitHub {
       const t = await this.req('GET', `/git/trees/${d.sha}?recursive=1`);
       const items = ((t && t.tree) || []).filter((e) => e.type === 'blob' && e.path.split('/').length <= 2
         && VIDEO_EXT.has(path.extname(e.path).toLowerCase()) && !e.path.split('/').some((x) => x.startsWith('.')));
-      return { name: d.name, videos: items.map((e) => e.path).sort() };
+      const tiktok = ((t && t.tree) || []).filter((e) => e.type === 'blob' && e.path.endsWith('.tiktok.json')).map((e) => e.path);
+      return { name: d.name, videos: items.map((e) => e.path).sort(), tiktok };
     }));
+  }
+
+  /** Записать подтверждённые настройки TikTok (<имя>.tiktok.json рядом с видео) одним коммитом. */
+  async saveTiktokSettings(path, settings) {
+    if (!/^queue\/[^/]+\/(?:[^/]+\/)?[^/]+\.tiktok\.json$/.test(path) || path.includes('..')) throw new Error('Недопустимый путь.');
+    const sha = await this.blob(Buffer.from(JSON.stringify(settings, null, 2) + '\n', 'utf8'));
+    return this.commitFiles({ [path]: sha }, `Настройки TikTok подтверждены: ${path.split('/').slice(1).join('/')}`);
+  }
+
+  /** Скачать видео из очереди во временный файл для просмотра перед публикацией. */
+  async downloadVideo(rel, dest) {
+    if (!/^queue\/[^./]/.test(rel) || rel.includes('..')) throw new Error('Недопустимый путь.');
+    const res = await fetch(`${API}/repos/${this.repo}/contents/${rel.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(this.branch)}`, {
+      headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.raw+json', 'User-Agent': 'reels-widget' },
+    });
+    if (!res.ok) throw new Error(`Не удалось скачать видео: GitHub ${res.status}`);
+    fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+    return dest;
   }
 
   async nextNumber() {

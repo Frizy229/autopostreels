@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' file:">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reels Widget</title>
 <link rel="stylesheet" href="style.css">
@@ -27,6 +27,7 @@
 
   <main id="scroll">
     <div id="banner" class="banner" hidden></div>
+    <section id="ttSection" hidden><h3>TikTok: нужно подтвердить</h3><div id="ttList" class="list"></div></section>
     <section><h3 id="todayTitle">Сегодня</h3><div id="todayList" class="list"></div></section>
     <section><h3 id="queueTitle">Очередь</h3><div id="queueList" class="list"></div></section>
     <section><h3 id="doneTitle" class="toggle">Готово <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></h3><div id="doneList" class="list" hidden></div></section>
@@ -53,6 +54,38 @@
       <div id="delText" class="muted"></div>
       <div id="delStatus" class="muted"></div>
       <div class="sheet-btns"><button id="delGo" class="btn primary-danger">Убрать</button><button id="delCancel" class="btn">Отмена</button></div>
+    </div>
+  </div>
+
+  <div id="ttSheet" class="settings tt" hidden>
+    <div class="set-head drag"><button id="ttBack" class="ibtn no-drag" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><b>Публикация в TikTok</b></div>
+    <div class="set-body">
+      <p id="ttWho" class="small"></p>
+      <video id="ttVideo" controls preload="metadata" playsinline></video>
+      <p id="ttFile" class="muted small"></p>
+      <label>Название (подпись) ролика
+        <textarea id="ttTitle" rows="3" maxlength="2200" spellcheck="true"></textarea>
+      </label>
+      <label>Кто может смотреть этот ролик
+        <select id="ttPrivacy"></select>
+      </label>
+      <h4>Разрешить зрителям</h4>
+      <label class="check"><input id="ttComment" type="checkbox"> Комментарии <span id="ttCommentNote" class="muted small"></span></label>
+      <label class="check"><input id="ttDuet" type="checkbox"> Дуэт <span id="ttDuetNote" class="muted small"></span></label>
+      <label class="check"><input id="ttStitch" type="checkbox"> Сшивание <span id="ttStitchNote" class="muted small"></span></label>
+      <h4>Раскрытие контента</h4>
+      <label class="check"><input id="ttComm" type="checkbox"> Этот ролик рекламирует товар или услугу</label>
+      <div id="ttCommBox" hidden>
+        <label class="check"><input id="ttOwn" type="checkbox"> Ваш бренд (продвижение собственного бизнеса)</label>
+        <label class="check"><input id="ttBranded" type="checkbox"> Брендированный контент (продвижение другого бренда)</label>
+        <p id="ttCommNote" class="small"></p>
+      </div>
+      <label class="check"><input id="ttAigc" type="checkbox"> Ролик создан с помощью ИИ</label>
+      <p id="ttConsent" class="small"></p>
+      <label class="check"><input id="ttAgree" type="checkbox"> <span>Я подтверждаю публикацию и согласен с условиями выше</span></label>
+      <p class="muted small">Ролик отправится в TikTok автоматически по расписанию в выбранном виде. После отправки TikTok обрабатывает видео несколько минут, ролик появится в профиле не сразу.</p>
+      <p id="ttErr" class="small" style="color:var(--err)"></p>
+      <div class="sheet-btns"><button id="ttGo" class="btn primary" disabled>Подтвердить</button><button id="ttCancel" class="btn">Отмена</button></div>
     </div>
   </div>
 

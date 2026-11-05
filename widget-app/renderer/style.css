@@ -118,4 +118,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin-top: 8px; }
 .seg button.on { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; font-weight: 600; }
 #connResult.ok { color: var(--ok); } #connResult.bad { color: var(--err); }
 .toast { position: absolute; left: 50%; bottom: 78px; transform: translateX(-50%); z-index: 60; max-width: 86%; padding: 8px 14px; border-radius: 12px; background: rgba(var(--base), .97); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(0,0,0,.3); font-size: 12px; }
+#ttVideo { width: 100%; max-height: 260px; border-radius: 12px; background: #000; }
+.tt textarea { width: 100%; margin-top: 4px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--field); outline: none; resize: vertical; font: inherit; color: inherit; }
+.tt a { color: var(--accent); cursor: pointer; } .tt input:disabled + * , .tt label:has(input:disabled) { opacity: .55; }
+.tt-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 11px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); font-size: 12.5px; }
 [hidden] { display: none !important; }

@@ -23,7 +23,7 @@ class FakeTT:
     def whoami(self):
         return {"username": self.name}
 
-    def post(self, path, caption):
+    def post(self, path, caption, settings=None):
         if FakeTT.limit:
             raise a.TikTokLimit("TikTok API 403 spam_risk_too_many_pending_share: x")
         if FakeTT.fail:
@@ -119,18 +119,19 @@ class TikTokClientTests(Base):
         self.assertEqual((init["video_size"], init["chunk_size"], init["total_chunk_count"]), (10, 10, 1))
         self.assertEqual(put.call_args.kwargs["headers"]["Content-Range"], "bytes 0-9/10")
 
-    def test_direct_falls_back_to_self_only(self):
+    def _direct(self, settings, options=("SELF_ONLY", "PUBLIC_TO_EVERYONE"), creator_extra=None):
         video = self.root / "v.mp4"
         video.write_bytes(b"x")
-        acc = {"name": "tt", "platform": "tiktok", "mode": "direct", "privacy": "PUBLIC_TO_EVERYONE",
+        acc = {"name": "tt", "platform": "tiktok", "mode": "direct",
                "token_env": "T", "client_key_env": "K", "client_secret_env": "S"}
         bodies = {}
 
         def fake_request(method, url, **kw):
             bodies[url.rsplit("/v2/", 1)[1]] = kw.get("json")
             if "creator_info" in url:
-                return self.resp(body={"data": {"privacy_level_options": ["SELF_ONLY"]}, "error": {"code": "ok"}})
-            if url.endswith("/video/init/"):
+                return self.resp(body={"data": {"privacy_level_options": list(options), **(creator_extra or {})},
+                                       "error": {"code": "ok"}})
+            if url.endswith("/video/init/") or url.endswith("/inbox/video/init/"):
                 return self.resp(body={"data": {"publish_id": "P", "upload_url": "https://up"}, "error": {"code": "ok"}})
             return self.resp(body={"data": {"status": "PUBLISH_COMPLETE"}, "error": {"code": "ok"}})
 
@@ -138,9 +139,51 @@ class TikTokClientTests(Base):
                 mock.patch.object(a.requests, "post", return_value=self.resp(body={"access_token": "AT", "refresh_token": "RT"})), \
                 mock.patch.object(a.requests, "request", side_effect=fake_request), \
                 mock.patch.object(a.requests, "put", return_value=self.resp(200)):
-            res = a.TikTok(acc, "RT", self.cfg).post(video, "cap")
-        self.assertEqual(bodies["post/publish/video/init/"]["post_info"]["privacy_level"], "SELF_ONLY")
+            res = a.TikTok(acc, "RT", self.cfg).post(video, "cap", settings)
+        return res, bodies
+
+    GOOD = {"consent": True, "privacy_level": "PUBLIC_TO_EVERYONE", "title": "Моё название",
+            "disable_comment": False, "disable_duet": True, "disable_stitch": True,
+            "commercial": {"on": False}}
+
+    def test_direct_uses_confirmed_settings(self):
+        res, bodies = self._direct(dict(self.GOOD))
+        pi = bodies["post/publish/video/init/"]["post_info"]
+        self.assertEqual((pi["privacy_level"], pi["title"], pi["disable_comment"], pi["disable_duet"]),
+                         ("PUBLIC_TO_EVERYONE", "Моё название", False, True))
+        self.assertFalse(pi["brand_content_toggle"])
         self.assertEqual(res["mode"], "direct")
+
+    def test_direct_respects_creator_disabled_interactions(self):
+        _, bodies = self._direct(dict(self.GOOD), creator_extra={"comment_disabled": True})
+        self.assertTrue(bodies["post/publish/video/init/"]["post_info"]["disable_comment"])
+
+    def test_direct_without_settings_goes_to_inbox(self):
+        res, bodies = self._direct(None)
+        self.assertIn("post/publish/inbox/video/init/", bodies)
+        self.assertNotIn("post/publish/video/init/", bodies)
+
+    def test_direct_rejects_unconfirmed_or_invalid(self):
+        for bad in ({**self.GOOD, "consent": False},
+                    {**self.GOOD, "privacy_level": ""},
+                    {**self.GOOD, "privacy_level": "FRIENDS"},
+                    {**self.GOOD, "commercial": {"on": True}},
+                    {**self.GOOD, "privacy_level": "SELF_ONLY", "commercial": {"on": True, "branded": True}}):
+            with self.assertRaises(ValueError, msg=str(bad)):
+                a.tt_post_info(bad, "c", {"privacy_level_options": ["SELF_ONLY", "PUBLIC_TO_EVERYONE"]})
+
+    def test_branded_content_flags(self):
+        pi = a.tt_post_info({**self.GOOD, "commercial": {"on": True, "branded": True, "your_brand": True}}, "c", {})
+        self.assertTrue(pi["brand_content_toggle"] and pi["brand_organic_toggle"])
+
+    def test_load_settings_file(self):
+        v = self.root / "short-1.mp4"
+        v.write_bytes(b"x")
+        self.assertIsNone(a.load_tt_settings(v))
+        (self.root / "short-1.tiktok.json").write_text(json.dumps(self.GOOD), encoding="utf-8")
+        self.assertEqual(a.load_tt_settings(v)["privacy_level"], "PUBLIC_TO_EVERYONE")
+        (self.root / "short-1.tiktok.json").write_text("{bad", encoding="utf-8")
+        self.assertIsNone(a.load_tt_settings(v))
 
     def test_pending_limit_is_tiktoklimit(self):
         acc = {"name": "tt", "token_env": "T", "client_key_env": "K", "client_secret_env": "S"}
