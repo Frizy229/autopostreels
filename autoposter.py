@@ -747,10 +747,9 @@ class TikTok:
         raise RuntimeError(err)
 
     def whoami(self) -> dict:
-        u = self._req("/v2/user/info/?fields=open_id,display_name,username", method="GET").get("user", {})
-        info = {"username": u.get("username") or u.get("display_name") or self.name, "id": u.get("open_id", "")}
-        if u.get("username"):
-            self.acc["username"] = u["username"]
+        u = self._req("/v2/user/info/?fields=open_id,display_name", method="GET").get("user", {})
+        # username нужен scope user.info.profile, а у нас только user.info.basic: берём display_name
+        info = {"username": u.get("display_name") or self.name, "id": u.get("open_id", "")}
         if self.mode == "direct":
             ci = self._req("/v2/post/publish/creator_info/query/", {})
             info["privacy_options"] = ci.get("privacy_level_options") or []
