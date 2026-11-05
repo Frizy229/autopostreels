@@ -6,7 +6,7 @@ const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net } = require
 const { normalize, LANES } = require('./lib/settings');
 const { LAYOUTS } = require('./lib/layout');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
-const { Tools, download, whisperAssetUrl, exe } = require('./lib/tools');
+const { Tools, download, whisperAssets, exe } = require('./lib/tools');
 const { Pipeline } = require('./lib/pipeline');
 const { MODELS, modelUrl } = require('./lib/transcribe');
 const { channelUrl, filterLongs } = require('./lib/sources');
@@ -105,17 +105,24 @@ function registerIpc() {
     }
     if (what === 'whisper') {
       if (process.platform !== 'win32') throw new Error('Готовая сборка есть только для Windows; на другой системе поставь whisper-cli сам.');
-      const url = await whisperAssetUrl(net.fetch, settings.gpu);
-      const zip = path.join(tools.binDir, 'whisper.zip');
-      await download(net.fetch, url, zip, (p) => progress(p * 0.9, 'Скачиваю whisper.cpp'), signal);
-      progress(0.92, 'Распаковываю');
       const AdmZip = require('adm-zip');
       const dir = path.join(tools.binDir, 'whisper');
-      fs.rmSync(dir, { recursive: true, force: true });
-      new AdmZip(zip).extractAllTo(dir, true);
-      fs.rmSync(zip, { force: true });
-      if (!tools.whisper) throw new Error('В архиве не нашлось whisper-cli.exe');
-      return tools.whisper;
+      const zip = path.join(tools.binDir, 'whisper.zip');
+      const options = await whisperAssets(net.fetch, settings.gpu);
+      let lastErr = null;
+      for (const [k, a] of options.entries()) {
+        const share = 1 / options.length;
+        await download(net.fetch, a.url, zip, (p) => progress((k + p * 0.9) * share, `Скачиваю ${a.name}`), signal);
+        fs.rmSync(dir, { recursive: true, force: true });
+        new AdmZip(zip).extractAllTo(dir, true);
+        fs.rmSync(zip, { force: true });
+        if (!tools.whisper) { lastErr = new Error(`В архиве ${a.name} нет whisper-cli.exe`); continue; }
+        // проверка запуском: CUDA-сборке нужны библиотеки и драйвер; не запустилась — берём следующую (процессорную)
+        const r = await tools.run(tools.whisper, ['-h'], { allowFail: true, signal }).catch((e) => ({ code: -1, stderr: e.message }));
+        if (r.code === 0) return `${a.name}${a.kind === 'cuda' ? ' (видеокарта)' : ' (процессор)'}`;
+        lastErr = new Error(`${a.name} не запускается (код ${r.code})`);
+      }
+      throw lastErr || new Error('Не удалось поставить whisper.cpp');
     }
     if (what === 'model') {
       const m = MODELS[settings.whisperModel] || MODELS.small;

@@ -78,7 +78,7 @@ function jobUpdate(j) {
     else if (cur.kind === 'analyze' || cur.kind === 'check') {
       refreshProjects().then(() => { if (S.current) loadProject(S.current); });
       toast(cur.kind === 'analyze' ? `Найдено моментов: ${j.result.moments.length}` : 'Проверка закончена');
-    } else if (cur.kind === 'install') { refreshTools(); toast(`${cur.label}: готово`); }
+    } else if (cur.kind === 'install') { refreshTools(); toast(`${cur.label}: готово${typeof j.result === 'string' && !j.result.includes('\\') && !j.result.includes('/') ? ` — ${j.result}` : ''}`); }
     else if (cur.kind === 'build') { toast('Папка готова'); if (S.page === 'build') render(); }
     setTimeout(() => { S.jobs.delete(j.id); renderDock(); }, j.error ? 9000 : 3500);
   }
