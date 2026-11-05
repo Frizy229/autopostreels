@@ -32,5 +32,8 @@
       "platform": "tiktok",
       "mode": "inbox"
     }
+  ],
+  "paused": [
+    "instagram"
   ]
 }
