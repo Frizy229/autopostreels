@@ -2,7 +2,7 @@
 // Работа с GitHub через REST API: чтение очереди и загрузка папки одним коммитом.
 const fs = require('fs');
 const path = require('path');
-const { slug, inspectFolder, VIDEO_EXT } = require('./core');
+const { slug, inspectFolder, cleanTexts, LANES, laneByKey, VIDEO_EXT } = require('./core');
 const { push } = require('./gitpush');
 
 const API = 'https://api.github.com';
@@ -66,28 +66,37 @@ class GitHub {
     return r.full_name;
   }
 
+  /** Все очереди: {shared, instagram, tiktok}. */
+  async queues() {
+    const out = {};
+    await Promise.all(LANES.map(async (l) => { out[l.key] = await this.queue(l.dir); }));
+    return out;
+  }
+
   /** Очередь: папки в queue/ и видео в каждой (в подпапках по аккаунтам: «аккаунт/файл.mp4»). */
-  async queue() {
-    const dirs = (await this.listDir('queue')).filter((d) => d.type === 'dir');
+  async queue(dir = 'queue') {
+    const dirs = (await this.listDir(dir)).filter((d) => d.type === 'dir' && !d.name.startsWith('.'));
     return Promise.all(dirs.map(async (d) => {
       const t = await this.req('GET', `/git/trees/${d.sha}?recursive=1`);
       const items = ((t && t.tree) || []).filter((e) => e.type === 'blob' && e.path.split('/').length <= 2
         && VIDEO_EXT.has(path.extname(e.path).toLowerCase()) && !e.path.split('/').some((x) => x.startsWith('.')));
       const tiktok = ((t && t.tree) || []).filter((e) => e.type === 'blob' && e.path.endsWith('.tiktok.json')).map((e) => e.path);
-      return { name: d.name, videos: items.map((e) => e.path).sort(), tiktok };
+      const out = { name: d.name, videos: items.map((e) => e.path).sort(), tiktok };
+      if (((t && t.tree) || []).some((e) => e.type === 'blob' && e.path === 'texts.json')) out.texts = true;
+      return out;
     }));
   }
 
   /** Записать подтверждённые настройки TikTok (<имя>.tiktok.json рядом с видео) одним коммитом. */
   async saveTiktokSettings(path, settings) {
-    if (!/^queue\/[^/]+\/(?:[^/]+\/)?[^/]+\.tiktok\.json$/.test(path) || path.includes('..')) throw new Error('Недопустимый путь.');
+    if (!/^queue(?:-tiktok)?\/[^/]+\/(?:[^/]+\/)?[^/]+\.tiktok\.json$/.test(path) || path.includes('..')) throw new Error('Недопустимый путь.');
     const sha = await this.blob(Buffer.from(JSON.stringify(settings, null, 2) + '\n', 'utf8'));
     return this.commitFiles({ [path]: sha }, `Настройки TikTok подтверждены: ${path.split('/').slice(1).join('/')}`);
   }
 
   /** Скачать видео из очереди во временный файл для просмотра перед публикацией. */
   async downloadVideo(rel, dest) {
-    if (!/^queue\/[^./]/.test(rel) || rel.includes('..')) throw new Error('Недопустимый путь.');
+    if (!/^queue(?:-instagram|-tiktok)?\/[^./]/.test(rel) || rel.includes('..')) throw new Error('Недопустимый путь.');
     const res = await fetch(`${API}/repos/${this.repo}/contents/${rel.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(this.branch)}`, {
       headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.raw+json', 'User-Agent': 'reels-widget' },
     });
@@ -98,7 +107,7 @@ class GitHub {
 
   async nextNumber() {
     let max = 0;
-    for (const dir of ['queue', 'posted']) {
+    for (const dir of LANES.flatMap((l) => [l.dir, l.posted])) {
       for (const d of await this.listDir(dir)) {
         const m = /^(\d+)/.exec(d.name);
         if (d.type === 'dir' && m) max = Math.max(max, parseInt(m[1], 10));
@@ -119,7 +128,7 @@ class GitHub {
       const base = (await this.req('GET', `/git/commits/${head}`)).tree.sha;
       const tree = (await this.req('POST', '/git/trees', {
         base_tree: base,
-        tree: Object.entries(files).map(([p, sha]) => ({ path: p, mode: '100644', type: 'blob', sha })),
+        tree: Object.entries(files).map(([p, sha]) => ({ path: p, mode: '100644', type: 'blob', sha: sha || null })),
       })).sha;
       const commit = (await this.req('POST', '/git/commits', { message, tree, parents: [head] })).sha;
       try {
@@ -132,51 +141,58 @@ class GitHub {
     throw new Error('Не удалось записать коммит: репозиторий постоянно меняется, попробуй ещё раз.');
   }
 
-  /** Загрузить папку в queue/NNN_имя одним коммитом. progress(доля, текст). */
-  async uploadFolder(dir, progress = () => {}, accounts = []) {
+  /**
+   * Загрузить папку в <очередь>/NNN_имя одним коммитом. progress(доля, текст).
+   * opts.lane: shared | instagram | tiktok; opts.texts: тексты папки (texts.json).
+   */
+  async uploadFolder(dir, progress = () => {}, accounts = [], opts = {}) {
     const info = inspectFolder(dir, accounts);
     if (info.errors.length) throw new Error(info.errors.join(' '));
+    const lane = laneByKey(opts.lane || 'shared');
     const name = `${String(await this.nextNumber()).padStart(3, '0')}_${slug(path.basename(dir))}`;
     const files = {};
+    const texts = cleanTexts(opts.texts);
     let done = 0;
     const total = Math.max(info.size, 1);
     for (const f of info.files) {
       const size = fs.statSync(f).size;
       const rel = path.relative(dir, f).split(path.sep).join('/');
       progress(0.3 * done / total, `Читаю ${rel} (${(size / 1e6).toFixed(1)} МБ)`);
-      files[`queue/${name}/${rel}`] = fs.readFileSync(f);
+      files[`${lane.dir}/${name}/${rel}`] = fs.readFileSync(f);
       done += size;
     }
+    if (Object.keys(texts).length) files[`${lane.dir}/${name}/texts.json`] = Buffer.from(JSON.stringify(texts, null, 2) + '\n', 'utf8');
     progress(0.4, `Отправляю на GitHub: ${(info.size / 1e6).toFixed(0)} МБ, это может занять несколько минут…`);
     await push({
       repo: this.repo, token: this.token, branch: this.branch, files,
-      message: `Новая папка рилсов: ${name} (${info.videos} видео)`,
+      message: `Новая папка рилсов: ${lane.dir}/${name} (${info.videos} видео)`,
       getHeadTree: async (commit) => (await this.req('GET', `/git/commits/${commit}`)).tree.sha,
       getTree: async (sha) => (await this.req('GET', `/git/trees/${sha}`)).tree.map((e) => ({
         mode: e.mode === '040000' ? '40000' : e.mode, name: e.path, sha: e.sha })),
     });
     progress(1, 'Готово');
-    return name;
+    return `${lane.dir}/${name}`;
   }
 
   /** Убрать папку из очереди одним коммитом (файлы удаляются из репозитория; в истории git они остаются). */
-  async deleteFolder(name) {
+  async deleteFolder(name, laneKey = 'shared') {
     if (!name || /[\\/]/.test(name) || name.startsWith('.') || name.includes('..')) throw new Error('Недопустимое имя папки.');
+    const qdir = laneByKey(laneKey).dir;
     for (let i = 0; i < 5; i++) {
       const ref = await this.req('GET', `/git/ref/heads/${this.branch}`);
       const head = ref.object.sha;
       const base = (await this.req('GET', `/git/commits/${head}`)).tree.sha;
       const root = (await this.req('GET', `/git/trees/${base}`)).tree;
-      const q = root.find((e) => e.path === 'queue' && e.type === 'tree');
+      const q = root.find((e) => e.path === qdir && e.type === 'tree');
       const dir = q && (await this.req('GET', `/git/trees/${q.sha}`)).tree.find((e) => e.path === name && e.type === 'tree');
       if (!dir) throw new Error(`Папки ${name} нет в очереди (возможно, её уже удалили или она опубликована).`);
       const all = (await this.req('GET', `/git/trees/${dir.sha}?recursive=1`)).tree.filter((e) => e.type === 'blob');
       if (!all.length) throw new Error(`Папка ${name} пустая.`);
       const tree = (await this.req('POST', '/git/trees', {
         base_tree: base,
-        tree: all.map((e) => ({ path: `queue/${name}/${e.path}`, mode: '100644', type: 'blob', sha: null })),
+        tree: all.map((e) => ({ path: `${qdir}/${name}/${e.path}`, mode: '100644', type: 'blob', sha: null })),
       })).sha;
-      const commit = (await this.req('POST', '/git/commits', { message: `Убрана из очереди: ${name}`, tree, parents: [head] })).sha;
+      const commit = (await this.req('POST', '/git/commits', { message: `Убрана из очереди: ${qdir}/${name}`, tree, parents: [head] })).sha;
       try {
         await this.req('PATCH', `/git/refs/heads/${this.branch}`, { sha: commit, force: false });
         return all.length;
@@ -185,6 +201,55 @@ class GitHub {
       }
     }
     throw new Error('Не удалось удалить: репозиторий постоянно меняется, попробуй ещё раз.');
+  }
+
+  async readText(p) {
+    const t = await this.req('GET', `/contents/${p.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(this.branch)}`, null, true);
+    return t == null ? null : String(t).replace(/^\uFEFF/, '');
+  }
+
+  /** Тексты папки (texts.json). */
+  async folderTexts(laneKey, name) {
+    if (!name || /[\\/]/.test(name) || name.includes('..')) throw new Error('Недопустимое имя папки.');
+    const t = await this.readText(`${laneByKey(laneKey).dir}/${name}/texts.json`);
+    try { return t ? JSON.parse(t) : {}; } catch { return {}; }
+  }
+
+  /** Записать тексты папки; пустые тексты удаляют texts.json. */
+  async saveFolderTexts(laneKey, name, texts) {
+    if (!name || /[\\/]/.test(name) || name.includes('..')) throw new Error('Недопустимое имя папки.');
+    const p = `${laneByKey(laneKey).dir}/${name}/texts.json`;
+    const clean = cleanTexts(texts);
+    if (!Object.keys(clean).length) {
+      if ((await this.readText(p)) == null) return null;
+      return this.commitFiles({ [p]: null }, `Тексты папки сброшены: ${p}`);
+    }
+    const sha = await this.blob(Buffer.from(JSON.stringify(clean, null, 2) + '\n', 'utf8'));
+    return this.commitFiles({ [p]: sha }, `Тексты папки: ${p}`);
+  }
+
+  /** Изменить config.json репозитория: fn(конфиг) меняет объект на месте. Читаем свежую версию прямо перед записью. */
+  async updateConfig(fn, message) {
+    const t = await this.readText('config.json');
+    if (t == null) throw new Error('В репозитории нет config.json.');
+    const cfg = JSON.parse(t);
+    fn(cfg);
+    const sha = await this.blob(Buffer.from(JSON.stringify(cfg, null, 2) + '\n', 'utf8'));
+    await this.commitFiles({ 'config.json': sha }, message);
+    return cfg;
+  }
+
+  /** Запустить workflow «Публикация рилсов» (нужно право токена Actions: Read and write). */
+  async dispatch(inputs = {}) {
+    try {
+      await this.req('POST', '/actions/workflows/post.yml/dispatches', { ref: this.branch, inputs });
+    } catch (e) {
+      if (e.status === 403 || e.status === 404) {
+        throw new Error('Токену GitHub не хватает права Actions: Read and write (добавь его в настройках токена на github.com/settings/tokens).');
+      }
+      throw e;
+    }
+    return true;
   }
 }
 

@@ -7,56 +7,105 @@
 <title>Reels Widget</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body data-material="none">
+<body data-material="none" data-net="instagram">
 <div id="app">
   <header class="drag">
-    <div class="clocks">
-      <div class="clock"><span class="lbl">Ваше время <i id="tzLocal"></i></span><b id="clockLocal">--:--</b></div>
-      <div class="clock dim"><span class="lbl">Москва UTC+3</span><b id="clockMsk">--:--</b></div>
-    </div>
-    <div class="head-row">
-      <div id="dateLine" class="date"></div>
+    <div class="top">
+      <div class="clock"><b id="clockLocal">--:--</b><span id="clockSub" class="lbl"></span></div>
       <div class="btns no-drag">
         <button id="btnRefresh" class="ibtn" title="Обновить"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg></button>
         <button id="btnPin" class="ibtn" title="Поверх окон"><svg viewBox="0 0 24 24"><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6zM12 15v5"/></svg></button>
-        <button id="btnSettings" class="ibtn" title="Настройки"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+        <button id="btnSettings" class="ibtn" title="Настройки"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></button>
         <button id="btnClose" class="ibtn" title="Свернуть в трей"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
     </div>
+    <div id="dateLine" class="date"></div>
   </header>
+
+  <nav class="tabs no-drag" role="tablist">
+    <button class="tab" data-net="instagram" role="tab">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r=".6" fill="currentColor"/></svg>
+      <span>Instagram</span><i class="tcount" id="cntInstagram"></i>
+    </button>
+    <button class="tab" data-net="tiktok" role="tab">
+      <svg viewBox="0 0 24 24"><path d="M14 3v11.5a3.5 3.5 0 1 1-3.5-3.5"/><path d="M14 3c.4 2.8 2.2 4.6 5 5"/></svg>
+      <span>TikTok</span><i class="tcount" id="cntTiktok"></i><i class="dot" id="ttDot" hidden></i>
+    </button>
+    <span class="tab-ink" id="tabInk"></span>
+  </nav>
 
   <main id="scroll">
     <div id="banner" class="banner" hidden></div>
-    <section id="ttSection" hidden><h3>TikTok: нужно подтвердить</h3><div id="ttList" class="list"></div></section>
+
+    <div class="netbar" id="netbar">
+      <div class="nb-top">
+        <div class="nb-accs" id="nbAccs"></div>
+        <span class="pill" id="nbState"></span>
+      </div>
+      <div class="nb-hint small muted" id="nbHint"></div>
+      <div class="nb-actions">
+        <button class="act" id="actPause"><svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></svg><span>Пауза</span></button>
+        <button class="act" id="actTexts"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4"/></svg><span>Тексты</span></button>
+        <button class="act" id="actRun"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg><span>Запустить</span></button>
+      </div>
+    </div>
+
+    <section id="ttSection" hidden><h3>Нужно подтвердить публикацию</h3><div id="ttList" class="list"></div></section>
     <section><h3 id="todayTitle">Сегодня</h3><div id="todayList" class="list"></div></section>
     <section><h3 id="queueTitle">Очередь</h3><div id="queueList" class="list"></div></section>
-    <section><h3 id="doneTitle" class="toggle">Готово <svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></h3><div id="doneList" class="list" hidden></div></section>
+    <section><h3 id="doneTitle" class="toggle"><span>Готово</span><svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></h3><div id="doneList" class="list" hidden></div></section>
     <div id="foot" class="foot"></div>
   </main>
 
   <button id="fab" class="fab" title="Добавить папку с рилсами"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
-  <div id="dropOverlay" class="overlay" hidden><div><b>Отпусти папку здесь</b><span>видео, описания и обложки (можно с подпапками по аккаунтам)</span></div></div>
+  <div id="dropOverlay" class="overlay" hidden><div><b>Отпусти папку здесь</b><span id="dropHint"></span></div></div>
 
+  <!-- загрузка папки -->
   <div id="sheet" class="sheet" hidden>
     <div class="sheet-card">
+      <div class="grab"></div>
       <div id="pvTitle" class="pv-title"></div>
-      <div id="pvCounts" class="muted"></div>
+      <div class="seg" id="pvLane">
+        <button data-v="instagram">Instagram</button><button data-v="tiktok">TikTok</button><button data-v="shared">Обе сети</button>
+      </div>
+      <p id="pvLaneHint" class="small muted"></p>
+      <div id="pvCounts" class="muted small"></div>
       <div id="pvNotes" class="notes"></div>
+      <details id="pvTextsBox" class="texts-box">
+        <summary>Тексты для этой папки <span class="muted small">(необязательно)</span></summary>
+        <div id="pvTexts"></div>
+      </details>
       <div id="pvBar" class="bar" hidden><i></i></div>
-      <div id="pvStatus" class="muted"></div>
+      <div id="pvStatus" class="muted small"></div>
       <div class="sheet-btns"><button id="pvGo" class="btn primary">Загрузить в очередь</button><button id="pvCancel" class="btn">Отмена</button></div>
     </div>
   </div>
 
-  <div id="delSheet" class="sheet" hidden>
+  <!-- подтверждение действия (удалить папку, опубликовать сейчас) -->
+  <div id="askSheet" class="sheet" hidden>
     <div class="sheet-card">
-      <div id="delTitle" class="pv-title"></div>
-      <div id="delText" class="muted"></div>
-      <div id="delStatus" class="muted"></div>
-      <div class="sheet-btns"><button id="delGo" class="btn primary-danger">Убрать</button><button id="delCancel" class="btn">Отмена</button></div>
+      <div class="grab"></div>
+      <div id="askTitle" class="pv-title"></div>
+      <div id="askText" class="muted"></div>
+      <div id="askStatus" class="small"></div>
+      <div class="sheet-btns"><button id="askGo" class="btn primary">OK</button><button id="askCancel" class="btn">Отмена</button></div>
     </div>
   </div>
 
+  <!-- тексты: по умолчанию для сети или для одной папки -->
+  <div id="txSheet" class="settings" hidden>
+    <div class="set-head drag"><button id="txBack" class="ibtn no-drag" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><b id="txTitle">Тексты</b></div>
+    <div class="set-body">
+      <p id="txIntro" class="small muted"></p>
+      <div id="txFields"></div>
+      <h4>Так будет выглядеть подпись</h4>
+      <pre id="txPreview" class="preview"></pre>
+      <p id="txErr" class="small bad"></p>
+      <div class="sheet-btns"><button id="txSave" class="btn primary">Сохранить</button><button id="txCancel" class="btn">Отмена</button></div>
+    </div>
+  </div>
+
+  <!-- TikTok: экран подтверждения перед прямой публикацией (требование Direct Post API) -->
   <div id="ttSheet" class="settings tt" hidden>
     <div class="set-head drag"><button id="ttBack" class="ibtn no-drag" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><b>Публикация в TikTok</b></div>
     <div class="set-body">
@@ -66,6 +115,7 @@
       <label>Название (подпись) ролика
         <textarea id="ttTitle" rows="3" maxlength="2200" spellcheck="true"></textarea>
       </label>
+      <p class="small muted right"><span id="ttLen">0</span>/2200</p>
       <label>Кто может смотреть этот ролик
         <select id="ttPrivacy"></select>
       </label>
@@ -84,7 +134,7 @@
       <p id="ttConsent" class="small"></p>
       <label class="check"><input id="ttAgree" type="checkbox"> <span>Я подтверждаю публикацию и согласен с условиями выше</span></label>
       <p class="muted small">Ролик отправится в TikTok автоматически по расписанию в выбранном виде. После отправки TikTok обрабатывает видео несколько минут, ролик появится в профиле не сразу.</p>
-      <p id="ttErr" class="small" style="color:var(--err)"></p>
+      <p id="ttErr" class="small bad"></p>
       <div class="sheet-btns"><button id="ttGo" class="btn primary" disabled>Подтвердить</button><button id="ttCancel" class="btn">Отмена</button></div>
     </div>
   </div>
@@ -98,9 +148,13 @@
       <label>Токен GitHub
         <div class="row"><input id="fToken" type="password" spellcheck="false" autocomplete="off"><button id="btnPaste" class="btn small">Вставить</button><button id="btnEye" class="btn small">Показать</button></div>
       </label>
-      <p class="muted small" id="tokenHint">Fine-grained токен только на этот репозиторий с правом Contents: Read and write. Хранится зашифрованным (DPAPI Windows).</p>
+      <p class="muted small">Fine-grained токен только на этот репозиторий: Contents — Read and write (обязательно), Actions — Read and write (для кнопок «Запустить» и «Опубликовать сейчас»). Хранится зашифрованным (DPAPI Windows).</p>
       <div class="row"><button id="btnSave" class="btn primary grow">Сохранить и проверить</button><button id="btnForget" class="btn danger small">Забыть токен</button></div>
       <p id="connResult" class="small"></p>
+
+      <h4>Автопостер</h4>
+      <div class="row wrap"><button class="btn small" id="btnCheck">Проверить токены соцсетей</button><button class="btn small" data-link="actions">Журнал запусков</button></div>
+      <p class="muted small">Проверка запускается на GitHub, результат виден в журнале запусков через минуту.</p>
 
       <h4>Вид</h4>
       <div class="seg" id="segTheme"><button data-v="system">Системная</button><button data-v="dark">Тёмная</button><button data-v="light">Светлая</button></div>
@@ -123,7 +177,7 @@
 
       <h4>О программе</h4>
       <p class="muted small" id="about"></p>
-      <div class="row wrap"><button class="btn small" data-link="repo">Репозиторий</button><button class="btn small" data-link="actions">Запуски</button><button class="btn small" data-link="releases">Обновить виджет</button></div>
+      <div class="row wrap"><button class="btn small" data-link="repo">Репозиторий</button><button class="btn small" data-link="releases">Обновить виджет</button></div>
     </div>
   </div>
   <div id="toast" class="toast" hidden></div>

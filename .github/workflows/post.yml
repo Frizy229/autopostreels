@@ -13,7 +13,7 @@ on:
         default: post
         options: [post, dry-run, check]
       only:
-        description: "Опубликовать сейчас один рилс (часть имени, например short-4). Только для action=post"
+        description: "Опубликовать сейчас один рилс (часть имени, например short-4, или tiktok:018_x/short-1.mp4). Только для action=post"
         type: string
         default: ""
 
@@ -65,7 +65,10 @@ jobs:
         run: |
           git config user.name "autoposter"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A queue posted state.json stats.json
+          for d in queue posted queue-instagram posted-instagram queue-tiktok posted-tiktok; do
+            [ -e "$d" ] && git add -A "$d"
+          done
+          git add state.json stats.json
           [ -f tiktok_creator.json ] && git add tiktok_creator.json || true
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "Автопостер: обновление очереди $(date -u +%F)"

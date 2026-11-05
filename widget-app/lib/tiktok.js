@@ -70,25 +70,29 @@ const stemOf = (p) => p.replace(/\.[^./]+$/, '');
 
 /**
  * Какие рилсы ждут подтверждения: прямой TikTok-аккаунт, ещё не опубликовано, нет .tiktok.json.
- * queue: [{name, videos, tiktok:[пути *.tiktok.json]}], accounts: из config.json.
+ * queues: {shared:[...], tiktok:[...]} или массив (только общая queue/); элемент {name, videos, tiktok:[пути *.tiktok.json]}.
+ * accounts: из config.json.
  */
-function pendingConfirm(queue, state, accounts) {
+function pendingConfirm(queues, state, accounts) {
+  const Q = Array.isArray(queues) || !queues ? { shared: queues || [] } : queues;
   const posted = (state && state.posted_acc) || {};
   const skipped = (state && state.skipped) || {};
   const tts = (accounts || []).filter((a) => a && (a.platform || '').toLowerCase() === 'tiktok' && (a.mode || 'inbox') === 'direct');
   const out = [];
-  for (const f of queue || []) {
-    const done = new Set(f.tiktok || []);
-    for (const v of f.videos || []) {
-      const parts = v.split('/');
-      const sub = parts.length > 1 ? parts[0].toLowerCase().replace(/^@/, '') : '';
-      const targets = tts.filter((a) => !sub || sub.includes(String(a.name).toLowerCase()));
-      for (const a of targets) {
-        const id = `${f.name}/${v}`;
-        if ((posted[a.name] || {})[id] || `${a.name}|${id}` in skipped) continue;
-        if (done.has(`${stemOf(v)}.tiktok.json`)) continue;
-        out.push({ folder: f.name, video: v, account: a.name, path: `queue/${f.name}/${stemOf(v)}.tiktok.json` });
-        break; // один файл настроек на ролик
+  for (const [laneKey, dir, prefix] of [['shared', 'queue', ''], ['tiktok', 'queue-tiktok', 'tiktok:']]) {
+    for (const f of Q[laneKey] || []) {
+      const done = new Set(f.tiktok || []);
+      for (const v of f.videos || []) {
+        const parts = v.split('/');
+        const sub = parts.length > 1 ? parts[0].toLowerCase().replace(/^@/, '') : '';
+        const targets = tts.filter((a) => !sub || sub.includes(String(a.name).toLowerCase()));
+        for (const a of targets) {
+          const id = `${prefix}${f.name}/${v}`;
+          if ((posted[a.name] || {})[id] || `${a.name}|${id}` in skipped) continue;
+          if (done.has(`${stemOf(v)}.tiktok.json`)) continue;
+          out.push({ folder: f.name, lane: laneKey, id, video: v, account: a.name, rel: `${dir}/${f.name}/${v}`, path: `${dir}/${f.name}/${stemOf(v)}.tiktok.json` });
+          break; // один файл настроек на ролик
+        }
       }
     }
   }
