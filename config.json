@@ -9,6 +9,7 @@
   "cover": "auto",
   "thumb_offset_ms": 1000,
   "share_to_feed": true,
+  "tiktok_redirect_uri": "https://frizy229.github.io/autopostreels/",
   "accounts": [
     {
       "name": "dayzerorules",

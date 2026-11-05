@@ -45,9 +45,12 @@ function metrics(v) {
     if (v.status !== 'done') return '';
     return `<div class="m">${nums(v)}</div>`;
   }
+  const an = (a) => `<span class="an" title="${esc(a.name)}">${a.platform === 'tiktok' ? 'TikTok · ' : ''}${esc(a.name)}</span>`;
   return accs.map((a) => a.status === 'done'
-    ? `<div class="m"${a.permalink ? ` data-url="${esc(a.permalink)}"` : ''}><span class="an" title="${esc(a.name)}">${esc(a.name)}</span>${nums(a)}</div>`
-    : `<div class="m off"><span class="an" title="${esc(a.name)}">${esc(a.name)}</span><span>${a.status === 'skipped' ? 'пропущен' : 'ждёт'}</span></div>`).join('');
+    ? (a.platform === 'tiktok'
+      ? `<div class="m"${a.permalink ? ` data-url="${esc(a.permalink)}"` : ''}>${an(a)}<span>${a.inbox ? 'в черновиках' : 'вышел'}</span></div>`
+      : `<div class="m"${a.permalink ? ` data-url="${esc(a.permalink)}"` : ''}>${an(a)}${nums(a)}</div>`)
+    : `<div class="m off">${an(a)}<span>${a.status === 'skipped' ? 'пропущен' : 'ждёт'}</span></div>`).join('');
 }
 function rowHtml(v, sub) {
   const url = v.permalink ? ` data-url="${esc(v.permalink)}"` : '';

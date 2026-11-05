@@ -52,6 +52,12 @@ assert.strictEqual(sl.summary.late, 1);
 const sl2 = buildSnapshot({ plans: { '2026-11-03': { folder: '001_b', plan: { 'c.mp4': '2026-11-03T18:00+03:00' } } }, posted: {}, skipped: {} },
   {}, [{ name: '001_b', videos: ['c.mp4'] }], new Date('2026-11-03T15:10:00Z'));
 assert.strictEqual(sl2.todayRows[0].late, false);
+// TikTok: черновик в инбоксе
+const stT = { ...state, posted_acc: { tt: { '001_b/a.mp4': { at: '2026-11-03T08:00:00+00:00', platform: 'tiktok', mode: 'inbox', permalink: '' } } } };
+const sT = buildSnapshot(stT, stats, queue, new Date('2026-11-03T12:00:00Z'), { accounts: ['a', 'tt'], platforms: { a: 'instagram', tt: 'tiktok' } });
+assert.deepStrictEqual(sT.todayRows[0].accounts.map((x) => [x.name, x.platform, x.status, x.inbox]),
+  [['a', 'instagram', 'done', false], ['tt', 'tiktok', 'done', true]]);
+assert.strictEqual(sT.todayRows[0].status, 'done');
 
 // --- папка с подпапками по аккаунтам: у каждого аккаунта свои рилсы
 const sub = {
