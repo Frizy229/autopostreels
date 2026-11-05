@@ -1,11 +1,9 @@
 'use strict';
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
-const call = async (name, ...args) => {
-  const r = await ipcRenderer.invoke(name, ...args);
-  if (!r.ok) { const e = new Error(r.error); e.code = r.code; throw e; }
-  return r.data;
-};
+// Ответ передаём как есть ({ok, data, error, code}): contextBridge теряет у ошибок все поля, кроме текста,
+// и окно не узнало бы код NO_TOKEN. Ошибку собирает обратно app.js.
+const call = async (name, ...args) => ({ ...(await ipcRenderer.invoke(name, ...args)), __ipc: true });
 const on = (ch, cb) => ipcRenderer.on(ch, (_e, v) => cb(v));
 
 contextBridge.exposeInMainWorld('api', {
@@ -15,11 +13,16 @@ contextBridge.exposeInMainWorld('api', {
   checkConnection: () => call('conn:check'),
   refresh: () => call('data:refresh'),
   pickFolder: () => call('folder:pick'),
-  inspect: (p) => call('folder:inspect', p),
-  upload: (p) => call('folder:upload', p),
-  deleteFolder: (name) => call('folder:delete', name),
+  inspect: (p, lane) => call('folder:inspect', p, lane),
+  upload: (p, opts) => call('folder:upload', p, opts),
+  deleteFolder: (name, lane) => call('folder:delete', name, lane),
+  folderTexts: (lane, name) => call('folder:texts', lane, name),
+  saveFolderTexts: (lane, name, texts) => call('folder:saveTexts', lane, name, texts),
+  saveNetTexts: (net, texts) => call('net:saveTexts', net, texts),
+  pauseNet: (net, on) => call('net:pause', net, on),
+  run: (inputs) => call('run', inputs),
   ttPreview: (rel) => call('tt:preview', rel),
-  ttCaption: (rel) => call('tt:caption', rel),
+  ttCaption: (rel, account) => call('tt:caption', rel, account),
   ttConfirm: (p) => call('tt:confirm', p),
   openUrl: (u) => call('open:url', u),
   hide: () => call('win:hide'),

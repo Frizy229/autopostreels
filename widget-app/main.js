@@ -3,13 +3,13 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, nativeTheme, shell, safeStorage, nativeImage } = require('electron');
-const { buildSnapshot, inspectFolder } = require('./lib/core');
+const { buildSnapshot, inspectFolder, captionFor, laneByKey, NETS } = require('./lib/core');
 const { GitHub } = require('./lib/github');
 const tiktok = require('./lib/tiktok');
 
 const DEFAULTS = {
   repo: 'Frizy229/autopostreels', branch: 'main', theme: 'system', material: 'acrylic', tint: 55,
-  alwaysOnTop: false, autostart: true, refreshMin: 5, scheduleTz: 'Asia/Tomsk', autoUpload: false,
+  alwaysOnTop: false, autostart: true, refreshMin: 5, scheduleTz: 'Asia/Tomsk', autoUpload: false, tab: 'instagram',
   bounds: null, tokenEnc: '', tokenPlain: '',
 };
 const win11 = process.platform === 'win32' && parseInt(os.release().split('.')[2] || '0', 10) >= 22621;
@@ -66,7 +66,7 @@ function applyAutostart() {
 function createWindow() {
   const b = cfg.bounds || {};
   win = new BrowserWindow({
-    width: b.width || 380, height: b.height || 700, x: b.x, y: b.y, minWidth: 320, minHeight: 420,
+    width: b.width || 400, height: b.height || 720, x: b.x, y: b.y, minWidth: 340, minHeight: 480,
     frame: false, show: false, hasShadow: true, backgroundColor: '#00000000',
     ...(win11 && cfg.material !== 'none' ? { backgroundMaterial: cfg.material } : { backgroundColor: nativeTheme.shouldUseDarkColors ? '#14161c' : '#f2f3f8' }),
     alwaysOnTop: !!cfg.alwaysOnTop, title: 'Reels Widget', icon: path.join(__dirname, 'assets', 'icon.png'),
@@ -112,44 +112,90 @@ handle('cfg:get', () => ({ cfg: publicCfg(), hasToken: !!getToken(), appearance:
 handle('cfg:set', (patch) => {
   const allowed = Object.keys(DEFAULTS).filter((k) => !['bounds', 'tokenEnc', 'tokenPlain'].includes(k));
   for (const k of allowed) if (k in patch) cfg[k] = patch[k];
-  saveCfg(); applyAppearance(); applyAutostart();
+  saveCfg();
+  // перерисовывать окно и трогать автозапуск только когда меняли именно их (иначе окно мигает при переключении раздела)
+  if (['theme', 'material', 'tint', 'alwaysOnTop'].some((k) => k in patch)) applyAppearance();
+  if ('autostart' in patch) applyAutostart();
   return publicCfg();
 });
 handle('token:set', (t) => { setToken(String(t || '').trim()); return true; });
 handle('conn:check', async () => gh().check());
+// данные репозитория для обоих разделов (Instagram и TikTok)
+let repoCfg = {};
 handle('data:refresh', async () => {
   const g = gh();
-  const [queue, state, stats, igCfg, creators] = await Promise.all([g.queue(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json'), g.readJson('tiktok_creator.json')]);
-  const accList = ((igCfg && igCfg.accounts) || []).filter((a) => a && a.name);
+  const [queues, state, stats, rc, creators] = await Promise.all([g.queues(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json'), g.readJson('tiktok_creator.json')]);
+  repoCfg = rc || {};
+  const accList = (repoCfg.accounts || []).filter((a) => a && a.name);
   const accounts = accList.map((a) => a.name);
   const platforms = Object.fromEntries(accList.map((a) => [a.name, (a.platform || 'instagram').toLowerCase()]));
-  const tt = { pending: tiktok.pendingConfirm(queue, state, accList), creators: creators || {} };
-  return { snapshot: buildSnapshot(state, stats, queue, new Date(), { scheduleTz: cfg.scheduleTz, accounts, platforms }), tt, at: new Date().toISOString() };
+  const now = new Date();
+  const nets = {};
+  for (const net of NETS) nets[net] = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts, platforms, net });
+  const all = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts, platforms });
+  const tt = { pending: tiktok.pendingConfirm(queues, state, accList), creators: creators || {} };
+  return {
+    nets, nextNum: all.nextNum, tt, at: now.toISOString(),
+    accounts: accList.map((a) => ({ name: a.name, platform: platforms[a.name], mode: a.platform === 'tiktok' ? (a.mode || 'inbox') : '' })),
+    texts: repoCfg.texts || {}, paused: repoCfg.paused || [], hashtags: repoCfg.hashtags || '',
+    window: { start: repoCfg.day_start || '10:00', end: repoCfg.day_end || '22:00', tz: repoCfg.timezone || cfg.scheduleTz },
+  };
 });
 handle('folder:pick', async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Папка с рилсами' });
-  return r.canceled ? null : r.filePaths[0];
+  const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'multiSelections'], title: 'Папка с рилсами' });
+  return r.canceled ? [] : r.filePaths;
 });
 // имена аккаунтов из config.json репозитория (для проверки подпапок); если не прочиталось, не проверяем
-const accountNames = async () => {
-  try { return (((await gh().readJson('config.json')).accounts) || []).map((a) => a.name).filter(Boolean); } catch { return []; }
+const accountNames = async (lane = 'shared') => {
+  try {
+    const accs = (((await gh().readJson('config.json')).accounts) || []).filter((a) => a && a.name);
+    const net = laneByKey(lane).net;
+    return accs.filter((a) => !net || (a.platform || 'instagram').toLowerCase() === net).map((a) => a.name);
+  } catch { return []; }
 };
-handle('folder:inspect', async (p) => {
+handle('folder:inspect', async (p, lane) => {
   if (!fs.statSync(p).isDirectory()) throw new Error('Перетащи именно папку, а не отдельные файлы.');
-  const { files, ...info } = inspectFolder(p, await accountNames());
+  const { files, ...info } = inspectFolder(p, await accountNames(lane));
   return info;
 });
-handle('folder:upload', async (p) => gh().uploadFolder(p, (frac, text) => win && win.webContents.send('upload:progress', { frac, text }), await accountNames()));
-handle('folder:delete', async (name) => gh().deleteFolder(String(name)));
+handle('folder:upload', async (p, opts = {}) => gh().uploadFolder(p, (frac, text) => win && win.webContents.send('upload:progress', { frac, text }),
+  await accountNames(opts.lane), { lane: opts.lane, texts: opts.texts }));
+handle('folder:delete', async (name, lane) => gh().deleteFolder(String(name), lane));
+handle('folder:texts', async (lane, name) => gh().folderTexts(lane, String(name)));
+handle('folder:saveTexts', async (lane, name, texts) => { await gh().saveFolderTexts(lane, String(name), texts); return true; });
+// тексты по умолчанию и пауза соцсети: в config.json репозитория (их читает автопостер)
+handle('net:saveTexts', async (net, texts) => {
+  if (!NETS.includes(net)) throw new Error('Неизвестная соцсеть.');
+  const { cleanTexts } = require('./lib/core');
+  const c = await gh().updateConfig((rc) => { rc.texts = rc.texts || {}; rc.texts[net] = cleanTexts(texts); }, `Тексты ${net} по умолчанию (виджет)`);
+  repoCfg = c; return c.texts;
+});
+handle('net:pause', async (net, on) => {
+  if (!NETS.includes(net)) throw new Error('Неизвестная соцсеть.');
+  const c = await gh().updateConfig((rc) => {
+    const s = new Set(rc.paused || []);
+    if (on) s.add(net); else s.delete(net);
+    rc.paused = [...s];
+  }, `${on ? 'Пауза' : 'Снята пауза'}: ${net} (виджет)`);
+  repoCfg = c; return c.paused;
+});
+// запуск автопостера на GitHub: post (сейчас по расписанию), check (проверить токены), один рилс сразу
+handle('run', async (inputs) => {
+  const action = ['post', 'check', 'dry-run'].includes(inputs && inputs.action) ? inputs.action : 'post';
+  const only = String((inputs && inputs.only) || '').replace(/[^\p{L}\p{N}_.:/ -]/gu, '');
+  return gh().dispatch(only ? { action, only } : { action });
+});
 // TikTok: просмотр ролика и подтверждение настроек перед прямой публикацией
 handle('tt:preview', async (rel) => {
-  const dest = path.join(app.getPath('temp'), `reels-preview${path.extname(rel).toLowerCase() || '.mp4'}`);
-  await gh().downloadVideo(`queue/${rel}`, dest);
+  // уникальное имя: иначе окно показывает из кэша прошлое видео с тем же адресом
+  const dest = path.join(app.getPath('temp'), `reels-preview-${Date.now()}${path.extname(rel).toLowerCase() || '.mp4'}`);
+  for (const f of fs.readdirSync(app.getPath('temp')).filter((n) => /^reels-preview/.test(n))) { try { fs.unlinkSync(path.join(app.getPath('temp'), f)); } catch { /* занято */ } }
+  await gh().downloadVideo(rel, dest);
   return dest;
 });
-handle('tt:caption', async (rel) => {
-  const t = await gh().req('GET', `/contents/queue/${rel.replace(/\.[^./]+$/, '')}.txt?ref=${encodeURIComponent(cfg.branch)}`, null, true);
-  return t ? String(t).replace(/^\uFEFF/, '').split(/\r?\n/).find((l) => l.trim() && !/^[A-Z ]+(\(.*\))?:/.test(l.trim())) || '' : '';
+handle('tt:caption', async (rel, account) => {
+  const t = await gh().readText(rel.replace(/\.[^./]+$/, '') + '.txt');
+  return t ? captionFor(t, 'tiktok', account) : '';
 });
 handle('tt:confirm', async ({ path: p, form, creator }) => {
   const settings = tiktok.toSettings(form, creator); // повторная проверка на стороне программы

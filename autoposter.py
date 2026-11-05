@@ -63,7 +63,21 @@ DEFAULT_CONFIG = {
     "tiktok_redirect_uri": "",       # адрес возврата после входа в TikTok (как в настройках приложения TikTok)
     "tiktok_client_key": "",         # Client key приложения TikTok (не секрет, виден в ссылке входа)
     "status_timeout_sec": 900,
+    # Раздельные очереди по соцсетям (виджет: разделы Instagram и TikTok). queue/ остаётся общей для всех.
+    "lanes": {
+        "instagram": {"queue_dir": "queue-instagram", "posted_dir": "posted-instagram"},
+        "tiktok": {"queue_dir": "queue-tiktok", "posted_dir": "posted-tiktok"},
+    },
+    "paused": [],                    # соцсети на паузе: ["instagram"], ["tiktok"]
+    # Тексты, которые сами прикрепляются при заливе (их же можно задать на папку файлом texts.json):
+    # caption: подпись, если у видео нет своей; footer: строка в конец каждой подписи;
+    # hashtags: хэштеги (вместо общих "hashtags"); comment: первый комментарий (только Instagram);
+    # use_pinned_comment: брать комментарий из раздела PINNED COMMENT: в .txt
+    "texts": {"instagram": {}, "tiktok": {}},
 }
+
+NETWORKS = ("instagram", "tiktok")
+TEXT_KEYS = ("caption", "footer", "hashtags", "comment", "use_pinned_comment")
 
 IG_CAPTION_LIMIT = 2200
 IG_HASHTAG_LIMIT = 30
@@ -200,9 +214,14 @@ def save_github_secret(name: str, value: str) -> bool:
 
 # ---------------------------------------------------------------- caption
 
-def build_caption(cfg: dict, text: str) -> str:
-    text = (text or cfg.get("default_text") or "").strip()
-    caption = cfg["caption_template"].format(text=text, hashtags=cfg.get("hashtags", ""))
+def build_caption(cfg: dict, text: str, texts: dict | None = None) -> str:
+    """Подпись к ролику. texts: тексты сети/папки (см. resolve_texts): подпись по умолчанию, хвост, хэштеги."""
+    texts = texts or {}
+    text = (text or texts.get("caption") or cfg.get("default_text") or "").strip()
+    if (texts.get("footer") or "").strip():
+        text = f"{text}\n\n{texts['footer'].strip()}".strip()
+    tags = texts["hashtags"] if "hashtags" in texts else cfg.get("hashtags", "")
+    caption = cfg["caption_template"].format(text=text, hashtags=tags or "")
     # убрать лишние пустые строки
     out: list[str] = []
     for ln in (ln.rstrip() for ln in caption.splitlines()):
@@ -287,6 +306,58 @@ def caption_for(item: dict, acc: dict, index: int) -> str:
     if plain:
         return plain[0] if len(plain) == 1 or index >= len(plain) else plain[index]
     return item["text"]
+
+
+def parse_section(text: str, names: tuple[str, ...]) -> str:
+    """Текст раздела «ИМЯ:» из .txt (до следующего заголовка вида «ЗАГЛАВНЫЕ:»)."""
+    for name in names:
+        m = re.search(rf"^\s*{re.escape(name)}\s*:\s*\n(.*?)(?=^[A-Z][A-Z0-9 ]*(?:\([^)\n]*\))?\s*:\s*$|\Z)", text, re.M | re.S)
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    return ""
+
+
+def load_folder_texts(*dirs: pathlib.Path) -> dict:
+    """texts.json папки дня и подпапки аккаунта (подпапка важнее). Плоские ключи действуют на все сети,
+    ключи "instagram"/"tiktok" только на свою сеть."""
+    out: dict = {}
+    for d in dirs:
+        f = d / "texts.json"
+        if not f.is_file():
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            log(f"{f.relative_to(ROOT) if f.is_relative_to(ROOT) else f}: не читается, тексты папки не применяю.")
+            continue
+        if not isinstance(data, dict):
+            continue
+        out.update({k: v for k, v in data.items() if k in TEXT_KEYS})
+        for net in NETWORKS:
+            if isinstance(data.get(net), dict):
+                out.setdefault(net, {}).update({k: v for k, v in data[net].items() if k in TEXT_KEYS})
+    return out
+
+
+def resolve_texts(cfg: dict, item: dict, acc: dict) -> dict:
+    """Тексты для аккаунта: настройки сети в config.json → texts.json папки → texts.json для этой сети."""
+    net = acc.get("platform") or "instagram"
+    out = {k: v for k, v in ((cfg.get("texts") or {}).get(net) or {}).items() if k in TEXT_KEYS}
+    folder = item.get("texts") or {}
+    out.update({k: v for k, v in folder.items() if k in TEXT_KEYS})
+    out.update(folder.get(net) or {})
+    return {k: (v.strip() if isinstance(v, str) else v) for k, v in out.items()}
+
+
+def comment_for(item: dict, acc: dict, texts: dict) -> str:
+    """Первый комментарий (только Instagram): раздел COMMENT: в .txt ролика, иначе текст папки/сети."""
+    if acc.get("platform") == "tiktok":
+        return ""  # TikTok не даёт программам писать комментарии
+    raw = item.get("raw") or ""
+    own = parse_section(raw, ("INSTAGRAM COMMENT", "FIRST COMMENT", "COMMENT"))
+    if not own and texts.get("use_pinned_comment"):
+        own = parse_section(raw, ("PINNED COMMENT",))
+    return (own or texts.get("comment") or "").strip()[:2200]
 
 
 def first_number(name: str) -> str:
@@ -374,7 +445,8 @@ def tt_post_info(settings: dict, caption: str, creator: dict) -> dict:
     }
 
 
-def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], group: str) -> list[dict]:
+def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], group: str,
+               texts: dict | None = None) -> list[dict]:
     items = []
     for video in _videos(d):
         key = f"{prefix}/{video.name}"
@@ -393,6 +465,8 @@ def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], 
             "txt": txt if txt.exists() else None,
             "cover": find_cover(video, cover_name),
             "text": caption,
+            "raw": raw,
+            "texts": texts or {},
             "captions": parse_captions(raw),
             "covers": parse_covers(raw),
             "pending": pending,
@@ -400,17 +474,71 @@ def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], 
     return items
 
 
-def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
+# ---------------------------------------------------------------- lanes (очереди по соцсетям)
+
+def lanes(cfg: dict) -> list[dict]:
+    """Очереди: общая queue/ (во все аккаунты) и отдельные для каждой соцсети (только её аккаунты).
+    У каждой очереди своё расписание: своя папка дня, свой план."""
+    out = [{"name": "", "prefix": "", "queue_dir": cfg["queue_dir"], "posted_dir": cfg["posted_dir"]}]
+    conf = cfg.get("lanes") or {}
+    for net in NETWORKS:
+        c = conf.get(net) or {}
+        out.append({"name": net, "prefix": f"{net}:",
+                    "queue_dir": c.get("queue_dir") or f"queue-{net}",
+                    "posted_dir": c.get("posted_dir") or f"posted-{net}"})
+    return out
+
+
+def _lane(cfg: dict, lane: dict | None) -> dict:
+    return lane if lane else lanes(cfg)[0]
+
+
+def lane_accounts(lane: dict | None) -> list[dict]:
+    if not lane or not lane.get("name"):
+        return ACTIVE_ACCOUNTS
+    return [a for a in ACTIVE_ACCOUNTS if (a.get("platform") or "instagram") == lane["name"]]
+
+
+def lane_slot(state: dict, lane: dict | None) -> dict:
+    """Где хранится расписание очереди: для общей прямо в state (как раньше), иначе state["lanes"][сеть]."""
+    if not lane or not lane.get("name"):
+        return state
+    return state.setdefault("lanes", {}).setdefault(lane["name"], {})
+
+
+def lane_paused(cfg: dict, lane: dict | None) -> bool:
+    """Соцсеть на паузе: её очередь стоит. Общая очередь стоит, если на паузе любая сеть, у которой есть аккаунты."""
+    paused = {str(x).lower() for x in (cfg.get("paused") or [])}
+    if not paused:
+        return False
+    if lane and lane.get("name"):
+        return lane["name"] in paused
+    nets = {(a.get("platform") or "instagram") for a in ACTIVE_ACCOUNTS}
+    return bool(nets & paused)
+
+
+def lane_of_id(cfg: dict, item_id: str) -> dict:
+    for ln in lanes(cfg)[1:]:
+        if item_id.startswith(ln["prefix"]):
+            return ln
+    return lanes(cfg)[0]
+
+
+def folder_items(folder: pathlib.Path, state: dict, lane: dict | None = None) -> list[dict]:
     """Рилсы папки дня. Два формата:
-    1) плоская папка: все рилсы идут во все аккаунты;
+    1) плоская папка: все рилсы идут во все аккаунты очереди;
     2) папка с подпапками по аккаунтам (имя подпапки = имя аккаунта): каждый аккаунт получает только свои рилсы."""
-    items = _dir_items(folder, folder.name, state, ACTIVE_ACCOUNTS, "")
+    accounts = lane_accounts(lane)
+    if not accounts:
+        return []
+    prefix = (lane or {}).get("prefix", "") + folder.name
+    items = _dir_items(folder, prefix, state, accounts, "", load_folder_texts(folder))
     for sub in _subdirs(folder):
         acc = match_account(sub.name)
-        if acc is None:
-            log(f"Подпапка {folder.name}/{sub.name}: нет такого аккаунта (или нет его токена), пропускаю.")
+        if acc is None or acc not in accounts:
+            log(f"Подпапка {folder.name}/{sub.name}: нет такого аккаунта в этой очереди (или нет его токена), пропускаю.")
             continue
-        items += _dir_items(sub, f"{folder.name}/{sub.name}", state, [acc], acc["name"])
+        items += _dir_items(sub, f"{prefix}/{sub.name}", state, [acc], acc["name"], load_folder_texts(folder, sub))
     return items
 
 
@@ -425,8 +553,8 @@ def build_plan(items: list[dict], start: dt.datetime, end: dt.datetime) -> dict:
     return plan
 
 
-def queue_folders(cfg: dict) -> list[pathlib.Path]:
-    q = ROOT / cfg["queue_dir"]
+def queue_folders(cfg: dict, lane: dict | None = None) -> list[pathlib.Path]:
+    q = ROOT / _lane(cfg, lane)["queue_dir"]
     return sorted(p for p in q.iterdir() if p.is_dir() and not p.name.startswith(".")) if q.exists() else []
 
 
@@ -480,9 +608,10 @@ def cover_url_for(cfg: dict, cover: pathlib.Path | None) -> str:
     return ""
 
 
-def group_loose_files(cfg: dict, now: dt.datetime) -> None:
+def group_loose_files(cfg: dict, now: dt.datetime, lane: dict | None = None) -> None:
     """Файлы, загруженные прямо в queue/ без папки, собрать в новую папку."""
-    q = ROOT / cfg["queue_dir"]
+    qd = _lane(cfg, lane)["queue_dir"]
+    q = ROOT / qd
     loose = [p for p in q.iterdir() if p.is_file() and not p.name.startswith(".")] if q.exists() else []
     if not any(p.suffix.lower() in VIDEO_EXT for p in loose):
         return
@@ -490,82 +619,98 @@ def group_loose_files(cfg: dict, now: dt.datetime) -> None:
     dest.mkdir(exist_ok=True)
     for f in loose:
         f.rename(dest / f.name)
-    log(f"Файлы без папки собраны в {cfg['queue_dir']}/{dest.name}/")
+    log(f"Файлы без папки собраны в {qd}/{dest.name}/")
 
 
-def finish_folder(cfg: dict, folder: pathlib.Path) -> None:
-    dest = ROOT / cfg["posted_dir"]
+def finish_folder(cfg: dict, folder: pathlib.Path, lane: dict | None = None) -> None:
+    pd = _lane(cfg, lane)["posted_dir"]
+    dest = ROOT / pd
     dest.mkdir(exist_ok=True)
     target = dest / folder.name
     if target.exists():
         target = dest / f"{folder.name}_{dt.datetime.now():%Y%m%d%H%M%S}"
     folder.rename(target)
-    log(f"Папка {folder.name} опубликована полностью и перенесена в {cfg['posted_dir']}/")
+    log(f"Папка {folder.name} опубликована полностью и перенесена в {pd}/")
 
 
-def sweep_finished(cfg: dict, state: dict) -> None:
+def sweep_finished(cfg: dict, state: dict, lane: dict | None = None) -> None:
     """Перенести в posted/ все папки, где каждый рилс уже опубликован или пропущен."""
-    for f in queue_folders(cfg):
-        if has_videos(f) and not folder_items(f, state):
-            finish_folder(cfg, f)
-            if (state.get("active") or {}).get("folder") == f.name:
-                state["active"] = None
+    if not lane_accounts(lane):
+        return  # у очереди нет аккаунтов: ничего не трогаем, иначе все папки «закончатся» сами собой
+    slot = lane_slot(state, lane)
+    for f in queue_folders(cfg, lane):
+        if has_videos(f) and not folder_items(f, state, lane):
+            finish_folder(cfg, f, lane)
+            if (slot.get("active") or {}).get("folder") == f.name:
+                slot["active"] = None
 
 
-def schedule(cfg: dict, state: dict, now: dt.datetime) -> tuple[pathlib.Path | None, list[dict]]:
-    """Решить, какая папка сегодня в работе и какие рилсы пора публиковать."""
+def schedule(cfg: dict, state: dict, now: dt.datetime,
+             lane: dict | None = None) -> tuple[pathlib.Path | None, list[dict]]:
+    """Решить, какая папка сегодня в работе и какие рилсы пора публиковать (для одной очереди)."""
     tz = now.tzinfo
     today = now.date()
     start, end = at_time(today, cfg["day_start"], tz), at_time(today, cfg["day_end"], tz)
-    active = state.get("active")
+    ln = _lane(cfg, lane)
+    slot = lane_slot(state, lane)
+    if not lane_accounts(lane):
+        return None, []
+    if lane_paused(cfg, lane):
+        if not slot.get("paused"):
+            log(f"Очередь {ln['queue_dir']}: на паузе.")
+        slot["paused"] = True
+        return None, []
+    resumed = slot.pop("paused", False)
+    active = slot.get("active")
     folder = None
+    items_of = lambda f: folder_items(f, state, lane)  # noqa: E731
 
     if active:
-        folder = ROOT / cfg["queue_dir"] / active["folder"]
+        folder = ROOT / ln["queue_dir"] / active["folder"]
         if not folder.is_dir():
             log(f"Папка {active['folder']} пропала из очереди, перехожу к следующей.")
-            state["active"] = active = folder = None
-        elif not folder_items(folder, state):
-            finish_folder(cfg, folder)
-            state["active"] = active = folder = None
+            slot["active"] = active = folder = None
+        elif not items_of(folder):
+            finish_folder(cfg, folder, lane)
+            slot["active"] = active = folder = None
 
-    if active and active["date"] != today.isoformat():
-        # TikTok не должен держать очередь: если рилс вчера вышел везде, кроме TikTok, пропускаем его там
-        for it in folder_items(folder, state):
+    if active and active["date"] != today.isoformat() and not ln["name"]:
+        # общая очередь: TikTok не должен её держать. Если рилс вчера вышел везде, кроме TikTok, пропускаем его там
+        for it in items_of(folder):
             if all(a.get("platform") == "tiktok" for a in it["pending"]):
                 for acc in it["pending"]:
                     state["skipped"][acc_key(acc, it["id"])] = "TikTok: не успели опубликовать за день"
                     log(f"{it['id']}: в TikTok @{acc['name']} не вышел за день, пропускаю.")
-        if not folder_items(folder, state):
-            finish_folder(cfg, folder)
-            state["active"] = active = folder = None
-    if active and active["date"] != today.isoformat():
-        # остались рилсы со вчера: раскидываем остаток на сегодня
+        if not items_of(folder):
+            finish_folder(cfg, folder, lane)
+            slot["active"] = active = folder = None
+    if active and (active["date"] != today.isoformat() or resumed):
+        # остались рилсы со вчера (или очередь сняли с паузы): раскидываем остаток на сегодня с текущего момента
         if now < start:
             return None, []
-        left = folder_items(folder, state)
+        left = items_of(folder)
         active.update(date=today.isoformat(), plan=build_plan(left, max(now, start), max(end, now)))
-        log(f"Папка {folder.name}: переношу {len(left)} оставшихся рилсов на сегодня.")
+        log(f"Папка {folder.name}: {'после паузы ' if resumed else ''}переношу {len(left)} оставшихся рилсов на сегодня.")
 
     if not active:
-        if state.get("last_started") == today.isoformat() or not (start <= now < end):
+        if slot.get("last_started") == today.isoformat() or not (start <= now < end):
             return None, []
-        for candidate in queue_folders(cfg):
-            items = folder_items(candidate, state)
+        for candidate in queue_folders(cfg, lane):
+            items = items_of(candidate)
             if items:
                 folder = candidate
                 first = start if now - start < dt.timedelta(hours=1) else now
                 plan = build_plan(items, first, end)
-                state["active"] = active = {"folder": folder.name, "date": today.isoformat(), "plan": plan}
-                state["last_started"] = today.isoformat()
-                log(f"Сегодня публикую папку {folder.name}: {len(items)} рилсов, "
+                slot["active"] = active = {"folder": folder.name, "date": today.isoformat(), "plan": plan}
+                slot["last_started"] = today.isoformat()
+                log(f"Сегодня публикую папку {ln['queue_dir']}/{folder.name}: {len(items)} рилсов, "
                     f"время: {', '.join(t[11:16] for t in plan.values())}")
                 break
         else:
             return None, []
 
     plan = active["plan"]
-    due = [i for i in folder_items(folder, state)
+    due = [i for i in items_of(folder)
            if dt.datetime.fromisoformat(plan.get(i["plan_key"], now.isoformat())) <= now]
     return folder, due
 
@@ -642,6 +787,9 @@ class Instagram:
             need = {"instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement"}
             if need - set(granted):
                 log(f"НЕ ХВАТАЕТ разрешений: {', '.join(sorted(need - set(granted)))}")
+            if "instagram_manage_comments" not in granted:
+                log("Для авто-комментариев нужно ещё разрешение instagram_manage_comments (без него рилсы выходят, "
+                    "но комментарий не добавится).")
             pages = self._req("GET", f"{self.base}/me/accounts",
                               params={"fields": "name,instagram_business_account{id,username}"}).get("data", [])
             if not pages:
@@ -696,6 +844,10 @@ class Instagram:
     def publish(self, container_id: str) -> str:
         return self._req("POST", f"{self.base}/{self.user_id}/media_publish",
                          data={"creation_id": container_id})["id"]
+
+    def comment(self, media_id: str, message: str) -> str:
+        """Комментарий от имени аккаунта под своим рилсом (нужно разрешение instagram_manage_comments)."""
+        return self._req("POST", f"{self.base}/{media_id}/comments", data={"message": message}).get("id", "")
 
     def permalink(self, media_id: str) -> str:
         try:
@@ -888,26 +1040,37 @@ def cmd_post(args) -> int:
     now = dt.datetime.fromisoformat(args.now).replace(tzinfo=tz) if args.now else dt.datetime.now(tz)
 
     if args.dry_run:
-        for folder in queue_folders(cfg):
-            items = folder_items(folder, state)
-            if not items:
-                continue
-            plan = build_plan(items, at_time(now.date(), cfg["day_start"], tz), at_time(now.date(), cfg["day_end"], tz))
-            print(f"=== Папка {folder.name}: {len(items)} рилсов")
-            for i in items:
-                cover = i["cover"].name if i["cover"] else f"кадр {cfg['thumb_offset_ms']} мс"
-                print(f"--- {plan[i['plan_key']][11:16]}  {i['plan_key']}  (обложка: {cover})")
-                for n, acc in enumerate(ACTIVE_ACCOUNTS):
-                    print(f"[@{acc['name']}]\n{build_caption(cfg, caption_for(i, acc, n))}\n")
+        for ln in lanes(cfg):
+            for folder in queue_folders(cfg, ln):
+                items = folder_items(folder, state, ln)
+                if not items:
+                    continue
+                plan = build_plan(items, at_time(now.date(), cfg["day_start"], tz), at_time(now.date(), cfg["day_end"], tz))
+                print(f"=== {ln['queue_dir']}/{folder.name}: {len(items)} рилсов")
+                for i in items:
+                    cover = i["cover"].name if i["cover"] else f"кадр {cfg['thumb_offset_ms']} мс"
+                    print(f"--- {plan[i['plan_key']][11:16]}  {i['plan_key']}  (обложка: {cover})")
+                    for n, acc in enumerate(ACTIVE_ACCOUNTS):
+                        if acc not in i["pending"]:
+                            continue
+                        texts = resolve_texts(cfg, i, acc)
+                        print(f"[@{acc['name']}]\n{build_caption(cfg, caption_for(i, acc, n), texts)}")
+                        com = comment_for(i, acc, texts)
+                        print(f"(комментарий: {com})\n" if com else "")
         return 0
 
-    group_loose_files(cfg, now)
-    sweep_finished(cfg, state)
+    due: list[dict] = []
+    for ln in lanes(cfg):
+        group_loose_files(cfg, now, ln)
+        sweep_finished(cfg, state, ln)
     if args.only:
         # разовая публикация выбранного рилса прямо сейчас, расписание не трогаем
-        folder, due = None, []
-        for f in queue_folders(cfg):
-            due = [i for i in folder_items(f, state) if args.only in i["id"]][:1]
+        for ln in lanes(cfg):
+            for f in queue_folders(cfg, ln):
+                due = [i for i in folder_items(f, state, ln) if i["id"] == args.only][:1] \
+                    or [i for i in folder_items(f, state, ln) if args.only in i["id"]][:1]
+                if due:
+                    break
             if due:
                 break
         if not due:
@@ -915,13 +1078,18 @@ def cmd_post(args) -> int:
             return 1
         log(f"Публикую сейчас: {due[0]['id']}")
     else:
-        folder, due = schedule(cfg, state, now)
-    if state.get("active"):
-        act = state["active"]
-        plans = state.setdefault("plans", {})
-        plans[act["date"]] = {"folder": act["folder"], "plan": act["plan"]}
-        for old_day in sorted(plans)[:-14]:  # храним последние 14 дней
-            plans.pop(old_day)
+        for ln in lanes(cfg):
+            due += schedule(cfg, state, now, ln)[1]
+    for ln in lanes(cfg):
+        slot = lane_slot(state, ln)
+        if slot.get("active"):
+            act = slot["active"]
+            plans = slot.setdefault("plans", {})
+            plans[act["date"]] = {"folder": act["folder"], "plan": act["plan"]}
+            for old_day in sorted(plans)[:-14]:  # храним последние 14 дней
+                plans.pop(old_day)
+    if not state.get("lanes"):
+        state.pop("lanes", None)
     save_state(state)
     if not due:
         log("Сейчас публиковать нечего.")
@@ -949,7 +1117,8 @@ def cmd_post(args) -> int:
             log(f"→ {item['id']} → @{acc['name']}")
             if acc.get("platform") == "tiktok":
                 try:
-                    res = ig.post(item["video"], build_caption(cfg, caption_for(item, acc, index)), item.get("tiktok"))
+                    res = ig.post(item["video"], build_caption(cfg, caption_for(item, acc, index), resolve_texts(cfg, item, acc)),
+                                  item.get("tiktok"))
                 except TikTokLimit as e:
                     log(f"TikTok @{acc['name']}: лимит, попробую в следующий раз. {e}")
                     if "pending_share" in str(e):
@@ -977,8 +1146,9 @@ def cmd_post(args) -> int:
                 log("Ролик в черновиках TikTok: откройте уведомление в приложении и опубликуйте."
                     if res["mode"] == "inbox" else f"Опубликовано в TikTok: {res['permalink'] or res['media_id']}")
                 continue
+            texts = resolve_texts(cfg, item, acc)
             try:
-                caption = build_caption(cfg, caption_for(item, acc, index))
+                caption = build_caption(cfg, caption_for(item, acc, index), texts)
                 cover = item["cover"]
                 named = item.get("covers", {}).get(acc["name"].lower())
                 if named and (item["video"].parent / named).is_file():
@@ -1013,17 +1183,28 @@ def cmd_post(args) -> int:
                     dead.add(acc["name"])
                 continue
             link = ig.permalink(media_id)
-            acc_posted(state, acc)[item["id"]] = {
+            record = {
                 "media_id": media_id,
                 "permalink": link,
                 "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
             }
+            comment = comment_for(item, acc, texts)
+            if comment:
+                # комментарий не должен ломать публикацию: рилс уже вышел
+                try:
+                    record["comment_id"] = ig.comment(media_id, comment)
+                    log("Комментарий добавлен.")
+                except Exception as e:  # noqa: BLE001
+                    record["comment_error"] = str(e)[:300]
+                    log(f"Комментарий не добавлен (нужно разрешение instagram_manage_comments): {str(e)[:200]}")
+            acc_posted(state, acc)[item["id"]] = record
             state.get("failures", {}).pop(fkey, None)
             save_state(state)
             posted += 1
             log(f"Опубликовано: {link or media_id}")
 
-    sweep_finished(cfg, state)
+    for ln in lanes(cfg):
+        sweep_finished(cfg, state, ln)
     save_state(state)
     return 1 if failed and not posted else 0
 
@@ -1141,13 +1322,16 @@ def cmd_remove(args) -> int:
     cfg = load_config()
     state = load_state()
     name = args.name.strip().strip("/")
-    target = ROOT / cfg["queue_dir"] / name
+    ln = lane_of_id(cfg, name)
+    name = name[len(ln["prefix"]):]
+    target = ROOT / ln["queue_dir"] / name
     if not name or "/" in name or ".." in name or not target.is_dir():
-        log(f"Папка «{args.name}» не найдена в {cfg['queue_dir']}/.")
+        log(f"Папка «{args.name}» не найдена в {ln['queue_dir']}/.")
         return 1
     shutil.rmtree(target)
-    if (state.get("active") or {}).get("folder") == name:
-        state["active"] = None
+    slot = lane_slot(state, ln)
+    if (slot.get("active") or {}).get("folder") == name:
+        slot["active"] = None
     save_state(state)
     log(f"Папка {name} удалена из очереди.")
     return 0
@@ -1266,7 +1450,7 @@ def main() -> int:
     sub.add_parser("check").set_defaults(func=cmd_check)
     sub.add_parser("stats").set_defaults(func=cmd_stats)
     rp = sub.add_parser("remove")
-    rp.add_argument("name", help="имя папки в queue/, например 003_Metro")
+    rp.add_argument("name", help="имя папки в queue/, например 003_Metro; для отдельных очередей tiktok:005_x или instagram:005_x")
     rp.set_defaults(func=cmd_remove)
     sub.add_parser("refresh-token").set_defaults(func=cmd_refresh)
     tu = sub.add_parser("tiktok-url", help="ссылка для входа в TikTok")
