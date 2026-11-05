@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Instagram Reels autoposter.
+"""Instagram Reels (и TikTok) autoposter.
 
 В queue/ лежат папки: одна папка = одно длинное видео = рилсы на один день.
 В папке: 01.mp4 + 01.txt (описание) + 01.jpg (обложка), 02.mp4 ... Каждый день берётся
@@ -19,6 +19,11 @@
                (по умолчанию определяется по токену: IGAA... -> instagram, EAA... -> facebook)
   FB_APP_ID / FB_APP_SECRET  только для продления токена типа EAA (Facebook Login)
   GH_PAT       необязательно: GitHub токен с правом Secrets: write, чтобы сохранять продлённый токен
+  TT_CLIENT_KEY / TT_CLIENT_SECRET  ключи приложения TikTok (только если в config.json есть аккаунт TikTok)
+
+TikTok (аккаунт в config.json с "platform": "tiktok"):
+  python autoposter.py tiktok-url ИМЯ                    ссылка для входа в TikTok
+  python autoposter.py tiktok-connect ИМЯ --code АДРЕС   обменять код на токен и сохранить его в секрет
 """
 from __future__ import annotations
 
@@ -55,6 +60,8 @@ DEFAULT_CONFIG = {
     "share_to_feed": True,           # показывать рилс в сетке профиля
     "accounts": [],                  # список аккаунтов, см. README; пусто = один аккаунт (IG_TOKEN, IG_USER_ID)
     "api_version": "v23.0",
+    "tiktok_redirect_uri": "",       # адрес возврата после входа в TikTok (как в настройках приложения TikTok)
+    "tiktok_client_key": "",         # Client key приложения TikTok (не секрет, виден в ссылке входа)
     "status_timeout_sec": 900,
 }
 
@@ -124,11 +131,25 @@ def configure_accounts(cfg: dict) -> list[dict]:
     raw = cfg.get("accounts") or [{"name": "main"}]
     out = []
     for i, a in enumerate(raw):
+        platform = (a.get("platform") or "instagram").lower()
         acc = {"name": a.get("name") or f"acc{i + 1}",
                "token_env": a.get("token_env") or ("IG_TOKEN" if i == 0 else f"IG_TOKEN_{i + 1}"),
                "user_id_env": a.get("user_id_env") or ("IG_USER_ID" if i == 0 else f"IG_USER_ID_{i + 1}"),
                "user_id": str(a.get("user_id") or ""),
+               "platform": platform,
                "primary": i == 0}
+        if platform == "tiktok":
+            if i == 0:
+                sys.exit("Ошибка: первым в config.json должен идти аккаунт Instagram, TikTok добавляйте после него.")
+            acc.update(token_env=a.get("token_env") or f"TT_TOKEN_{acc['name'].upper()}",
+                       mode=(a.get("mode") or "inbox").lower(),
+                       privacy=a.get("privacy") or "PUBLIC_TO_EVERYONE",
+                       client_key_env=a.get("client_key_env") or "TT_CLIENT_KEY",
+                       client_secret_env=a.get("client_secret_env") or "TT_CLIENT_SECRET",
+                       disable_comment=bool(a.get("disable_comment", False)),
+                       disable_duet=bool(a.get("disable_duet", False)),
+                       disable_stitch=bool(a.get("disable_stitch", False)),
+                       is_aigc=bool(a.get("is_aigc", False)))
         if not acc["primary"] and not secret(acc["token_env"]):
             log(f"Аккаунт «{acc['name']}»: нет секрета {acc['token_env']}, пропускаю.")
             continue
@@ -152,12 +173,29 @@ def acc_done(state: dict, acc: dict, item_id: str) -> bool:
     return item_id in acc_posted(state, acc) or acc_key(acc, item_id) in state["skipped"]
 
 
-def make_ig(acc: dict, cfg: dict) -> "Instagram":
+def make_ig(acc: dict, cfg: dict) -> "Instagram | TikTok":
     token = secret(acc["token_env"])
     if not token:
         sys.exit(f"Ошибка: не задан секрет {acc['token_env']} (аккаунт «{acc['name']}»).")
     mask(token)
+    if acc.get("platform") == "tiktok":
+        return TikTok(acc, token, cfg)
     return Instagram(token, secret(acc["user_id_env"]) or acc.get("user_id", ""), cfg)
+
+
+def save_github_secret(name: str, value: str) -> bool:
+    """Записать секрет репозитория через gh (нужен GH_PAT с правом Secrets: Read and write)."""
+    pat, repo = secret("GH_PAT"), os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not (pat and repo):
+        log(f"GH_PAT не задан: не могу сохранить секрет {name}.")
+        return False
+    res = subprocess.run(["gh", "secret", "set", name, "--repo", repo, "--body", value],
+                         env={**os.environ, "GH_TOKEN": pat}, capture_output=True, text=True)
+    if res.returncode != 0:
+        log(f"Не удалось сохранить секрет {name}: {res.stderr.strip()[:300]}")
+        return False
+    log(f"Секрет {name} сохранён.")
+    return True
 
 
 # ---------------------------------------------------------------- caption
@@ -241,7 +279,11 @@ def caption_for(item: dict, acc: dict, index: int) -> str:
     for head, body in caps:
         if name and name in head.lower():
             return body
-    plain = [b for h, b in caps if "@" not in h]
+    if acc.get("platform") == "tiktok":
+        for head, body in caps:
+            if "tiktok" in head.lower() and "@" not in head:
+                return body
+    plain = [b for h, b in caps if "@" not in h and "tiktok" not in h.lower()]
     if plain:
         return plain[0] if len(plain) == 1 or index >= len(plain) else plain[index]
     return item["text"]
@@ -397,6 +439,16 @@ def schedule(cfg: dict, state: dict, now: dt.datetime) -> tuple[pathlib.Path | N
             finish_folder(cfg, folder)
             state["active"] = active = folder = None
 
+    if active and active["date"] != today.isoformat():
+        # TikTok не должен держать очередь: если рилс вчера вышел везде, кроме TikTok, пропускаем его там
+        for it in folder_items(folder, state):
+            if all(a.get("platform") == "tiktok" for a in it["pending"]):
+                for acc in it["pending"]:
+                    state["skipped"][acc_key(acc, it["id"])] = "TikTok: не успели опубликовать за день"
+                    log(f"{it['id']}: в TikTok @{acc['name']} не вышел за день, пропускаю.")
+        if not folder_items(folder, state):
+            finish_folder(cfg, folder)
+            state["active"] = active = folder = None
     if active and active["date"] != today.isoformat():
         # остались рилсы со вчера: раскидываем остаток на сегодня
         if now < start:
@@ -562,6 +614,185 @@ class Instagram:
             return ""
 
 
+# ---------------------------------------------------------------- TikTok API
+
+TT_API = "https://open.tiktokapis.com"
+TT_SCOPES = "user.info.basic,video.upload"  # для прямой публикации (mode=direct) нужен ещё video.publish
+TT_CHUNK = 10 * 1024 * 1024      # TikTok: куски от 5 до 64 МБ, последний может быть больше
+TT_SINGLE_MAX = 64 * 1024 * 1024  # файл до 64 МБ грузим одним куском
+
+
+class TikTokLimit(RuntimeError):
+    """TikTok временно не даёт публиковать (лимит черновиков, частота). Это не ошибка ролика."""
+
+
+def tt_chunks(size: int) -> tuple[int, int]:
+    """(chunk_size, total_chunk_count) по правилам TikTok Media Transfer."""
+    if size <= TT_SINGLE_MAX:
+        return size, 1
+    return TT_CHUNK, size // TT_CHUNK
+
+
+class TikTok:
+    """Content Posting API. mode=inbox: ролик падает в черновики (уведомление в приложении TikTok),
+    mode=direct: публикуется сразу (без аудита приложения TikTok разрешает только SELF_ONLY)."""
+
+    def __init__(self, acc: dict, refresh_token: str, cfg: dict):
+        self.acc = acc
+        self.name = acc["name"]
+        self.mode = acc.get("mode", "inbox")
+        self.refresh_token = refresh_token
+        self.access_token = ""
+        self.timeout = int(cfg["status_timeout_sec"])
+        self.host = "open.tiktokapis.com"
+
+    # --- токен
+    def _auth(self) -> None:
+        if self.access_token:
+            return
+        key, sec = tt_client_key(self.acc), secret(self.acc["client_secret_env"])
+        if not (key and sec):
+            raise RuntimeError(f"не заданы секреты {self.acc['client_key_env']} / {self.acc['client_secret_env']}")
+        mask(sec)
+        r = requests.post(f"{TT_API}/v2/oauth/token/", timeout=60, data={
+            "client_key": key, "client_secret": sec,
+            "grant_type": "refresh_token", "refresh_token": self.refresh_token,
+        }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        data = r.json() if r.content else {}
+        if not r.ok or "access_token" not in data:
+            raise RuntimeError(f"TikTok не продлил токен (OAuthException): "
+                               f"{data.get('error_description') or data.get('error') or r.status_code}. "
+                               f"Подключите аккаунт заново (workflow «TikTok: подключить аккаунт»).")
+        self.access_token = data["access_token"]
+        mask(self.access_token)
+        new_rt = data.get("refresh_token") or ""
+        if new_rt and new_rt != self.refresh_token:
+            mask(new_rt)
+            self.refresh_token = new_rt
+            if not save_github_secret(self.acc["token_env"], new_rt):
+                log(f"ВНИМАНИЕ: TikTok выдал новый refresh-токен, а сохранить его некуда. "
+                    f"Добавьте GH_PAT, иначе через год придётся подключать @{self.name} заново.")
+
+    def _req(self, path: str, body: dict | None = None, method: str = "POST") -> dict:
+        self._auth()
+        err = ""
+        for attempt in range(4):
+            try:
+                r = requests.request(method, f"{TT_API}{path}", json=body if method == "POST" else None,
+                                     timeout=120, headers={"Authorization": f"Bearer {self.access_token}",
+                                                           "Content-Type": "application/json; charset=UTF-8"})
+            except requests.RequestException as e:
+                err = str(e)
+            else:
+                data = r.json() if r.content else {}
+                code = (data.get("error") or {}).get("code", "ok")
+                if r.ok and code == "ok":
+                    return data.get("data") or {}
+                msg = (data.get("error") or {}).get("message", "") or r.text[:300]
+                err = f"TikTok API {r.status_code} {code}: {msg}"
+                if code.startswith("spam_risk") or code == "rate_limit_exceeded" or r.status_code == 429:
+                    raise TikTokLimit(err)
+                if code in ("access_token_invalid", "scope_not_authorized"):
+                    raise RuntimeError(err + " (OAuthException)")
+                if r.status_code < 500:
+                    raise RuntimeError(err)
+            time.sleep(2 ** (attempt + 1))
+        raise RuntimeError(err)
+
+    def whoami(self) -> dict:
+        u = self._req("/v2/user/info/?fields=open_id,display_name,username", method="GET").get("user", {})
+        info = {"username": u.get("username") or u.get("display_name") or self.name, "id": u.get("open_id", "")}
+        if u.get("username"):
+            self.acc["username"] = u["username"]
+        if self.mode == "direct":
+            ci = self._req("/v2/post/publish/creator_info/query/", {})
+            info["privacy_options"] = ci.get("privacy_level_options") or []
+            info["max_duration"] = ci.get("max_video_post_duration_sec")
+        return info
+
+    # --- публикация
+    def upload(self, path: pathlib.Path, caption: str) -> str:
+        size = path.stat().st_size
+        chunk, count = tt_chunks(size)
+        source = {"source": "FILE_UPLOAD", "video_size": size, "chunk_size": chunk, "total_chunk_count": count}
+        if self.mode == "direct":
+            ci = self._req("/v2/post/publish/creator_info/query/", {})
+            options = ci.get("privacy_level_options") or []
+            privacy = self.acc.get("privacy") or "PUBLIC_TO_EVERYONE"
+            if options and privacy not in options:
+                log(f"TikTok не разрешает приватность {privacy} (доступно: {', '.join(options)}). "
+                    f"Без аудита приложения доступно только SELF_ONLY.")
+                privacy = "SELF_ONLY" if "SELF_ONLY" in options else options[0]
+            post = {"title": caption[:2200], "privacy_level": privacy,
+                    "disable_comment": self.acc.get("disable_comment", False) or bool(ci.get("comment_disabled")),
+                    "disable_duet": self.acc.get("disable_duet", False) or bool(ci.get("duet_disabled")),
+                    "disable_stitch": self.acc.get("disable_stitch", False) or bool(ci.get("stitch_disabled")),
+                    "video_cover_timestamp_ms": 1000, "is_aigc": self.acc.get("is_aigc", False)}
+            init = self._req("/v2/post/publish/video/init/", {"post_info": post, "source_info": source})
+        else:
+            init = self._req("/v2/post/publish/inbox/video/init/", {"source_info": source})
+        publish_id, url = init["publish_id"], init["upload_url"]
+        log(f"Загружаю видео в TikTok ({size / 1e6:.1f} МБ, частей: {count})")
+        with path.open("rb") as f:
+            for n in range(count):
+                start = n * chunk
+                part = f.read(size - start if n == count - 1 else chunk)
+                end = start + len(part) - 1
+                r = requests.put(url, data=part, timeout=900, headers={
+                    "Content-Type": "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4",
+                    "Content-Length": str(len(part)),
+                    "Content-Range": f"bytes {start}-{end}/{size}"})
+                if r.status_code not in (200, 201, 206):
+                    raise RuntimeError(f"Ошибка загрузки видео в TikTok {r.status_code}: {r.text[:300]}")
+        return publish_id
+
+    def wait_ready(self, publish_id: str) -> str:
+        """Ждать окончания обработки. Вернуть статус (SEND_TO_USER_INBOX или PUBLISH_COMPLETE)."""
+        deadline = time.time() + self.timeout
+        while time.time() < deadline:
+            st = self._req("/v2/post/publish/status/fetch/", {"publish_id": publish_id})
+            status = st.get("status", "")
+            log(f"Статус TikTok: {status}")
+            if status in ("SEND_TO_USER_INBOX", "PUBLISH_COMPLETE"):
+                ids = st.get("publicaly_available_post_id") or st.get("publicly_available_post_id") or []
+                self.post_id = str(ids[0]) if ids else ""
+                return status
+            if status == "FAILED":
+                raise RuntimeError(f"TikTok не смог обработать видео: {st.get('fail_reason')}")
+            time.sleep(10)
+        raise RuntimeError("TikTok слишком долго обрабатывает видео (таймаут)")
+
+    def post(self, path: pathlib.Path, caption: str) -> dict:
+        self.post_id = ""
+        publish_id = self.upload(path, caption)
+        status = self.wait_ready(publish_id)
+        link = f"https://www.tiktok.com/@{self.acc.get('username') or self.name}/video/{self.post_id}" if self.post_id else ""
+        return {"media_id": publish_id, "permalink": link, "platform": "tiktok",
+                "mode": "inbox" if status == "SEND_TO_USER_INBOX" else "direct"}
+
+
+def tt_client_key(acc: dict) -> str:
+    return secret(acc.get("client_key_env") or "TT_CLIENT_KEY") or str(load_config().get("tiktok_client_key") or "")
+
+
+def tt_auth_url(client_key: str, redirect_uri: str, state: str = "autoposter", scopes: str = TT_SCOPES) -> str:
+    from urllib.parse import urlencode
+    return "https://www.tiktok.com/v2/auth/authorize/?" + urlencode({
+        "client_key": client_key, "scope": scopes, "response_type": "code",
+        "redirect_uri": redirect_uri, "state": state})
+
+
+def tt_code_from(text: str) -> str:
+    """Код из адреса страницы после входа (…?code=XXX&scopes=…) или сам код."""
+    from urllib.parse import parse_qs, unquote, urlparse
+    text = text.strip()
+    if "code=" in text:
+        q = parse_qs(urlparse(text).query) or parse_qs(text.split("?", 1)[-1])
+        if q.get("code"):
+            return q["code"][0]
+    return unquote(text)
+
+
 # ---------------------------------------------------------------- commands
 
 def cmd_post(args) -> int:
@@ -612,11 +843,18 @@ def cmd_post(args) -> int:
         return 0
 
     igs = {}
+    dead: set[str] = set()  # аккаунты с недействительным токеном (или лимитом TikTok) в этом запуске
     for acc in ACTIVE_ACCOUNTS:
         igs[acc["name"]] = make_ig(acc, cfg)
-        igs[acc["name"]].whoami()
+        try:
+            igs[acc["name"]].whoami()
+        except RuntimeError as e:
+            if acc.get("platform") != "tiktok":
+                raise
+            # TikTok не должен останавливать Instagram
+            log(f"TikTok @{acc['name']} сейчас недоступен, пропускаю в этом запуске: {e}")
+            dead.add(acc["name"])
     posted = failed = 0
-    dead: set[str] = set()  # аккаунты с недействительным токеном в этом запуске
     for item in due[: int(cfg["max_posts_per_run"])]:
         for index, acc in enumerate(ACTIVE_ACCOUNTS):
             if acc not in item["pending"] or acc["name"] in dead:
@@ -624,6 +862,36 @@ def cmd_post(args) -> int:
             ig = igs[acc["name"]]
             fkey = acc_key(acc, item["id"])
             log(f"→ {item['id']} → @{acc['name']}")
+            if acc.get("platform") == "tiktok":
+                try:
+                    res = ig.post(item["video"], build_caption(cfg, caption_for(item, acc, index)))
+                except TikTokLimit as e:
+                    log(f"TikTok @{acc['name']}: лимит, попробую в следующий раз. {e}")
+                    if "pending_share" in str(e):
+                        log("В черновиках TikTok уже 5 неопубликованных роликов: опубликуйте их в приложении TikTok.")
+                    dead.add(acc["name"])
+                    continue
+                except Exception as e:  # noqa: BLE001
+                    failed += 1
+                    log(f"ОШИБКА с {item['id']} (TikTok @{acc['name']}): {e}")
+                    fails = state.setdefault("failures", {})
+                    fails[fkey] = fails.get(fkey, 0) + 1
+                    if fails[fkey] >= 3:
+                        state["skipped"][fkey] = f"3 неудачные попытки: {str(e)[:300]}"
+                        log("Ролик пропущен после 3 попыток, смотрите state.json -> skipped.")
+                    save_state(state)
+                    if "OAuthException" in str(e):
+                        log(f"Похоже, токен TikTok недействителен. Подключите @{acc['name']} заново.")
+                        dead.add(acc["name"])
+                    continue
+                res["at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+                acc_posted(state, acc)[item["id"]] = res
+                state.get("failures", {}).pop(fkey, None)
+                save_state(state)
+                posted += 1
+                log("Ролик в черновиках TikTok: откройте уведомление в приложении и опубликуйте."
+                    if res["mode"] == "inbox" else f"Опубликовано в TikTok: {res['permalink'] or res['media_id']}")
+                continue
             try:
                 caption = build_caption(cfg, caption_for(item, acc, index))
                 cover = item["cover"]
@@ -684,6 +952,8 @@ def cmd_stats(args) -> int:
     stats = json.loads(stats_path.read_text(encoding="utf-8")) if stats_path.exists() else {}
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
     for acc in configure_accounts(cfg):
+        if acc.get("platform") == "tiktok":
+            continue  # статистику TikTok пока не собираем
         ig = make_ig(acc, cfg)
         insights_ok = True
         for pid, info in acc_posted(state, acc).items():
@@ -730,6 +1000,17 @@ def cmd_check(args) -> int:
 
 
 def _check_one(cfg: dict, acc: dict) -> int:
+    if acc.get("platform") == "tiktok":
+        tt = make_ig(acc, cfg)
+        info = tt.whoami()
+        log(f"TikTok: токен работает. Аккаунт: @{info.get('username')}, режим: "
+            f"{'черновики (inbox)' if tt.mode == 'inbox' else 'прямая публикация'}")
+        if tt.mode == "direct":
+            log(f"Доступная приватность: {', '.join(info.get('privacy_options') or []) or '?'}; "
+                f"макс. длина видео: {info.get('max_duration')} сек")
+            if info.get("privacy_options") == ["SELF_ONLY"]:
+                log("Приложение TikTok без аудита: ролики будут видны только вам, а аккаунт должен быть закрытым.")
+        return 0
     ig = make_ig(acc, cfg)
     log(f"API: {ig.host}")
     info = ig.whoami()
@@ -792,6 +1073,68 @@ def cmd_refresh(args) -> int:
     return 0
 
 
+def _tt_account(name: str) -> dict:
+    cfg = load_config()
+    for i, a in enumerate(cfg.get("accounts") or []):
+        if (a.get("platform") or "").lower() == "tiktok" and (not name or a.get("name") == name):
+            accs = [x for x in configure_accounts({**cfg, "accounts": [cfg["accounts"][0], a]}) if x.get("platform") == "tiktok"]
+            if accs:
+                return accs[0]
+            return {"name": a["name"], "token_env": a.get("token_env") or f"TT_TOKEN_{a['name'].upper()}",
+                    "mode": (a.get("mode") or "inbox").lower(),
+                    "client_key_env": a.get("client_key_env") or "TT_CLIENT_KEY",
+                    "client_secret_env": a.get("client_secret_env") or "TT_CLIENT_SECRET"}
+    sys.exit(f"В config.json нет аккаунта TikTok{' «' + name + '»' if name else ''} (нужно поле \"platform\": \"tiktok\").")
+
+
+def _tt_redirect(cfg: dict) -> str:
+    uri = cfg.get("tiktok_redirect_uri") or ""
+    if not uri:
+        sys.exit("В config.json не задан tiktok_redirect_uri (тот же адрес, что в настройках приложения TikTok).")
+    return uri
+
+
+def cmd_tiktok_url(args) -> int:
+    acc = _tt_account(args.account)
+    key = args.client_key or str(load_config().get("tiktok_client_key") or "")
+    if not key:
+        sys.exit("Нужен Client key: впишите его в config.json (tiktok_client_key) или передайте --client-key.")
+    scopes = TT_SCOPES + (",video.publish" if acc.get("mode") == "direct" else "")
+    log("Откройте ссылку, войдите в TikTok и разрешите доступ:")
+    print(tt_auth_url(key, _tt_redirect(load_config()), state=acc["name"], scopes=scopes), flush=True)
+    return 0
+
+
+def cmd_tiktok_connect(args) -> int:
+    cfg = load_config()
+    acc = _tt_account(args.account)
+    key, sec = tt_client_key(acc), secret(acc["client_secret_env"])
+    if not (key and sec):
+        sys.exit(f"Ошибка: нужен tiktok_client_key в config.json и секрет {acc['client_secret_env']}.")
+    mask(sec)
+    code = tt_code_from(args.code)
+    mask(code)
+    r = requests.post(f"{TT_API}/v2/oauth/token/", timeout=60, data={
+        "client_key": key, "client_secret": sec, "code": code,
+        "grant_type": "authorization_code", "redirect_uri": _tt_redirect(cfg),
+    }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    data = r.json() if r.content else {}
+    if not r.ok or "refresh_token" not in data:
+        log(f"TikTok не принял код: {data.get('error_description') or data.get('error') or r.status_code}. "
+            f"Код живёт несколько минут и одноразовый: войдите заново и сразу запустите workflow.")
+        return 1
+    mask(data["access_token"])
+    mask(data["refresh_token"])
+    scopes = data.get("scope", "")
+    log(f"Вход в TikTok удался. Разрешения: {scopes}. Refresh-токен действует "
+        f"~{int(data.get('refresh_expires_in', 0)) // 86400} дн.")
+    need = ("video.upload", "video.publish") if acc.get("mode") == "direct" else ("video.upload",)
+    missing = [x for x in need if x not in scopes]
+    if missing:
+        log(f"ВНИМАНИЕ: не выдано разрешение {', '.join(missing)}. Добавьте его в приложении TikTok.")
+    return 0 if save_github_secret(acc["token_env"], data["refresh_token"]) else 1
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Автопостер Reels в Instagram")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -803,6 +1146,14 @@ def main() -> int:
     sub.add_parser("check").set_defaults(func=cmd_check)
     sub.add_parser("stats").set_defaults(func=cmd_stats)
     sub.add_parser("refresh-token").set_defaults(func=cmd_refresh)
+    tu = sub.add_parser("tiktok-url", help="ссылка для входа в TikTok")
+    tu.add_argument("account", nargs="?", default="")
+    tu.add_argument("--client-key", default="")
+    tu.set_defaults(func=cmd_tiktok_url)
+    tc = sub.add_parser("tiktok-connect", help="сохранить токен TikTok по коду после входа")
+    tc.add_argument("account", nargs="?", default="")
+    tc.add_argument("--code", required=True, help="адрес страницы после входа (с ?code=...) или сам код")
+    tc.set_defaults(func=cmd_tiktok_connect)
     args = p.parse_args()
     if args.cmd == "post":
         configure_accounts(load_config())

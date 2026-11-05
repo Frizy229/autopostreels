@@ -119,8 +119,10 @@ handle('conn:check', async () => gh().check());
 handle('data:refresh', async () => {
   const g = gh();
   const [queue, state, stats, igCfg] = await Promise.all([g.queue(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json')]);
-  const accounts = ((igCfg && igCfg.accounts) || []).map((a) => a.name).filter(Boolean);
-  return { snapshot: buildSnapshot(state, stats, queue, new Date(), { scheduleTz: cfg.scheduleTz, accounts }), at: new Date().toISOString() };
+  const accList = ((igCfg && igCfg.accounts) || []).filter((a) => a && a.name);
+  const accounts = accList.map((a) => a.name);
+  const platforms = Object.fromEntries(accList.map((a) => [a.name, (a.platform || 'instagram').toLowerCase()]));
+  return { snapshot: buildSnapshot(state, stats, queue, new Date(), { scheduleTz: cfg.scheduleTz, accounts, platforms }), at: new Date().toISOString() };
 });
 handle('folder:pick', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Папка с рилсами' });

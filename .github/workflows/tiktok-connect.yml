@@ -1,0 +1,39 @@
+name: "TikTok: подключить аккаунт"
+
+# 1) Run workflow с пустым полем «адрес» -> в логе будет ссылка для входа в TikTok.
+# 2) Войти по ссылке, скопировать адрес страницы, куда вернул TikTok (в нём есть ?code=...).
+# 3) Сразу (код живёт несколько минут) Run workflow ещё раз и вставить этот адрес.
+#    Токен сохранится в секрет аккаунта (нужен секрет GH_PAT с правом Secrets: Read and write).
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: "Имя аккаунта TikTok из config.json"
+        type: string
+        default: ""
+      url:
+        description: "Адрес страницы после входа в TikTok (пусто = получить ссылку для входа)"
+        type: string
+        default: ""
+
+jobs:
+  connect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Подключить
+        env:
+          ALL_SECRETS: ${{ toJSON(secrets) }}
+          TT_ACCOUNT: ${{ inputs.account }}
+          TT_URL: ${{ inputs.url }}
+        run: |
+          if [ -z "$TT_URL" ]; then
+            python autoposter.py tiktok-url "$TT_ACCOUNT"
+          else
+            python autoposter.py tiktok-connect "$TT_ACCOUNT" --code "$TT_URL"
+          fi

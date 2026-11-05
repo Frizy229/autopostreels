@@ -52,7 +52,8 @@ function buildSnapshot(state, stats, queue, now = new Date(), opts = {}) {
     const stKey = idx === 0 ? key : `${name}|${key}`;
     const st = stats[stKey] || {};
     return {
-      name, status: p ? 'done' : (skKey in skipped ? 'skipped' : 'wait'), at: p ? p.at : null,
+      name, platform: (opts.platforms || {})[name] || (p && p.platform) || 'instagram', inbox: !!(p && p.mode === 'inbox'),
+      status: p ? 'done' : (skKey in skipped ? 'skipped' : 'wait'), at: p ? p.at : null,
       permalink: st.permalink || (p && p.permalink) || '', ...metrics(stKey),
     };
   };
