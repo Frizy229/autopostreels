@@ -30,6 +30,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
+        with:
+          # свежий main, а не коммит на момент запуска: иначе запуск, стоявший в очереди за другим,
+          # работает со старым state.json, повторно заливает рилсы и падает на конфликте при сохранении
+          ref: ${{ github.ref_name }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
