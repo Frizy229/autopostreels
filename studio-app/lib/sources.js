@@ -99,4 +99,58 @@ function parseProgress(line) {
   return m ? Math.min(1, parseFloat(m[1]) / 100) : null;
 }
 
-module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry };
+// ------------------------------------------------------------------ вход в YouTube (cookies)
+// YouTube всё чаще отвечает «Sign in to confirm you're not a bot». Тогда yt-dlp нужны cookies браузера,
+// в котором выполнен вход в YouTube, или файл cookies.txt. Twitch, Kick, VK и файлы с диска идут без cookies.
+
+const BROWSERS = { firefox: 'Firefox', edge: 'Edge', chrome: 'Chrome', brave: 'Brave', opera: 'Opera', vivaldi: 'Vivaldi', chromium: 'Chromium' };
+// Firefox первым: cookies Chrome/Edge на Windows зашифрованы привязкой к приложению и часто не читаются
+const AUTO_BROWSERS = ['firefox', 'edge', 'chrome', 'brave', 'opera', 'vivaldi'];
+const COOKIE_MODES = { auto: 'Автоматически', none: 'Без входа', browser: 'Из браузера', file: 'Файл cookies.txt' };
+
+/** Нужны ли cookies для этой цели yt-dlp: только YouTube и поиск YouTube. */
+function needsAuth(target) {
+  const t = String(target || '');
+  return /^ytsearch\d*:/i.test(t) || platformOf(t) === 'youtube';
+}
+
+/** Аргументы yt-dlp для одного способа входа: null — без cookies. */
+function cookieArgs(auth) {
+  if (!auth) return [];
+  if (auth.file) return ['--cookies', auth.file];
+  if (auth.browser) return ['--cookies-from-browser', auth.browser];
+  return [];
+}
+
+/**
+ * Способы входа по очереди. auto: сначала без cookies, при проверке «не бот» — браузеры по одному;
+ * browser/file: выбранный способ, а если cookies не прочитались — ещё раз без них. Не YouTube — всегда без cookies.
+ */
+function authPlan(cfg, target) {
+  if (!needsAuth(target)) return [null];
+  const c = cfg || {};
+  if (c.mode === 'none') return [null];
+  if (c.mode === 'file' && c.file) return [{ file: c.file }, null];
+  if (c.mode === 'browser' && BROWSERS[c.browser]) return [{ browser: c.browser }, null];
+  return [null, ...AUTO_BROWSERS.map((b) => ({ browser: b }))];
+}
+
+/** YouTube просит войти: проверка «не бот», возраст, вход. */
+const isAuthError = (text) => /sign in to confirm|not a bot|use --cookies|--cookies-from-browser|login required|sign in to view|confirm your age|age[- ]restricted/i.test(String(text || ''));
+/** Cookies не прочитались: нет браузера/профиля, база занята открытым браузером, шифрование Chrome/Edge. */
+const isCookieError = (text) => /cookies? database|could not find .*(browser|profile|cookies)|failed to decrypt|decrypt.*cookie|dpapi|app.?bound|could not copy .*cookie|permission denied.*cookie|cookies? file|does not look like a netscape/i.test(String(text || ''));
+
+const authName = (a) => (!a ? 'без входа' : a.file ? 'файл cookies.txt' : `cookies ${BROWSERS[a.browser] || a.browser}`);
+
+/** Что сказать человеку, когда YouTube не пустил ни одним способом. */
+function authHelp(tried) {
+  const list = (tried || []).map(authName).join(', ');
+  return 'YouTube просит подтвердить, что ты не бот.\n'
+    + 'Что сделать: войди в YouTube в Firefox (лучше всего) или в Edge/Chrome, закрой этот браузер и повтори. '
+    + 'Либо выбери браузер или файл cookies.txt в Настройках → «Вход в YouTube».'
+    + (list ? `\nПробовал: ${list}.` : '')
+    + '\nЗаписи Twitch и файлы с диска работают без входа.';
+}
+
+module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry,
+  BROWSERS, AUTO_BROWSERS, COOKIE_MODES, needsAuth, cookieArgs, authPlan, isAuthError, isCookieError, authName, authHelp };

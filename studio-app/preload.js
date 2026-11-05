@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
   build: call('build:start'),
   cancel: call('job:cancel'),
   pickFolder: call('dialog:folder'),
+  pickFile: call('dialog:file'),
   openPath: call('open:path'),
   showItem: call('open:show'),
   openUrl: call('open:url'),
