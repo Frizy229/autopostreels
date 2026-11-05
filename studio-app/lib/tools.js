@@ -12,6 +12,17 @@ const exe = (n) => (isWin ? `${n}.exe` : n);
 /** Путь к бинарнику из npm-пакета: внутри app.asar запускать нельзя, берём из app.asar.unpacked. */
 const unpacked = (p) => (p ? p.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`) : p);
 
+/**
+ * Бинарник из npm-пакета, если его можно запустить. На Linux/macOS после `npm ci --ignore-scripts`
+ * у файла нет права на выполнение (его ставит скрипт пакета): пробуем выдать, иначе null — возьмём системный.
+ */
+function runnable(p) {
+  if (!p || !fs.existsSync(p)) return null;
+  if (isWin) return p;
+  try { fs.accessSync(p, fs.constants.X_OK); return p; } catch { /* нет права */ }
+  try { fs.chmodSync(p, 0o755); fs.accessSync(p, fs.constants.X_OK); return p; } catch { return null; }
+}
+
 function which(name) {
   const dirs = String(process.env.PATH || '').split(path.delimiter);
   for (const d of dirs) {
@@ -28,11 +39,11 @@ class Tools {
   }
 
   get ffmpeg() {
-    try { const p = unpacked(require('ffmpeg-static')); if (p && fs.existsSync(p)) return p; } catch { /* нет пакета */ }
+    try { const p = runnable(unpacked(require('ffmpeg-static'))); if (p) return p; } catch { /* нет пакета */ }
     return which('ffmpeg') || 'ffmpeg';
   }
   get ffprobe() {
-    try { const p = unpacked(require('@ffprobe-installer/ffprobe').path); if (p && fs.existsSync(p)) return p; } catch { /* нет пакета */ }
+    try { const p = runnable(unpacked(require('@ffprobe-installer/ffprobe').path)); if (p) return p; } catch { /* нет пакета */ }
     return which('ffprobe') || 'ffprobe';
   }
   get ytdlp() {
@@ -130,20 +141,38 @@ async function download(fetchImpl, url, dest, onProgress, signal) {
   return dest;
 }
 
-/** Ссылка на сборку whisper.cpp для Windows из последнего релиза (с CUDA, если просили GPU). */
-async function whisperAssetUrl(fetchImpl, gpu) {
-  const r = await fetchImpl('https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
+/**
+ * Сборки whisper.cpp для Windows. В релизе с пометкой «Latest» (v1.x) лежат только исходники,
+ * готовые программы — в пре-релизах bNNNN. Поэтому смотрим несколько последних релизов
+ * и берём первый, где есть нужная сборка. Возвращает [{url, name, kind}] по порядку предпочтения.
+ */
+async function whisperAssets(fetchImpl, gpu) {
+  const r = await fetchImpl('https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=20', { headers: { Accept: 'application/vnd.github+json' } });
   if (!r.ok) throw new Error(`GitHub: HTTP ${r.status}`);
-  const rel = await r.json();
-  return pickWhisperAsset(rel.assets || [], gpu);
-}
-function pickWhisperAsset(assets, gpu) {
-  const names = assets.map((a) => a.name);
-  const cuda = assets.filter((a) => /cublas.*bin-x64\.zip$/i.test(a.name)).sort((a, b) => b.name.localeCompare(a.name, 'en', { numeric: true }))[0];
-  const cpu = assets.find((a) => /^whisper-bin-x64\.zip$/i.test(a.name));
-  const a = (gpu && cuda) || cpu;
-  if (!a) throw new Error(`В релизе whisper.cpp нет сборки для Windows (${names.join(', ')})`);
-  return a.browser_download_url;
+  return pickWhisperAssets(await r.json(), gpu);
 }
 
-module.exports = { Tools, download, whisperAssetUrl, pickWhisperAsset, findFile, unpacked, exe };
+const cudaVer = (name) => { const m = /(?:cuda|cublas)-(\d+)(?:\.(\d+))?/i.exec(name); return m ? [+m[1], +(m[2] || 0)] : [0, 0]; };
+
+/**
+ * Из списка релизов: CUDA-сборка x64 (12.x — с ней работает драйвер любой RTX 20/30/40; 13.x — только самые новые драйверы),
+ * затем процессорная (с BLAS быстрее). Без gpu — только процессорные.
+ */
+function pickWhisperAssets(releases, gpu) {
+  const list = Array.isArray(releases) ? releases : [releases];
+  for (const rel of list) {
+    const assets = (rel && rel.assets) || [];
+    const x64 = assets.filter((a) => /x64\.zip$/i.test(a.name) && !/arm64|win32/i.test(a.name));
+    const cuda = x64.filter((a) => /cuda|cublas/i.test(a.name))
+      .sort((a, b) => { const [ma, na] = cudaVer(a.name), [mb, nb] = cudaVer(b.name); const pa = ma === 12 ? 1 : 0, pb = mb === 12 ? 1 : 0; return pb - pa || mb - ma || nb - na; });
+    const cpu = [x64.find((a) => /^whisper-blas-bin-x64\.zip$/i.test(a.name)), x64.find((a) => /^whisper-bin-x64\.zip$/i.test(a.name))].filter(Boolean);
+    if (!cpu.length && !cuda.length) continue;
+    const out = [];
+    if (gpu && cuda.length) out.push({ url: cuda[0].browser_download_url, name: cuda[0].name, kind: 'cuda' });
+    for (const c of cpu) out.push({ url: c.browser_download_url, name: c.name, kind: 'cpu' });
+    if (out.length) return out;
+  }
+  throw new Error('В последних релизах whisper.cpp нет сборки для Windows x64');
+}
+
+module.exports = { runnable, Tools, download, whisperAssets, pickWhisperAssets, findFile, unpacked, exe };

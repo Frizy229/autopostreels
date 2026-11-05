@@ -6,12 +6,23 @@ const path = require('path');
 const T = require('../lib/tools');
 
 (async () => {
-  const assets = [{ name: 'whisper-bin-Win32.zip' }, { name: 'whisper-bin-x64.zip', browser_download_url: 'cpu' },
-    { name: 'whisper-cublas-11.8.0-bin-x64.zip', browser_download_url: 'c11' }, { name: 'whisper-cublas-12.4.0-bin-x64.zip', browser_download_url: 'c12' }];
-  assert.strictEqual(T.pickWhisperAsset(assets, true), 'c12', 'свежая CUDA');
-  assert.strictEqual(T.pickWhisperAsset(assets, false), 'cpu');
-  assert.strictEqual(T.pickWhisperAsset(assets.slice(0, 2), true), 'cpu', 'нет CUDA — процессорная');
-  assert.throws(() => T.pickWhisperAsset([{ name: 'x.zip' }], true), /нет сборки/);
+  // как сейчас на GitHub: «Latest» v1.9.5 только с исходниками, сборки в пре-релизе b5454
+  const A = (n) => ({ name: n, browser_download_url: `u/${n}` });
+  const rels = [
+    { tag_name: 'v1.9.5', assets: [] },
+    { tag_name: 'b5454', assets: ['whisper-b5454-xcframework.zip', 'whisper-bin-ubuntu-x64.tar.gz', 'whisper-bin-win-cpu-arm64.zip',
+      'whisper-bin-win-cuda-11.8.0-x64.zip', 'whisper-bin-win-cuda-12.4.0-x64.zip', 'whisper-bin-win-cuda-13.4-arm64.zip',
+      'whisper-bin-Win32.zip', 'whisper-bin-x64.zip', 'whisper-blas-bin-Win32.zip', 'whisper-blas-bin-x64.zip'].map(A) },
+  ];
+  assert.deepStrictEqual(T.pickWhisperAssets(rels, true).map((x) => `${x.kind}:${x.name}`),
+    ['cuda:whisper-bin-win-cuda-12.4.0-x64.zip', 'cpu:whisper-blas-bin-x64.zip', 'cpu:whisper-bin-x64.zip'], 'CUDA 12 x64, запасные — процессорные');
+  assert.deepStrictEqual(T.pickWhisperAssets(rels, false).map((x) => x.name), ['whisper-blas-bin-x64.zip', 'whisper-bin-x64.zip']);
+  // CUDA 13 x64 появится — всё равно 12 (работает со старыми драйверами); старые имена cublas тоже понимаем
+  const r2 = [{ assets: ['whisper-bin-win-cuda-13.1-x64.zip', 'whisper-bin-win-cuda-12.8.0-x64.zip', 'whisper-bin-x64.zip'].map(A) }];
+  assert.strictEqual(T.pickWhisperAssets(r2, true)[0].name, 'whisper-bin-win-cuda-12.8.0-x64.zip');
+  assert.strictEqual(T.pickWhisperAssets([{ assets: ['whisper-cublas-12.4.0-bin-x64.zip', 'whisper-bin-x64.zip'].map(A) }], true)[0].kind, 'cuda');
+  assert.strictEqual(T.pickWhisperAssets([{ assets: [A('whisper-bin-x64.zip')] }], true)[0].kind, 'cpu', 'нет CUDA — процессорная');
+  assert.throws(() => T.pickWhisperAssets([{ assets: [] }, { assets: [A('x.zip')] }], true), /нет сборки для Windows x64/);
   assert.strictEqual(T.unpacked(path.join('a', 'app.asar', 'node_modules', 'ff')), path.join('a', 'app.asar.unpacked', 'node_modules', 'ff'));
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-'));
@@ -52,3 +63,13 @@ const T = require('../lib/tools');
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('компоненты и процессы: 18 проверок');
 })().catch((e) => { console.error(e); process.exit(1); });
+// бинарник без права на выполнение (npm ci --ignore-scripts): право выдаётся, иначе берётся системный
+if (process.platform !== 'win32') {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'rx-'));
+  const b = path.join(d, 'ffprobe');
+  fs.writeFileSync(b, '#!/bin/sh\n'); fs.chmodSync(b, 0o644);
+  assert.strictEqual(T.runnable(b), b);
+  fs.accessSync(b, fs.constants.X_OK);
+  assert.strictEqual(T.runnable(path.join(d, 'нет')), null);
+  fs.rmSync(d, { recursive: true, force: true });
+}
