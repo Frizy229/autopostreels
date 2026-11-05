@@ -152,6 +152,25 @@ class TikTokClientTests(Base):
                 tt._req("/v2/post/publish/inbox/video/init/", {})
 
 
+class TikTokUserInfoTests(Base):
+    def test_user_info_requests_only_basic_fields(self):
+        acc = {"name": "tt", "token_env": "T", "client_key_env": "K", "client_secret_env": "S", "mode": "inbox"}
+        tt = a.TikTok(acc, "RT", self.cfg)
+        tt.access_token = "AT"
+        seen = []
+
+        def fake(method, url, **kw):
+            seen.append(url)
+            r = mock.Mock(status_code=200, ok=True, content=b"1", text="")
+            r.json.return_value = {"data": {"user": {"open_id": "o", "display_name": "Evelon"}}, "error": {"code": "ok"}}
+            return r
+
+        with mock.patch.object(a.requests, "request", side_effect=fake):
+            info = tt.whoami()
+        self.assertNotIn("username", seen[0])  # username требует user.info.profile
+        self.assertEqual(info["username"], "Evelon")
+
+
 class TikTokPostTests(Base):
     def setUp(self):
         super().setUp()
