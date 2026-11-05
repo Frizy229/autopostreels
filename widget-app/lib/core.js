@@ -185,8 +185,10 @@ function buildSnapshot(state, stats, queues, now = new Date(), opts = {}) {
       const v = video(l, tp.folder, name);
       if (!v) continue;
       // папку убрали из очереди (удалили): невышедшие рилсы из плана не показываем
-      if (!seen.has(l.prefix + tp.folder) && !['done', 'part', 'skipped'].includes(v.status)) continue;
-      todayRows.push({ ...v, planAt: when, time: v.status === 'done' ? v.at : when, folder: tp.folder });
+      const removed = !seen.has(l.prefix + tp.folder);
+      if (removed && !['done', 'part', 'skipped'].includes(v.status)) continue;
+      // папку убрали, а рилс вышел не везде: он больше не выйдет, «задерживается» тут неправда
+      todayRows.push({ ...v, ...(removed && v.status !== 'done' ? { late: false, removed: true } : {}), planAt: when, time: v.status === 'done' ? v.at : when, folder: tp.folder });
     }
   }
   todayRows.sort((a, b) => a.planAt.localeCompare(b.planAt));
@@ -228,6 +230,23 @@ function captionFor(raw, platform = 'instagram', account = '') {
   if (plain.length) return plain[0][1];
   if (blocks.length) return blocks[0][1];
   return text.split('\n').filter((l) => !/^\s*COVER\b/i.test(l)).join('\n').trim();
+}
+
+/**
+ * Здоровье автопостера по последним запускам workflow «Публикация рилсов».
+ * runs: [{status, conclusion, created_at, html_url}], новые сверху.
+ * approval: GitHub не запускает workflow, пока человек не нажмёт «Approve and run» (conclusion action_required).
+ */
+function runHealth(runs, now = new Date()) {
+  const list = (runs || []).filter((r) => r && r.status === 'completed');
+  const lastOk = (list.find((r) => r.conclusion === 'success') || {}).created_at || null;
+  const latest = list[0];
+  if (!latest) return { ok: true, approval: false, lastOk, url: '' };
+  const blocked = [];
+  for (const r of list) { if (r.conclusion !== 'action_required') break; blocked.push(r); }
+  const approval = blocked.length > 0;
+  return { ok: !approval, approval, since: approval ? blocked[blocked.length - 1].created_at : null,
+    count: blocked.length, lastOk, url: approval ? latest.html_url : '', minutes: lastOk ? Math.round((now - new Date(lastOk)) / 60000) : null };
 }
 
 function summary(rows) {
@@ -301,4 +320,4 @@ function inspectFolder(dir, accounts = []) {
   return { name: path.basename(dir), files, videos, texts, covers, size, groups, warnings, errors };
 }
 
-module.exports = { slug, dayIn, buildSnapshot, summary, inspectFolder, captionFor, cleanTexts, LANES, NETS, laneByKey, laneOfId, VIDEO_EXT, MAX_FILE };
+module.exports = { runHealth, slug, dayIn, buildSnapshot, summary, inspectFolder, captionFor, cleanTexts, LANES, NETS, laneByKey, laneOfId, VIDEO_EXT, MAX_FILE };

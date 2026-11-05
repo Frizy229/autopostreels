@@ -239,6 +239,17 @@ class GitHub {
     return cfg;
   }
 
+  /** Последние запуски «Публикация рилсов» (нужно право Actions: Read). Без права: null. */
+  async postRuns(n = 10) {
+    try {
+      const r = await this.req('GET', `/actions/workflows/post.yml/runs?per_page=${n}`);
+      return ((r && r.workflow_runs) || []).map((x) => ({ status: x.status, conclusion: x.conclusion, created_at: x.created_at, html_url: x.html_url }));
+    } catch (e) {
+      if (e.status === 403 || e.status === 404) return null;
+      throw e;
+    }
+  }
+
   /** Запустить workflow «Публикация рилсов» (нужно право токена Actions: Read and write). */
   async dispatch(inputs = {}) {
     try {

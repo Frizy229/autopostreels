@@ -3,7 +3,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, nativeTheme, shell, safeStorage, nativeImage } = require('electron');
-const { buildSnapshot, inspectFolder, captionFor, laneByKey, NETS } = require('./lib/core');
+const { buildSnapshot, inspectFolder, captionFor, laneByKey, runHealth, NETS } = require('./lib/core');
 const { GitHub } = require('./lib/github');
 const tiktok = require('./lib/tiktok');
 
@@ -124,7 +124,7 @@ handle('conn:check', async () => gh().check());
 let repoCfg = {};
 handle('data:refresh', async () => {
   const g = gh();
-  const [queues, state, stats, rc, creators] = await Promise.all([g.queues(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json'), g.readJson('tiktok_creator.json')]);
+  const [queues, state, stats, rc, creators, runs] = await Promise.all([g.queues(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json'), g.readJson('tiktok_creator.json'), g.postRuns().catch(() => null)]);
   repoCfg = rc || {};
   const accList = (repoCfg.accounts || []).filter((a) => a && a.name);
   const accounts = accList.map((a) => a.name);
@@ -135,7 +135,7 @@ handle('data:refresh', async () => {
   const all = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts, platforms });
   const tt = { pending: tiktok.pendingConfirm(queues, state, accList), creators: creators || {} };
   return {
-    nets, nextNum: all.nextNum, tt, at: now.toISOString(),
+    nets, nextNum: all.nextNum, tt, at: now.toISOString(), health: runs ? runHealth(runs, now) : null,
     accounts: accList.map((a) => ({ name: a.name, platform: platforms[a.name], mode: a.platform === 'tiktok' ? (a.mode || 'inbox') : '' })),
     texts: repoCfg.texts || {}, paused: repoCfg.paused || [], hashtags: repoCfg.hashtags || '',
     window: { start: repoCfg.day_start || '10:00', end: repoCfg.day_end || '22:00', tz: repoCfg.timezone || cfg.scheduleTz },

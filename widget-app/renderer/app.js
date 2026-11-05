@@ -100,7 +100,7 @@ function metrics(v) {
 const canPostNow = (v) => ['queued', 'wait', 'part'].includes(v.status); // любое невышедшее
 function rowHtml(v, sub) {
   const url = v.permalink ? ` data-url="${esc(v.permalink)}"` : '';
-  const chip = v.late ? LABEL.late : v.status === 'part' ? `${(v.accounts || []).filter((a) => a.status === 'done').length}/${(v.accounts || []).length}` : LABEL[v.status];
+  const chip = v.late ? LABEL.late : v.removed ? 'папка убрана' : v.status === 'part' ? `${(v.accounts || []).filter((a) => a.status === 'done').length}/${(v.accounts || []).length}` : LABEL[v.status];
   const now = canPostNow(v) ? `<button class="now-btn" data-now="${esc(v.id)}" title="Опубликовать сейчас">${IC.bolt}</button>` : '';
   return `<div class="row-card ${v.late ? 'late' : v.status}${v.permalink ? ' link' : ''}"${url}>
     <span class="t">${timeOf(v.time || v.at)}</span>
@@ -169,7 +169,11 @@ function render() {
   const s0 = snap();
   if (!s0) return;
   const late = (s0.summary && s0.summary.late) || 0;
-  if (!$('banner').classList.contains('error') || !$('banner').textContent) {
+  const h = data && data.health;
+  if (h && h.approval) {
+    // GitHub держит запуски до ручного подтверждения: без этого ничего не выйдет ни в одну сеть
+    banner(`GitHub не запускает автопостер с ${timeOf(h.since)}: каждый запуск ждёт подтверждения (${plural(h.count, 'запуск', 'запуска', 'запусков')}). Нажми здесь, затем на GitHub «Approve and run» / «Review pending».`, false, h.url);
+  } else if (!$('banner').classList.contains('error') || !$('banner').textContent) {
     banner(late && !isPaused() ? `${NET_NAME[net]}: задерживается рилсов ${late}. Автопостер ещё не запустился, GitHub опаздывает. Догонит на ближайшем запуске.` : '', true);
   }
   const rows = s0.todayRows, s = s0.summary;
@@ -213,9 +217,12 @@ document.addEventListener('click', (e) => {
 $('doneTitle').addEventListener('click', () => { doneOpen = !doneOpen; store.set('doneOpen', doneOpen); render(); });
 
 // ------------------------------------------------------------ данные
-function banner(text, info = false) {
+function banner(text, info = false, url = '') {
   const b = $('banner'); b.hidden = !text; b.textContent = text || ''; b.classList.toggle('info', info); b.classList.toggle('error', !!text && !info);
+  if (url) b.dataset.url = url; else delete b.dataset.url;
+  b.classList.toggle('link', !!url);
 }
+$('banner').addEventListener('click', () => { const u = $('banner').dataset.url; if (u) bridge.openUrl(u); });
 async function refresh() {
   if (refresh.running) return;
   refresh.running = true;
