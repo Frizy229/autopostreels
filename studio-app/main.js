@@ -6,7 +6,7 @@ const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net } = require
 const { normalize, LANES } = require('./lib/settings');
 const { LAYOUTS } = require('./lib/layout');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
-const { Tools, download, whisperAssets, exe } = require('./lib/tools');
+const { Tools, download, whisperAssets, exe, errorTail, exitHint } = require('./lib/tools');
 const { Pipeline } = require('./lib/pipeline');
 const { MODELS, modelUrl } = require('./lib/transcribe');
 const { channelUrl, filterLongs } = require('./lib/sources');
@@ -109,20 +109,23 @@ function registerIpc() {
       const dir = path.join(tools.binDir, 'whisper');
       const zip = path.join(tools.binDir, 'whisper.zip');
       const options = await whisperAssets(net.fetch, settings.gpu);
-      let lastErr = null;
+      const fails = [];
       for (const [k, a] of options.entries()) {
         const share = 1 / options.length;
         await download(net.fetch, a.url, zip, (p) => progress((k + p * 0.9) * share, `Скачиваю ${a.name}`), signal);
         fs.rmSync(dir, { recursive: true, force: true });
         new AdmZip(zip).extractAllTo(dir, true);
         fs.rmSync(zip, { force: true });
-        if (!tools.whisper) { lastErr = new Error(`В архиве ${a.name} нет whisper-cli.exe`); continue; }
+        if (!tools.whisper) { fails.push(`${a.name}: в архиве нет whisper-cli.exe`); continue; }
         // проверка запуском: CUDA-сборке нужны библиотеки и драйвер; не запустилась — берём следующую (процессорную)
-        const r = await tools.run(tools.whisper, ['-h'], { allowFail: true, signal }).catch((e) => ({ code: -1, stderr: e.message }));
-        if (r.code === 0) return `${a.name}${a.kind === 'cuda' ? ' (видеокарта)' : ' (процессор)'}`;
-        lastErr = new Error(`${a.name} не запускается (код ${r.code})`);
+        const r = await tools.run(tools.whisper, ['-h'], { allowFail: true, signal, cwd: path.dirname(tools.whisper) })
+          .catch((e) => { if (e.code === 'ABORT') throw e; return { code: -1, stderr: e.message }; });
+        const said = `${r.stdout ? r.stdout.toString('utf8') : ''}\n${r.stderr || ''}`;
+        if (r.code === 0 || /usage:\s/i.test(said)) return `${a.name}${a.kind === 'cuda' ? ' (видеокарта)' : ' (процессор)'}`;
+        const why = exitHint(r.code) || errorTail(said) || 'без сообщения';
+        fails.push(`${a.name} (${path.basename(tools.whisper)}, код ${r.code}): ${why}`);
       }
-      throw lastErr || new Error('Не удалось поставить whisper.cpp');
+      throw new Error(fails.length ? `whisper.cpp не запустился:\n${fails.join('\n')}` : 'Не удалось поставить whisper.cpp');
     }
     if (what === 'model') {
       const m = MODELS[settings.whisperModel] || MODELS.small;
