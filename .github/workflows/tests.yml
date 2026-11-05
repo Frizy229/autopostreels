@@ -4,7 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths: ["autoposter.py", "tests/**", "widget-app/**", ".github/workflows/tests.yml"]
+    paths: ["autoposter.py", "tests/**", "widget-app/**", "studio-app/**", ".github/workflows/tests.yml"]
   workflow_dispatch:
 
 jobs:
@@ -23,6 +23,13 @@ jobs:
           node-version: "20"
       - name: Виджет
         working-directory: widget-app
+        run: |
+          npm ci --ignore-scripts
+          npm test
+      - name: ffmpeg для сквозного теста Reels Studio
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Reels Studio
+        working-directory: studio-app
         run: |
           npm ci --ignore-scripts
           npm test

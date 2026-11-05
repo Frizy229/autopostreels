@@ -1,0 +1,29 @@
+'use strict';
+const assert = require('assert');
+const S = require('../lib/settings');
+
+const d = S.normalize({});
+assert.strictEqual(d.channels.length, 3);
+assert.strictEqual(d.perChannel, 7);
+assert.strictEqual(d.encoder, 'nvenc', 'RTX 3070');
+assert.strictEqual(d.rules.hashtag, '#evelone');
+assert.match(d.texts.captionTiktok, /twitch: evelone2004/);
+const s = S.normalize({ channels: ['@a', { name: '' }, 'c'], perChannel: 99, minLen: 50, maxLen: 10, layout: 'x', formats: ['crop', 'nope', 'crop'],
+  subStyles: [], lang: 'english', encoder: 'zzz', rules: { minSpeech: 5, requireOk: 1 }, texts: { comment: 'к' }, fps: 60 });
+assert.deepStrictEqual(s.channels.map((c) => c.name), ['a', 'channel2', 'c']);
+assert.strictEqual(s.perChannel, 20);
+assert.strictEqual(s.maxLen, 50, 'макс не меньше мин');
+assert.strictEqual(s.layout, 'stream');
+assert.deepStrictEqual(s.formats, ['crop']);
+assert.deepStrictEqual(s.subStyles, ['stream']);
+assert.strictEqual(s.lang, 'ru');
+assert.strictEqual(s.encoder, 'cpu');
+assert.strictEqual(s.rules.minSpeech, 1);
+assert.strictEqual(s.rules.requireOk, true);
+assert.strictEqual(s.rules.twitch, 'evelone2004', 'остальные правила по умолчанию');
+assert.strictEqual(s.texts.comment, 'к');
+assert.match(s.texts.captionInstagram, /\{title\}/);
+assert.strictEqual(s.fps, 60);
+assert.strictEqual(S.normalize({ channels: [] }).channels.length, 1);
+assert.strictEqual(S.normalize({ channels: new Array(30).fill('x') }).channels.length, 20);
+console.log('настройки: 21 проверка');

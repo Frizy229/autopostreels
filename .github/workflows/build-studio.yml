@@ -1,0 +1,50 @@
+name: Сборка Reels Studio для Windows
+
+on:
+  push:
+    paths: ["studio-app/**", ".github/workflows/build-studio.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: studio-app
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      - run: npm ci
+      - name: ffmpeg из комплекта умеет субтитры и видеокарты
+        shell: bash
+        run: |
+          FF=$(node -p "require('ffmpeg-static')")
+          "$FF" -hide_banner -version | head -1
+          "$FF" -hide_banner -filters | grep -E " ass |loudnorm"
+          "$FF" -hide_banner -encoders | grep -E "libx264|h264_nvenc|h264_qsv|h264_amf"
+      - run: npm test
+      - name: Сборка установщика
+        run: npx electron-builder --win nsis --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - name: Опубликовать в Releases
+        # релиз только из main: сборка в ветке PR лишь проверяет, что всё собирается
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        working-directory: .
+        run: |
+          gh release delete studio -y --cleanup-tag || true
+          gh release create studio studio-app/dist/ReelsStudio-Setup.exe --title "Reels Studio для Windows" \
+            --notes "Скачай ReelsStudio-Setup.exe и запусти. Инструкция: studio-app/README.md."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReelsStudio-Setup
+          path: studio-app/dist/ReelsStudio-Setup.exe
+          retention-days: 7

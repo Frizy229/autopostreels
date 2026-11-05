@@ -215,6 +215,12 @@ GitHub запускает задачи по расписанию с опозда
 Тесты: `python -m unittest discover -s tests` и `cd widget-app && npm test` (их же запускает workflow «Тесты»).
 История работы: [docs/WORKLOG.md](docs/WORKLOG.md), исправленные баги: [docs/BUGFIXES.md](docs/BUGFIXES.md).
 
+## Reels Studio: нарезки стримов
+
+Отдельное приложение для Windows в `studio-app/`: ищет записи стримов и моменты, делает вертикальные ролики
+с субтитрами под несколько каналов и кладёт их в формате этой очереди (`queue/NNN_имя/<аккаунт>/…`).
+Установщик: Releases → `studio`. Подробно: [studio-app/README.md](studio-app/README.md).
+
 ## TikTok
 
 Рилсы из той же очереди могут уходить и в TikTok (официальный Content Posting API). По умолчанию ролик попадает
