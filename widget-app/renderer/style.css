@@ -67,6 +67,7 @@ h3.toggle { cursor: pointer; } h3 .chev { width: 14px; height: 14px; transition:
 .list { display: flex; flex-direction: column; gap: 6px; }
 .empty { padding: 16px 14px; text-align: center; color: var(--muted); font-size: 12px; border: 1px dashed var(--line); border-radius: 14px; line-height: 1.5; }
 .banner { margin: 6px 0 2px; padding: 10px 12px; border-radius: 12px; background: rgba(248,113,113,.14); color: var(--err); font-size: 12px; }
+.banner.link { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .banner.info { background: var(--card); color: var(--muted); border: 1px solid var(--line); }
 
 /* панель раздела: аккаунты, режим, действия */
