@@ -51,9 +51,13 @@ class Tools {
     return fs.existsSync(p) ? p : which('yt-dlp');
   }
   get whisper() {
+    // В архивах whisper.cpp рядом с whisper-cli.exe лежит main.exe — заглушка, которая только пишет
+    // «main is deprecated» и выходит с кодом 1. В Windows он находится первым (по алфавиту), поэтому ищем
+    // whisper-cli везде, а main берём только в очень старых сборках, где whisper-cli ещё нет.
     const dir = path.join(this.binDir, 'whisper');
-    const found = findFile(dir, (n) => n === exe('whisper-cli') || n === exe('main'));
-    return found || which('whisper-cli');
+    return findFile(dir, (n) => n.toLowerCase() === exe('whisper-cli').toLowerCase())
+      || which('whisper-cli')
+      || findFile(dir, (n, d) => n.toLowerCase() === exe('main').toLowerCase() && !isDeprecationStub(path.join(d, n)));
   }
   modelPath(file) { return path.join(this.binDir, 'models', file); }
 
@@ -108,9 +112,39 @@ function findFile(dir, test, depth = 0) {
   if (depth > 3) return null;
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
-  for (const e of entries) if (e.isFile() && test(e.name)) return path.join(dir, e.name);
+  for (const e of entries) if (e.isFile() && test(e.name, dir)) return path.join(dir, e.name);
   for (const e of entries) if (e.isDirectory()) { const f = findFile(path.join(dir, e.name), test, depth + 1); if (f) return f; }
   return null;
+}
+
+/** main.exe-заглушка из whisper.cpp (examples/deprecation-warning): маленький файл с текстом «is deprecated». */
+function isDeprecationStub(file) {
+  try {
+    const st = fs.statSync(file);
+    if (st.size > 200 * 1024) return false;
+    return fs.readFileSync(file).includes('is deprecated');
+  } catch { return false; }
+}
+
+/** Короткий текст ошибки запуска из вывода программы: последние осмысленные строки. */
+function errorTail(text, n = 3) {
+  return String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(-n).join(' · ').slice(0, 300);
+}
+
+/**
+ * Что значит код выхода Windows-программы, которая не стартовала. Коды NTSTATUS приходят как большие числа
+ * (или отрицательные): 0xC0000135 — нет DLL, 0xC000007B — DLL не той разрядности, 0xC0000139 — DLL не той версии.
+ */
+function exitHint(code) {
+  const u = Number(code) >>> 0;
+  const map = {
+    0xC0000135: 'не хватает DLL (для видеокарты — CUDA-библиотек или драйвера NVIDIA; для любой сборки — Microsoft Visual C++ Redistributable x64)',
+    0xC000007B: 'DLL не той разрядности (нужна x64)',
+    0xC0000139: 'DLL не той версии (обнови драйвер NVIDIA или Visual C++ Redistributable)',
+    0xC000001D: 'процессор не поддерживает нужные инструкции (AVX)',
+    0xC0000005: 'программа упала при запуске',
+  };
+  return map[u] || '';
 }
 
 /**
@@ -175,4 +209,4 @@ function pickWhisperAssets(releases, gpu) {
   throw new Error('В последних релизах whisper.cpp нет сборки для Windows x64');
 }
 
-module.exports = { runnable, Tools, download, whisperAssets, pickWhisperAssets, findFile, unpacked, exe };
+module.exports = { runnable, Tools, download, whisperAssets, pickWhisperAssets, findFile, isDeprecationStub, errorTail, exitHint, unpacked, exe };

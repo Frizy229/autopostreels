@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const T = require('../lib/tools');
+const which = (n) => String(process.env.PATH || '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, T.exe(n))));
 
 (async () => {
   // как сейчас на GitHub: «Latest» v1.9.5 только с исходниками, сборки в пре-релизе b5454
@@ -30,6 +31,27 @@ const T = require('../lib/tools');
   fs.writeFileSync(path.join(dir, 'whisper', 'Release', T.exe('whisper-cli')), '');
   const tools = new T.Tools(dir);
   assert.strictEqual(tools.whisper, path.join(dir, 'whisper', 'Release', T.exe('whisper-cli')), 'whisper-cli во вложенной папке архива');
+  // настоящий архив whisper.cpp: рядом лежит main.exe-заглушка (выходит с кодом 1) — брать нельзя, даже если она первая
+  const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-'));
+  const rel = path.join(stubDir, 'whisper', 'Release');
+  fs.mkdirSync(rel, { recursive: true });
+  fs.writeFileSync(path.join(rel, T.exe('main')), "MZ...WARNING: The binary '%s' is deprecated.\n Please use '%s' instead.");
+  assert.ok(T.isDeprecationStub(path.join(rel, T.exe('main'))));
+  const stubTools = new T.Tools(stubDir);
+  if (!which('whisper-cli')) assert.strictEqual(stubTools.whisper, null, 'одна заглушка main — whisper не найден');
+  fs.writeFileSync(path.join(rel, T.exe('whisper-cli')), 'MZ');
+  assert.strictEqual(stubTools.whisper, path.join(rel, T.exe('whisper-cli')), 'whisper-cli, а не main-заглушка');
+  // очень старая сборка: только настоящий main
+  const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tl-'));
+  fs.mkdirSync(path.join(oldDir, 'whisper'), { recursive: true });
+  fs.writeFileSync(path.join(oldDir, 'whisper', T.exe('main')), 'MZ whisper usage: main [options] file0.wav');
+  if (!which('whisper-cli')) assert.strictEqual(new T.Tools(oldDir).whisper, path.join(oldDir, 'whisper', T.exe('main')));
+  // понятные ошибки запуска
+  assert.match(T.exitHint(-1073741515), /DLL/, '0xC0000135 как отрицательное число');
+  assert.match(T.exitHint(3221225781), /DLL/, '0xC0000135 как беззнаковое');
+  assert.strictEqual(T.exitHint(1), '');
+  assert.strictEqual(T.errorTail('\nload ok\n\nerror: no model\n  bye \n'), 'load ok · error: no model · bye');
+
   assert.ok(tools.modelPath('m.bin').endsWith(path.join('models', 'm.bin')));
   assert.strictEqual(tools.status('m.bin').model, null);
 
@@ -61,7 +83,7 @@ const T = require('../lib/tools');
   assert.strictEqual(prog[prog.length - 1], 1);
   await assert.rejects(T.download(fakeFetch, 'bad', path.join(dir, 'x')), /HTTP 404/);
   fs.rmSync(dir, { recursive: true, force: true });
-  console.log('компоненты и процессы: 18 проверок');
+  console.log('компоненты и процессы: 27 проверок');
 })().catch((e) => { console.error(e); process.exit(1); });
 // бинарник без права на выполнение (npm ci --ignore-scripts): право выдаётся, иначе берётся системный
 if (process.platform !== 'win32') {
