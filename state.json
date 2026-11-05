@@ -159,10 +159,7 @@
     }
   },
   "lanes": {
-    "instagram": {
-      "paused": true
-    },
+    "instagram": {},
     "tiktok": {}
-  },
-  "paused": true
+  }
 }
