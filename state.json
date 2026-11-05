@@ -38,9 +38,7 @@
   },
   "skipped": {},
   "last_started": "2026-11-04",
-  "failures": {
-    "rulezerosurvivel|002_Night-Shift/short-3-count-the-cars.mp4": 2
-  },
+  "failures": {},
   "active": {
     "folder": "002_Night-Shift",
     "date": "2026-11-05",
@@ -87,6 +85,11 @@
         "media_id": "18099678116540566",
         "permalink": "https://www.instagram.com/reel/DfT9AIFNQPz/",
         "at": "2026-11-04T07:47:03+00:00"
+      },
+      "002_Night-Shift/short-3-count-the-cars.mp4": {
+        "media_id": "17894377176615709",
+        "permalink": "https://www.instagram.com/reel/DfWB3LfutJS/",
+        "at": "2026-11-05T03:08:05+00:00"
       }
     },
     "survivelzerorule": {
