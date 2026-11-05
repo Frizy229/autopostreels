@@ -5,6 +5,7 @@ const path = require('path');
 const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, nativeTheme, shell, safeStorage, nativeImage } = require('electron');
 const { buildSnapshot, inspectFolder } = require('./lib/core');
 const { GitHub } = require('./lib/github');
+const tiktok = require('./lib/tiktok');
 
 const DEFAULTS = {
   repo: 'Frizy229/autopostreels', branch: 'main', theme: 'system', material: 'acrylic', tint: 55,
@@ -118,11 +119,12 @@ handle('token:set', (t) => { setToken(String(t || '').trim()); return true; });
 handle('conn:check', async () => gh().check());
 handle('data:refresh', async () => {
   const g = gh();
-  const [queue, state, stats, igCfg] = await Promise.all([g.queue(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json')]);
+  const [queue, state, stats, igCfg, creators] = await Promise.all([g.queue(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json'), g.readJson('tiktok_creator.json')]);
   const accList = ((igCfg && igCfg.accounts) || []).filter((a) => a && a.name);
   const accounts = accList.map((a) => a.name);
   const platforms = Object.fromEntries(accList.map((a) => [a.name, (a.platform || 'instagram').toLowerCase()]));
-  return { snapshot: buildSnapshot(state, stats, queue, new Date(), { scheduleTz: cfg.scheduleTz, accounts, platforms }), at: new Date().toISOString() };
+  const tt = { pending: tiktok.pendingConfirm(queue, state, accList), creators: creators || {} };
+  return { snapshot: buildSnapshot(state, stats, queue, new Date(), { scheduleTz: cfg.scheduleTz, accounts, platforms }), tt, at: new Date().toISOString() };
 });
 handle('folder:pick', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Папка с рилсами' });
@@ -139,6 +141,21 @@ handle('folder:inspect', async (p) => {
 });
 handle('folder:upload', async (p) => gh().uploadFolder(p, (frac, text) => win && win.webContents.send('upload:progress', { frac, text }), await accountNames()));
 handle('folder:delete', async (name) => gh().deleteFolder(String(name)));
+// TikTok: просмотр ролика и подтверждение настроек перед прямой публикацией
+handle('tt:preview', async (rel) => {
+  const dest = path.join(app.getPath('temp'), `reels-preview${path.extname(rel).toLowerCase() || '.mp4'}`);
+  await gh().downloadVideo(`queue/${rel}`, dest);
+  return dest;
+});
+handle('tt:caption', async (rel) => {
+  const t = await gh().req('GET', `/contents/queue/${rel.replace(/\.[^./]+$/, '')}.txt?ref=${encodeURIComponent(cfg.branch)}`, null, true);
+  return t ? String(t).replace(/^\uFEFF/, '').split(/\r?\n/).find((l) => l.trim() && !/^[A-Z ]+(\(.*\))?:/.test(l.trim())) || '' : '';
+});
+handle('tt:confirm', async ({ path: p, form, creator }) => {
+  const settings = tiktok.toSettings(form, creator); // повторная проверка на стороне программы
+  await gh().saveTiktokSettings(p, settings);
+  return true;
+});
 handle('open:url', (u) => { if (/^https:\/\//.test(u)) shell.openExternal(u); return true; });
 handle('win:hide', () => win.hide());
 handle('win:quit', () => { quitting = true; app.quit(); });
