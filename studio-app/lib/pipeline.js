@@ -11,7 +11,7 @@ const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
 const { layoutOutput, writeTexts, checkFolder, nextFolderNumber } = require('./output');
 const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe } = require('./render');
-const { listArgs, downloadArgs, parseList, parseProgress, platformOf, VIDEO_EXT } = require('./sources');
+const { listArgs, downloadArgs, parseList, parseProgress, platformOf, VIDEO_EXT, searchTarget, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
 const { checkMoment } = require('./rules');
 const { whisperArgs, wavArgs, parseWhisperJson, MODELS } = require('./transcribe');
 
@@ -53,6 +53,34 @@ class Pipeline {
   }
   cache(pr, ...p) { const d = path.join(this.cacheDir, pr.id); fs.mkdirSync(d, { recursive: true }); return path.join(d, ...p); }
 
+  /**
+   * Запуск yt-dlp с входом в YouTube по настройке cookies (см. authPlan в sources.js).
+   * Способ, который сработал, запоминается до перезапуска программы. target — ссылка или ytsearch-запрос.
+   */
+  async ytdlp(args, target, opts = {}) {
+    const cfg = this.settings().cookies || {};
+    let plan = authPlan(cfg, target);
+    const key = JSON.stringify(cfg);
+    if (this._auth && this._auth.key === key && plan.length > 1) plan = [this._auth.auth, ...plan.filter((a) => JSON.stringify(a) !== JSON.stringify(this._auth.auth))];
+    const tried = [];
+    let authHit = false, last = null;
+    for (const auth of plan) {
+      const { okIfStdout, ...runOpts } = opts;
+      // eslint-disable-next-line no-await-in-loop
+      const r = await this.tools.run(this.tools.ytdlp, [...cookieArgs(auth), ...args], { ...runOpts, allowFail: true });
+      tried.push(auth);
+      const ok = r.code === 0 || (okIfStdout && r.stdout && r.stdout.toString('utf8').trim());
+      if (ok) { if (needsAuth(target)) this._auth = { key, auth }; return r; }
+      last = r;
+      if (isAuthError(r.stderr)) { authHit = true; continue; }
+      if (auth && isCookieError(r.stderr)) continue;
+      break;
+    }
+    if (authHit) throw Object.assign(new Error(authHelp(tried.filter(Boolean).length ? tried : [])), { code: 'AUTH', res: last });
+    const tail = String(last.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-3).join('\n');
+    throw Object.assign(new Error(`yt-dlp: код ${last.code}\n${tail}`), { res: last });
+  }
+
   async probe(file) {
     const r = await this.tools.run(this.tools.ffprobe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file]);
     return parseProbe(r.stdout.toString('utf8'));
@@ -67,7 +95,7 @@ class Pipeline {
   }
 
   async addUrl(url) {
-    const r = await this.tools.run(this.tools.ytdlp, ['-J', '--no-warnings', '--no-playlist', url]);
+    const r = await this.ytdlp(['-J', '--no-warnings', '--no-playlist', url], url);
     const raw = JSON.parse(r.stdout.toString('utf8'));
     const e = parseList(raw)[0];
     const pr = { id: uid(), created: Date.now(), title: e.title, streamer: e.channel || '',
@@ -78,7 +106,7 @@ class Pipeline {
 
   /** Поиск лонгов/нарезок: запрос, ссылка на канал или плейлист. */
   async search(q, limit = 20) {
-    const r = await this.tools.run(this.tools.ytdlp, listArgs(q, limit), { allowFail: true });
+    const r = await this.ytdlp(listArgs(q, limit), searchTarget(q, limit), { okIfStdout: true });
     const text = r.stdout.toString('utf8').trim();
     if (!text) throw new Error(r.stderr.split(/\r?\n/).filter(Boolean).slice(-2).join(' ') || 'Ничего не найдено');
     return parseList(text);
@@ -90,7 +118,7 @@ class Pipeline {
     if (pr.source.kind === 'file') return pr.source.path;
     const done = fs.readdirSync(path.dirname(this.cache(pr, 'x'))).find((f) => /^audio\.(m4a|webm|opus|mp3|aac)$/.test(f));
     if (done) return this.cache(pr, done);
-    await this.tools.run(this.tools.ytdlp, downloadArgs(pr.source.url, { audioOnly: true, out: this.cache(pr, 'audio.%(ext)s'), ffmpeg: this.tools.ffmpeg }), {
+    await this.ytdlp(downloadArgs(pr.source.url, { audioOnly: true, out: this.cache(pr, 'audio.%(ext)s'), ffmpeg: this.tools.ffmpeg }), pr.source.url, {
       signal, onLine: (l) => { const p = parseProgress(l); if (p != null && onProgress) onProgress(p, 'Скачиваю звук'); },
     });
     const f = fs.readdirSync(path.dirname(this.cache(pr, 'x'))).find((x) => /^audio\./.test(x) && !x.endsWith('.part'));
@@ -101,7 +129,7 @@ class Pipeline {
   async chatTimes(pr, signal) {
     if (pr.source.kind !== 'url') return [];
     try {
-      await this.tools.run(this.tools.ytdlp, downloadArgs(pr.source.url, { chat: true, out: this.cache(pr, 'chat.%(ext)s') }), { signal, allowFail: true });
+      await this.ytdlp(downloadArgs(pr.source.url, { chat: true, out: this.cache(pr, 'chat.%(ext)s') }), pr.source.url, { signal });
       const d = path.dirname(this.cache(pr, 'x'));
       const f = fs.readdirSync(d).find((x) => /^chat\..*\.(json|live_chat\.json)$/.test(x) || /^chat\.(live_chat|rechat)/.test(x));
       return f ? parseChat(fs.readFileSync(path.join(d, f), 'utf8')) : [];
@@ -151,7 +179,7 @@ class Pipeline {
     const a = Math.max(0, Math.floor(start - 2)), b = Math.ceil(end + 2);
     const out = this.cache(pr, `v_${a}_${b}.mp4`);
     if (!fs.existsSync(out)) {
-      await this.tools.run(this.tools.ytdlp, downloadArgs(pr.source.url, { sections: [[a, b]], out, ffmpeg: this.tools.ffmpeg }), {
+      await this.ytdlp(downloadArgs(pr.source.url, { sections: [[a, b]], out, ffmpeg: this.tools.ffmpeg }), pr.source.url, {
         signal, onLine: (l) => { const p = parseProgress(l); if (p != null && onProgress) onProgress(p); },
       });
     }

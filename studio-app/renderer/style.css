@@ -233,11 +233,12 @@ select.input option { background: #1a1d24; }
   animation: pop .25s var(--ease); }
 .job .row { justify-content: space-between; } .job b { font-weight: 600; font-size: 13px; }
 .job small { display: block; color: var(--muted); font-size: 12px; margin: 4px 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job.err small { white-space: pre-line; overflow: visible; }
 .job.err { border-color: rgba(255, 107, 107, .4); }
 @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.98); } }
 .modal { position: fixed; inset: 0; background: rgba(5, 6, 9, .6); display: grid; place-items: center; z-index: 60; backdrop-filter: blur(6px); animation: fade .2s; }
 .modal .dlg { width: min(980px, 92vw); max-height: 90vh; overflow: auto; background: rgba(22, 25, 31, .96); border: 1px solid var(--line-2); border-radius: 18px; padding: 20px; box-shadow: var(--shadow); }
 .modal .dlg h2 { margin: 0 0 4px; font-size: 18px; }
 @keyframes fade { from { opacity: 0; } }
-.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: rgba(24, 27, 34, .95); border: 1px solid var(--line-2); padding: 10px 16px; border-radius: 12px; z-index: 70; animation: pop .2s; box-shadow: var(--shadow); }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: rgba(24, 27, 34, .95); border: 1px solid var(--line-2); padding: 10px 16px; border-radius: 12px; z-index: 70; animation: pop .2s; box-shadow: var(--shadow); white-space: pre-line; max-width: min(620px, calc(100vw - 32px)); }
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .18s; }

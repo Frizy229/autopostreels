@@ -6,6 +6,7 @@ const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net } = require
 const { normalize, LANES } = require('./lib/settings');
 const { LAYOUTS } = require('./lib/layout');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
+const { BROWSERS, COOKIE_MODES } = require('./lib/sources');
 const { Tools, download, whisperAssets, exe, errorTail, exitHint } = require('./lib/tools');
 const { Pipeline } = require('./lib/pipeline');
 const { MODELS, modelUrl } = require('./lib/transcribe');
@@ -77,7 +78,7 @@ const handle = (name, fn) => ipcMain.handle(name, async (_e, ...args) => {
 
 function registerIpc() {
   handle('app:info', () => ({ version: app.getVersion(), appearance: appearance(), userData: userData(),
-    catalog: { layouts: LAYOUTS, subStyles: SUB_STYLES, titleStyles: TITLE_STYLES, lanes: LANES } }));
+    catalog: { layouts: LAYOUTS, subStyles: SUB_STYLES, titleStyles: TITLE_STYLES, lanes: LANES, browsers: BROWSERS, cookieModes: COOKIE_MODES } }));
   handle('settings:get', () => settings);
   handle('settings:set', (patch) => {
     const prevMat = settings.material;
@@ -180,6 +181,10 @@ function registerIpc() {
   // система
   handle('dialog:folder', async (title) => {
     const r = await dialog.showOpenDialog(win, { title, properties: ['openDirectory', 'createDirectory'] });
+    return r.canceled ? null : r.filePaths[0];
+  });
+  handle('dialog:file', async (title, filters) => {
+    const r = await dialog.showOpenDialog(win, { title, properties: ['openFile'], filters: Array.isArray(filters) ? filters : undefined });
     return r.canceled ? null : r.filePaths[0];
   });
   handle('open:path', (p) => shell.openPath(p));

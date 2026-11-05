@@ -6,6 +6,7 @@ const { SUB_STYLES, TITLE_STYLES } = require('./subs');
 const { ENCODERS } = require('./render');
 const { MODELS } = require('./transcribe');
 const { DEFAULT_RULES } = require('./rules');
+const { BROWSERS, COOKIE_MODES } = require('./sources');
 
 const DEFAULTS = {
   theme: 'dark', material: 'acrylic',
@@ -35,6 +36,8 @@ const DEFAULTS = {
   rules: { ...DEFAULT_RULES },
   presets: {},           // рамки вебки/контента по стримерам: { "evelone2004": {cam, content, layout} }
   searchMinMin: 20,      // поиск лонгов: от N минут
+  // вход в YouTube для yt-dlp: auto — при «докажи, что не бот» пробовать cookies браузеров
+  cookies: { mode: 'auto', browser: 'firefox', file: '' },
 };
 
 const LANES = { queue: 'Общая очередь (все сети)', 'queue-instagram': 'Только Instagram', 'queue-tiktok': 'Только TikTok' };
@@ -79,6 +82,9 @@ function normalize(raw) {
   s.theme = pick(s.theme, { dark: 1, light: 1, system: 1 }, 'dark');
   s.searchMinMin = num(s.searchMinMin, 0, 600, DEFAULTS.searchMinMin);
   for (const k of ['vary', 'allowMirror', 'allowSpeed', 'gpu', 'loudnorm', 'subsOn']) s[k] = !!s[k];
+  const ck = { ...DEFAULTS.cookies, ...((raw && raw.cookies && typeof raw.cookies === 'object') ? raw.cookies : {}) };
+  s.cookies = { mode: pick(ck.mode, COOKIE_MODES, 'auto'), browser: pick(ck.browser, BROWSERS, 'firefox'), file: typeof ck.file === 'string' ? ck.file : '' };
+  if (s.cookies.mode === 'file' && !s.cookies.file) s.cookies.mode = 'auto';
   if (!s.presets || typeof s.presets !== 'object') s.presets = {};
   return s;
 }

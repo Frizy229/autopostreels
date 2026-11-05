@@ -26,7 +26,7 @@ function toast(text, ms = 2600) {
   document.body.appendChild(t);
   setTimeout(() => t.remove(), ms);
 }
-const fail = (e) => toast(e.message || String(e), 5000);
+const fail = (e) => toast(e.message || String(e), e && /не бот/.test(e.message || "") ? 12000 : 5000);
 
 // ------------------------------------------------------------------ навигация
 const PAGES = {
@@ -693,6 +693,18 @@ function pageSettings(el) {
         <div class="field"><span>Материал (Windows 11)</span><select class="input" id="mat"><option value="acrylic">акрил</option><option value="mica">слюда</option><option value="none">без стекла</option></select></div>
         <p class="hint" style="margin-top:12px">Данные программы: ${esc(S.info.userData)}</p>
       </div>
+      <div class="card">
+        <h3>Вход в YouTube</h3>
+        <p class="hint">Если YouTube пишет «Sign in to confirm you're not a bot», программе нужны cookies браузера, где ты вошёл в YouTube. Перед загрузкой закрой этот браузер. Лучше всего работает Firefox. Twitch и файлы с диска работают без входа.</p>
+        <div class="stack">
+          <div class="field"><span>Способ</span><select class="input" id="ckMode">${Object.entries(S.cat.cookieModes).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>
+            <small class="muted">${s.cookies.mode === 'auto' ? 'сначала без входа, при проверке «не бот» — cookies Firefox, Edge, Chrome и других по очереди' : ''}</small></div>
+          <div class="field" ${s.cookies.mode === 'browser' ? '' : 'hidden'}><span>Браузер</span><select class="input" id="ckBrowser">${Object.entries(S.cat.browsers).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select></div>
+          <div class="field" ${s.cookies.mode === 'file' ? '' : 'hidden'}><span>Файл cookies.txt (формат Netscape)</span>
+            <div class="row"><input class="input grow" id="ckFile" readonly value="${esc(s.cookies.file)}" placeholder="не выбран"><button class="btn" id="ckPick">${ic('folder-open')}</button></div>
+            <small class="muted">Выгрузить можно расширением «Get cookies.txt LOCALLY», открыв youtube.com под своим аккаунтом.</small></div>
+        </div>
+      </div>
     </div>`;
   $('#model').value = s.whisperModel; $('#enc').value = s.encoder; $('#q').value = s.quality; $('#fps').value = String(s.fps); $('#mat').value = s.material;
   $$('[data-inst]').forEach((b) => { b.onclick = async () => { try { const id = await call('install', b.dataset.inst); S.jobs.set(id, { id, kind: 'install', label: b.dataset.inst, progress: 0 }); renderDock(); } catch (e) { fail(e); } }; });
@@ -702,6 +714,15 @@ function pageSettings(el) {
   $('#q').onchange = (e) => saveSettings({ quality: e.target.value }, true);
   $('#fps').onchange = (e) => saveSettings({ fps: +e.target.value }, true);
   $('#mat').onchange = async (e) => { await saveSettings({ material: e.target.value }, true); document.body.dataset.material = S.info.appearance.win11 && e.target.value !== 'none' ? e.target.value : 'none'; };
+  $('#ckBrowser').value = s.cookies.browser;
+  const setCk = async (patch) => { await saveSettings({ cookies: { ...s.cookies, ...patch } }, true); render(); };
+  $('#ckMode').value = s.cookies.mode;
+  $('#ckMode').onchange = async (e) => {
+    if (e.target.value === 'file' && !s.cookies.file) { const f = await call('pickFile', 'Файл cookies.txt', [{ name: 'cookies.txt', extensions: ['txt'] }]); if (!f) { e.target.value = s.cookies.mode; return; } await setCk({ mode: 'file', file: f }); return; }
+    await setCk({ mode: e.target.value });
+  };
+  $('#ckBrowser').onchange = (e) => setCk({ browser: e.target.value });
+  $('#ckPick').onclick = async () => { const f = await call('pickFile', 'Файл cookies.txt', [{ name: 'cookies.txt', extensions: ['txt'] }]); if (f) await setCk({ file: f, mode: 'file' }); };
   $('#encTest').onclick = async () => {
     $('#encRes').textContent = 'Проверяю…';
     const r = await call('testEncoder', $('#enc').value);
