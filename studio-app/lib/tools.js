@@ -12,6 +12,17 @@ const exe = (n) => (isWin ? `${n}.exe` : n);
 /** Путь к бинарнику из npm-пакета: внутри app.asar запускать нельзя, берём из app.asar.unpacked. */
 const unpacked = (p) => (p ? p.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`) : p);
 
+/**
+ * Бинарник из npm-пакета, если его можно запустить. На Linux/macOS после `npm ci --ignore-scripts`
+ * у файла нет права на выполнение (его ставит скрипт пакета): пробуем выдать, иначе null — возьмём системный.
+ */
+function runnable(p) {
+  if (!p || !fs.existsSync(p)) return null;
+  if (isWin) return p;
+  try { fs.accessSync(p, fs.constants.X_OK); return p; } catch { /* нет права */ }
+  try { fs.chmodSync(p, 0o755); fs.accessSync(p, fs.constants.X_OK); return p; } catch { return null; }
+}
+
 function which(name) {
   const dirs = String(process.env.PATH || '').split(path.delimiter);
   for (const d of dirs) {
@@ -28,11 +39,11 @@ class Tools {
   }
 
   get ffmpeg() {
-    try { const p = unpacked(require('ffmpeg-static')); if (p && fs.existsSync(p)) return p; } catch { /* нет пакета */ }
+    try { const p = runnable(unpacked(require('ffmpeg-static'))); if (p) return p; } catch { /* нет пакета */ }
     return which('ffmpeg') || 'ffmpeg';
   }
   get ffprobe() {
-    try { const p = unpacked(require('@ffprobe-installer/ffprobe').path); if (p && fs.existsSync(p)) return p; } catch { /* нет пакета */ }
+    try { const p = runnable(unpacked(require('@ffprobe-installer/ffprobe').path)); if (p) return p; } catch { /* нет пакета */ }
     return which('ffprobe') || 'ffprobe';
   }
   get ytdlp() {
@@ -146,4 +157,4 @@ function pickWhisperAsset(assets, gpu) {
   return a.browser_download_url;
 }
 
-module.exports = { Tools, download, whisperAssetUrl, pickWhisperAsset, findFile, unpacked, exe };
+module.exports = { runnable, Tools, download, whisperAssetUrl, pickWhisperAsset, findFile, unpacked, exe };

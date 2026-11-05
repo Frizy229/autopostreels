@@ -52,3 +52,13 @@ const T = require('../lib/tools');
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('компоненты и процессы: 18 проверок');
 })().catch((e) => { console.error(e); process.exit(1); });
+// бинарник без права на выполнение (npm ci --ignore-scripts): право выдаётся, иначе берётся системный
+if (process.platform !== 'win32') {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'rx-'));
+  const b = path.join(d, 'ffprobe');
+  fs.writeFileSync(b, '#!/bin/sh\n'); fs.chmodSync(b, 0o644);
+  assert.strictEqual(T.runnable(b), b);
+  fs.accessSync(b, fs.constants.X_OK);
+  assert.strictEqual(T.runnable(path.join(d, 'нет')), null);
+  fs.rmSync(d, { recursive: true, force: true });
+}
