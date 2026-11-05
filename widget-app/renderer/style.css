@@ -78,6 +78,11 @@ h3.toggle { cursor: pointer; } h3 .chev { width: 14px; height: 14px; transition:
 .f-inner { overflow: hidden; min-height: 0; } .f-inner > div { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 5px; }
 .folder .row-card { background: var(--field); border-color: transparent; padding: 7px 10px 7px 13px; }
 
+.f-head .del { width: 26px; height: 26px; flex: none; margin: -4px -4px -4px 0; opacity: .45; } .f-head .del svg { width: 15px; height: 15px; }
+.f-head:hover .del { opacity: .8; } .f-head .del:hover { color: var(--err); opacity: 1; }
+.grp { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 4px 1px; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.grp b { font-weight: 700; } .grp:first-child { padding-top: 2px; }
+.btn.primary-danger { flex: 1; background: var(--err); color: #fff; border: 0; }
 .foot { text-align: center; color: var(--muted); font-size: 11px; margin: 16px 0 4px; }
 .fab { position: absolute; right: 18px; bottom: 18px; width: 48px; height: 48px; border-radius: 50%; border: 0; cursor: pointer; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #fff; box-shadow: 0 6px 18px rgba(80,90,240,.45); display: grid; place-items: center; transition: transform .15s; }
 .fab:hover { transform: scale(1.06); } .fab svg { width: 22px; height: 22px; stroke-width: 2.2; }

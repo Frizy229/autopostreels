@@ -52,4 +52,51 @@ assert.strictEqual(sl.summary.late, 1);
 const sl2 = buildSnapshot({ plans: { '2026-11-03': { folder: '001_b', plan: { 'c.mp4': '2026-11-03T18:00+03:00' } } }, posted: {}, skipped: {} },
   {}, [{ name: '001_b', videos: ['c.mp4'] }], new Date('2026-11-03T15:10:00Z'));
 assert.strictEqual(sl2.todayRows[0].late, false);
+
+// --- папка с подпапками по аккаунтам: у каждого аккаунта свои рилсы
+const sub = {
+  plans: { '2026-11-05': { folder: '003_batch', plan: {
+    'dayzerorules/short-1.mp4': '2026-11-05T10:00+07:00', 'dayzerorules/short-2.mp4': '2026-11-05T22:00+07:00',
+    'rulezerosurvivel/short-1.mp4': '2026-11-05T10:00+07:00', 'rulezerosurvivel/short-2.mp4': '2026-11-05T22:00+07:00' } } },
+  posted: { '003_batch/dayzerorules/short-1.mp4': { at: '2026-11-05T03:00:00+00:00', permalink: 'https://ig/d1' } },
+  posted_acc: { rulezerosurvivel: { '003_batch/rulezerosurvivel/short-1.mp4': { at: '2026-11-05T03:01:00+00:00', permalink: 'https://ig/r1' } },
+                survivelzerorule: { '002_old/survivelzerorule/short-1.mp4': { at: '2026-11-04T03:01:00+00:00' } } },
+  skipped: { 'rulezerosurvivel|003_batch/rulezerosurvivel/short-2.mp4': 'x' },
+};
+const subStats = { '003_batch/dayzerorules/short-1.mp4': { views: 7, likes: 1, comments: 0 }, 'rulezerosurvivel|003_batch/rulezerosurvivel/short-1.mp4': { views: 4, likes: 2, comments: 1 } };
+const subQueue = [{ name: '003_batch', videos: ['dayzerorules/short-1.mp4', 'dayzerorules/short-2.mp4', 'rulezerosurvivel/short-1.mp4', 'rulezerosurvivel/short-2.mp4', 'survivelzerorule/short-1.mp4'] }];
+const ss = buildSnapshot(sub, subStats, subQueue, new Date('2026-11-05T05:00:00Z'), { accounts: ['dayzerorules', 'rulezerosurvivel', 'survivelzerorule'] });
+const sf = ss.folders.find((f) => f.name === '003_batch');
+assert.strictEqual(sf.kind, 'today');
+assert.deepStrictEqual(sf.videos.map((v) => [v.acc, v.name, v.status, v.accounts.length]),
+  [['dayzerorules', 'short-1.mp4', 'done', 1], ['dayzerorules', 'short-2.mp4', 'wait', 1],
+   ['rulezerosurvivel', 'short-1.mp4', 'done', 1], ['rulezerosurvivel', 'short-2.mp4', 'skipped', 1],
+   ['survivelzerorule', 'short-1.mp4', 'queued', 1]]);
+assert.strictEqual(sf.videos[2].views, 4); assert.strictEqual(sf.videos[2].permalink, 'https://ig/r1');
+assert.strictEqual(sf.videos[0].views, 7);
+assert.strictEqual(ss.todayRows.length, 4);
+// папка, опубликованная только у второстепенных аккаунтов, попадает в «Готово»
+assert.ok(ss.folders.some((f) => f.name === '002_old' && f.kind === 'done'));
+// удалили папку из очереди: невышедшие рилсы из плана дня пропадают, вышедшие остаются
+const sd = buildSnapshot(sub, subStats, [], new Date('2026-11-05T05:00:00Z'), { accounts: ['dayzerorules', 'rulezerosurvivel', 'survivelzerorule'] });
+assert.deepStrictEqual(sd.todayRows.map((r) => r.status).sort(), ['done', 'done', 'skipped']);
+
+// --- проверка папки с подпапками
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rw-'));
+for (const acc of ['dayzerorules', 'rulezerosurvivel']) {
+  fs.mkdirSync(path.join(root, acc));
+  for (const n of [1, 2]) {
+    fs.writeFileSync(path.join(root, acc, `short-${n}.mp4`), Buffer.alloc(100));
+    fs.writeFileSync(path.join(root, acc, `short-${n}.txt`), `REELS CAPTION (Instagram):\nhi\nCOVER: cover-${n}.jpg\n`);
+    fs.writeFileSync(path.join(root, acc, `cover-${n}.jpg`), 'x');
+  }
+}
+const ir = inspectFolder(root, ['dayzerorules', 'rulezerosurvivel', 'survivelzerorule']);
+assert.strictEqual(ir.videos, 4); assert.strictEqual(ir.texts, 4); assert.strictEqual(ir.covers, 4);
+assert.deepStrictEqual(ir.groups.map((g) => g.name), ['dayzerorules', 'rulezerosurvivel']);
+assert.strictEqual(ir.errors.length, 0); assert.strictEqual(ir.warnings.length, 0);
+assert.ok(ir.files.some((f) => f.endsWith(path.join('rulezerosurvivel', 'cover-2.jpg'))));
+fs.mkdirSync(path.join(root, 'typo')); fs.writeFileSync(path.join(root, 'typo', 'a.mp4'), 'x');
+assert.strictEqual(inspectFolder(root, ['dayzerorules', 'rulezerosurvivel']).errors.length, 1);
+assert.strictEqual(inspectFolder(root).errors.length, 0); // имена аккаунтов неизвестны: не проверяем
 console.log('ok');

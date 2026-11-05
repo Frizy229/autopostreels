@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('api', {
   pickFolder: () => call('folder:pick'),
   inspect: (p) => call('folder:inspect', p),
   upload: (p) => call('folder:upload', p),
+  deleteFolder: (name) => call('folder:delete', name),
   openUrl: (u) => call('open:url', u),
   hide: () => call('win:hide'),
   quit: () => call('win:quit'),

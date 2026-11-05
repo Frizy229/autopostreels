@@ -268,12 +268,33 @@ def find_cover(video: pathlib.Path, named: str) -> pathlib.Path | None:
     return None
 
 
-def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
-    """Рилсы одной папки по алфавиту (удобно нумеровать: 01_..., 02_...)."""
+def match_account(name: str) -> dict | None:
+    """Подпапка -> аккаунт: имя подпапки равно имени аккаунта (можно с @) или содержит его."""
+    n = name.lower().lstrip("@")
+    for acc in ACTIVE_ACCOUNTS:
+        if acc["name"].lower() == n:
+            return acc
+    hits = [acc for acc in ACTIVE_ACCOUNTS if acc["name"].lower() in n]
+    return max(hits, key=lambda x: len(x["name"])) if hits else None
+
+
+def _videos(d: pathlib.Path) -> list[pathlib.Path]:
+    return sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXT)
+
+
+def _subdirs(folder: pathlib.Path) -> list[pathlib.Path]:
+    return sorted(p for p in folder.iterdir() if p.is_dir() and not p.name.startswith(".") and _videos(p))
+
+
+def has_videos(folder: pathlib.Path) -> bool:
+    return bool(_videos(folder)) or bool(_subdirs(folder))
+
+
+def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], group: str) -> list[dict]:
     items = []
-    for video in sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXT):
-        key = f"{folder.name}/{video.name}"
-        pending = [a for a in ACTIVE_ACCOUNTS if not acc_done(state, a, key)]
+    for video in _videos(d):
+        key = f"{prefix}/{video.name}"
+        pending = [a for a in accounts if not acc_done(state, a, key)]
         if not pending:
             continue
         txt = video.with_suffix(".txt")
@@ -281,6 +302,8 @@ def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
         caption, cover_name = parse_txt(raw)
         items.append({
             "id": key,
+            "plan_key": key.split("/", 1)[1],   # путь внутри папки дня: имя файла или «подпапка/файл»
+            "group": group,                      # рилсы одного аккаунта планируются отдельно
             "video": video,
             "txt": txt if txt.exists() else None,
             "cover": find_cover(video, cover_name),
@@ -290,6 +313,31 @@ def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
             "pending": pending,
         })
     return items
+
+
+def folder_items(folder: pathlib.Path, state: dict) -> list[dict]:
+    """Рилсы папки дня. Два формата:
+    1) плоская папка: все рилсы идут во все аккаунты;
+    2) папка с подпапками по аккаунтам (имя подпапки = имя аккаунта): каждый аккаунт получает только свои рилсы."""
+    items = _dir_items(folder, folder.name, state, ACTIVE_ACCOUNTS, "")
+    for sub in _subdirs(folder):
+        acc = match_account(sub.name)
+        if acc is None:
+            log(f"Подпапка {folder.name}/{sub.name}: нет такого аккаунта (или нет его токена), пропускаю.")
+            continue
+        items += _dir_items(sub, f"{folder.name}/{sub.name}", state, [acc], acc["name"])
+    return items
+
+
+def build_plan(items: list[dict], start: dt.datetime, end: dt.datetime) -> dict:
+    """План дня: рилсы каждого аккаунта равномерно от start до end независимо друг от друга."""
+    groups: dict[str, list[str]] = {}
+    for it in items:
+        groups.setdefault(it.get("group", ""), []).append(it["plan_key"])
+    plan: dict = {}
+    for names in groups.values():
+        plan.update(make_plan(names, start, end))
+    return plan
 
 
 def queue_folders(cfg: dict) -> list[pathlib.Path]:
@@ -373,8 +421,7 @@ def finish_folder(cfg: dict, folder: pathlib.Path) -> None:
 def sweep_finished(cfg: dict, state: dict) -> None:
     """Перенести в posted/ все папки, где каждый рилс уже опубликован или пропущен."""
     for f in queue_folders(cfg):
-        has_video = any(p.is_file() and p.suffix.lower() in VIDEO_EXT for p in f.iterdir())
-        if has_video and not folder_items(f, state):
+        if has_videos(f) and not folder_items(f, state):
             finish_folder(cfg, f)
             if (state.get("active") or {}).get("folder") == f.name:
                 state["active"] = None
@@ -401,9 +448,9 @@ def schedule(cfg: dict, state: dict, now: dt.datetime) -> tuple[pathlib.Path | N
         # остались рилсы со вчера: раскидываем остаток на сегодня
         if now < start:
             return None, []
-        names = [i["video"].name for i in folder_items(folder, state)]
-        active.update(date=today.isoformat(), plan=make_plan(names, max(now, start), max(end, now)))
-        log(f"Папка {folder.name}: переношу {len(names)} оставшихся рилсов на сегодня.")
+        left = folder_items(folder, state)
+        active.update(date=today.isoformat(), plan=build_plan(left, max(now, start), max(end, now)))
+        log(f"Папка {folder.name}: переношу {len(left)} оставшихся рилсов на сегодня.")
 
     if not active:
         if state.get("last_started") == today.isoformat() or not (start <= now < end):
@@ -413,7 +460,7 @@ def schedule(cfg: dict, state: dict, now: dt.datetime) -> tuple[pathlib.Path | N
             if items:
                 folder = candidate
                 first = start if now - start < dt.timedelta(hours=1) else now
-                plan = make_plan([i["video"].name for i in items], first, end)
+                plan = build_plan(items, first, end)
                 state["active"] = active = {"folder": folder.name, "date": today.isoformat(), "plan": plan}
                 state["last_started"] = today.isoformat()
                 log(f"Сегодня публикую папку {folder.name}: {len(items)} рилсов, "
@@ -424,7 +471,7 @@ def schedule(cfg: dict, state: dict, now: dt.datetime) -> tuple[pathlib.Path | N
 
     plan = active["plan"]
     due = [i for i in folder_items(folder, state)
-           if dt.datetime.fromisoformat(plan.get(i["video"].name, now.isoformat())) <= now]
+           if dt.datetime.fromisoformat(plan.get(i["plan_key"], now.isoformat())) <= now]
     return folder, due
 
 
@@ -575,12 +622,11 @@ def cmd_post(args) -> int:
             items = folder_items(folder, state)
             if not items:
                 continue
-            plan = make_plan([i["video"].name for i in items],
-                             at_time(now.date(), cfg["day_start"], tz), at_time(now.date(), cfg["day_end"], tz))
+            plan = build_plan(items, at_time(now.date(), cfg["day_start"], tz), at_time(now.date(), cfg["day_end"], tz))
             print(f"=== Папка {folder.name}: {len(items)} рилсов")
             for i in items:
                 cover = i["cover"].name if i["cover"] else f"кадр {cfg['thumb_offset_ms']} мс"
-                print(f"--- {plan[i['video'].name][11:16]}  {i['video'].name}  (обложка: {cover})")
+                print(f"--- {plan[i['plan_key']][11:16]}  {i['plan_key']}  (обложка: {cover})")
                 for n, acc in enumerate(ACTIVE_ACCOUNTS):
                     print(f"[@{acc['name']}]\n{build_caption(cfg, caption_for(i, acc, n))}\n")
         return 0
@@ -752,6 +798,24 @@ def _check_one(cfg: dict, acc: dict) -> int:
     return 0
 
 
+def cmd_remove(args) -> int:
+    """Убрать папку из очереди (без публикации). Опубликованное остаётся в state.json."""
+    import shutil
+    cfg = load_config()
+    state = load_state()
+    name = args.name.strip().strip("/")
+    target = ROOT / cfg["queue_dir"] / name
+    if not name or "/" in name or ".." in name or not target.is_dir():
+        log(f"Папка «{args.name}» не найдена в {cfg['queue_dir']}/.")
+        return 1
+    shutil.rmtree(target)
+    if (state.get("active") or {}).get("folder") == name:
+        state["active"] = None
+    save_state(state)
+    log(f"Папка {name} удалена из очереди.")
+    return 0
+
+
 def cmd_refresh(args) -> int:
     token = env("IG_TOKEN")
     mask(token)
@@ -802,6 +866,9 @@ def main() -> int:
     sp.set_defaults(func=cmd_post)
     sub.add_parser("check").set_defaults(func=cmd_check)
     sub.add_parser("stats").set_defaults(func=cmd_stats)
+    rp = sub.add_parser("remove")
+    rp.add_argument("name", help="имя папки в queue/, например 003_Metro")
+    rp.set_defaults(func=cmd_remove)
     sub.add_parser("refresh-token").set_defaults(func=cmd_refresh)
     args = p.parse_args()
     if args.cmd == "post":

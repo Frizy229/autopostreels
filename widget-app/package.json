@@ -1,14 +1,14 @@
 {
   "name": "reels-widget",
   "productName": "Reels Widget",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "description": "Виджет автопостера рилсов: очередь, план дня и результаты",
   "main": "main.js",
   "author": "Alex",
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "test": "node test/core.test.js",
+    "test": "node test/core.test.js && node test/github.test.js",
     "dist": "electron-builder --win nsis --publish never"
   },
   "devDependencies": {

@@ -60,11 +60,19 @@ function folderHtml(f) {
   const pct = f.total ? Math.round((f.done / f.total) * 100) : 0;
   const open = openSet.has(f.name) ? ' open' : '';
   const badge = f.kind === 'today' ? '<span class="chip today">сегодня</span>' : '';
+  const trash = f.kind === 'done' ? '' : `<button class="ibtn del" data-del="${esc(f.name)}" title="Убрать папку из очереди"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12h10l1-12M9 7V4h6v3"/></svg></button>`;
   return `<div class="folder${open}" data-name="${esc(f.name)}">
     <div class="f-head"><svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
       <div class="f-main"><div class="f-name">${esc(f.name)}</div><div class="prog"><i style="width:${pct}%"></i></div></div>
-      ${badge}<span class="f-count">${f.done}/${f.total}</span></div>
-    <div class="f-body"><div class="f-inner"><div>${f.videos.map((v) => rowHtml(v)).join('')}</div></div></div></div>`;
+      ${badge}<span class="f-count">${f.done}/${f.total}</span>${trash}</div>
+    <div class="f-body"><div class="f-inner"><div>${folderRows(f)}</div></div></div></div>`;
+}
+// рилсы папки; если папка разложена по аккаунтам, показываем группами
+function folderRows(f) {
+  if (!f.videos.some((v) => v.acc)) return f.videos.map((v) => rowHtml(v)).join('');
+  const groups = new Map();
+  for (const v of f.videos) { const k = v.acc || 'все аккаунты'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
+  return [...groups].map(([acc, vs]) => `<div class="grp"><b>${esc(acc)}</b><span>${vs.filter((v) => v.status === 'done').length}/${vs.length}</span></div>${vs.map((v) => rowHtml(v)).join('')}`).join('');
 }
 const empty = (t) => `<div class="empty">${t}</div>`;
 
@@ -74,7 +82,7 @@ function render() {
   $('todayTitle').textContent = rows.length
     ? `Сегодня · ${s.done} из ${s.total}${s.next ? ` · дальше в ${timeOf(s.next)}` : s.done === s.total ? ' · день закрыт' : ''}`
     : 'Сегодня';
-  $('todayList').innerHTML = rows.length ? rows.map((r) => rowHtml(r, r.folder)).join('')
+  $('todayList').innerHTML = rows.length ? rows.map((r) => rowHtml(r, r.acc ? `${r.folder} · ${r.acc}` : r.folder)).join('')
     : empty('На сегодня плана нет.<br>План появится, когда начнётся день публикаций.');
   const queue = snap.folders.filter((f) => f.kind !== 'done'), done = snap.folders.filter((f) => f.kind === 'done');
   $('queueTitle').textContent = queue.length ? `Очередь · ${plural(queue.length, 'папка', 'папки', 'папок')}` : 'Очередь';
@@ -86,6 +94,8 @@ function render() {
 }
 
 document.addEventListener('click', (e) => {
+  const del = e.target.closest('[data-del]');
+  if (del) { askDelete(del.dataset.del); return; }
   const head = e.target.closest('.f-head');
   if (head) {
     const f = head.parentElement; f.classList.toggle('open');
@@ -124,6 +134,34 @@ function schedule() {
   if (m > 0) timer = setInterval(() => { if (!busy) refresh(); }, m * 60000);
 }
 
+// ------------------------------------------------------------ удаление папки из очереди
+let delName = '';
+function askDelete(name) {
+  const f = snap && snap.folders.find((x) => x.name === name);
+  if (!f) return;
+  const left = f.videos.filter((v) => v.status !== 'done').length;
+  delName = name;
+  $('delTitle').textContent = `Убрать queue/${name}?`;
+  $('delText').textContent = `Не опубликовано рилсов: ${left} из ${f.total}. Они исчезнут из очереди и больше не выйдут. Уже опубликованное в Instagram останется.`;
+  $('delStatus').textContent = '';
+  $('delGo').disabled = false; $('delGo').textContent = 'Убрать'; $('delCancel').disabled = false;
+  $('delSheet').hidden = false;
+}
+$('delCancel').addEventListener('click', () => { $('delSheet').hidden = true; });
+$('delGo').addEventListener('click', async () => {
+  $('delGo').disabled = true; $('delGo').textContent = 'Убираю…'; $('delCancel').disabled = true; $('delStatus').textContent = '';
+  try {
+    const n = await bridge.deleteFolder(delName);
+    $('delSheet').hidden = true;
+    openSet.delete(delName); localStorage.setItem('open', JSON.stringify([...openSet]));
+    toast(`Папка ${delName} убрана из очереди (${plural(n, 'файл', 'файла', 'файлов')})`);
+    refresh();
+  } catch (e) {
+    $('delStatus').textContent = e.message; $('delStatus').style.color = 'var(--err)';
+    $('delGo').disabled = false; $('delGo').textContent = 'Повторить'; $('delCancel').disabled = false;
+  }
+});
+
 // ------------------------------------------------------------ загрузка папки
 async function addFolders(paths) {
   pending.push(...paths.filter(Boolean));
@@ -137,8 +175,9 @@ async function showNext() {
   $('pvTitle').textContent = `queue/${name}`;
   const more = pending.length > 1 ? ` · ещё ${pending.length - 1} в ожидании` : '';
   $('pvCounts').textContent = `${plural(info.videos, 'видео', 'видео', 'видео')} · описаний ${info.texts} · обложек ${info.covers} · ${(info.size / 1e6).toFixed(0)} МБ${more}`;
-  const notes = [...info.errors.map((t) => `<div class="e">✗ ${esc(t)}</div>`), ...info.warnings.map((t) => `<div class="w">! ${esc(t)}</div>`)];
-  $('pvNotes').innerHTML = notes.length ? notes.join('') : '<div class="g">✓ Всё на месте</div>';
+  const gl = (info.groups || []).map((g) => `<div class="g">${esc(g.name)}: ${plural(g.videos, 'видео', 'видео', 'видео')}, описаний ${g.texts}, обложек ${g.covers}</div>`);
+  const notes = [...gl, ...info.errors.map((t) => `<div class="e">✗ ${esc(t)}</div>`), ...info.warnings.map((t) => `<div class="w">! ${esc(t)}</div>`)];
+  $('pvNotes').innerHTML = (info.errors.length || info.warnings.length) ? notes.join('') : (gl.join('') + '<div class="g">✓ Всё на месте</div>');
   $('pvBar').hidden = true; $('pvStatus').textContent = '';
   $('pvGo').disabled = info.errors.length > 0; $('pvGo').textContent = 'Загрузить в очередь'; $('pvCancel').disabled = false;
   $('sheet').hidden = false;
