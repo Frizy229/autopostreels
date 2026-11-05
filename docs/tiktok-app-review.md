@@ -44,7 +44,7 @@ TikTok смотрит демо-видео и может заблокироват
 4. Телефон: уведомление TikTok → черновик → правка подписи → «Опубликовать».
 5. Виджет: у аккаунта TikTok статус «в черновиках».
 
-Домен сайта, Terms и Privacy: ссылки на `docs/terms.md` и `docs/privacy.md` в этом репозитории.
+Домен сайта, Terms и Privacy: сайт https://frizy229.github.io/autopostreels/ (GitHub Pages).
 
 ---
 

@@ -16,6 +16,17 @@
 - В режиме `inbox` TikTok **не принимает подпись и обложку** от приложения: их ставишь сам при публикации. Подпись берётся из блока `REELS CAPTION (TikTok):` в .txt, если он есть, иначе из подписи Instagram.
 - Статистику TikTok скрипт пока не собирает.
 
+## Шаг 0. Сайт на GitHub Pages (TikTok требует подтверждённый адрес)
+
+TikTok не принимает ссылки на github.com/... («URL is not verified»): адрес нужно подтвердить, загрузив на него файл.
+Поэтому используем бесплатный сайт GitHub Pages:
+
+1. Смержи PR с папкой `docs/`.
+2. Репозиторий → Settings → Pages → Source: **Deploy from a branch**, Branch: `main`, папка **/docs** → Save.
+3. Через 1-2 минуты откроется `https://frizy229.github.io/autopostreels/`.
+4. В приложении TikTok: **URL properties** → Add → **URL prefix** → `https://frizy229.github.io/autopostreels/` → скачай файл подтверждения
+   (`tiktok....txt`) и пришли его содержимое мне, я положу файл в `docs/`. После этого нажми **Verify**.
+
 ## Шаг 1. Приложение на developers.tiktok.com
 
 1. Зайди на https://developers.tiktok.com → **Log in** (тем же TikTok-аккаунтом или почтой) → **Manage apps** → **Connect an app**. Тип: Individual.
@@ -24,11 +35,11 @@
    - **Icon**: любая квадратная картинка 1024×1024
    - **Category**: Video / Photo & Video
    - **Description**: возьми из `docs/tiktok-app-review.md`
-   - **Terms of Service URL**: `https://github.com/Frizy229/autopostreels/blob/main/docs/terms.md`
-   - **Privacy Policy URL**: `https://github.com/Frizy229/autopostreels/blob/main/docs/privacy.md`
-   - **Platforms**: Web, адрес сайта `https://github.com/Frizy229/autopostreels`
+   - **Terms of Service URL**: `https://frizy229.github.io/autopostreels/terms`
+   - **Privacy Policy URL**: `https://frizy229.github.io/autopostreels/privacy`
+   - **Platforms**: Web, адрес сайта `https://frizy229.github.io/autopostreels/`
 3. **Add products**:
-   - **Login Kit** → Redirect URI (Web): `https://github.com/Frizy229/autopostreels`
+   - **Login Kit** → Redirect URI (Web): `https://frizy229.github.io/autopostreels/`
    - **Content Posting API** → включи **Upload**. **Direct Post** пока не включай.
 4. **Scopes**: `user.info.basic`, `video.upload`.
 5. Сначала попробуй **Sandbox** (вкладка Sandbox → Create sandbox → Target users → добавь свой TikTok-аккаунт). Песочнице не нужна проверка TikTok. Если загрузка в черновики в песочнице заработает, на этом всё. Если нет, жми **Submit for review** (текст и сценарий видео в `docs/tiktok-app-review.md`).
