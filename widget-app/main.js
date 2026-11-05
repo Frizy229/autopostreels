@@ -128,12 +128,17 @@ handle('folder:pick', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Папка с рилсами' });
   return r.canceled ? null : r.filePaths[0];
 });
-handle('folder:inspect', (p) => {
+// имена аккаунтов из config.json репозитория (для проверки подпапок); если не прочиталось, не проверяем
+const accountNames = async () => {
+  try { return (((await gh().readJson('config.json')).accounts) || []).map((a) => a.name).filter(Boolean); } catch { return []; }
+};
+handle('folder:inspect', async (p) => {
   if (!fs.statSync(p).isDirectory()) throw new Error('Перетащи именно папку, а не отдельные файлы.');
-  const { files, ...info } = inspectFolder(p);
+  const { files, ...info } = inspectFolder(p, await accountNames());
   return info;
 });
-handle('folder:upload', async (p) => gh().uploadFolder(p, (frac, text) => win && win.webContents.send('upload:progress', { frac, text })));
+handle('folder:upload', async (p) => gh().uploadFolder(p, (frac, text) => win && win.webContents.send('upload:progress', { frac, text }), await accountNames()));
+handle('folder:delete', async (name) => gh().deleteFolder(String(name)));
 handle('open:url', (u) => { if (/^https:\/\//.test(u)) shell.openExternal(u); return true; });
 handle('win:hide', () => win.hide());
 handle('win:quit', () => { quitting = true; app.quit(); });

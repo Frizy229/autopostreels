@@ -2,7 +2,7 @@
   "timezone": "Asia/Tomsk",
   "day_start": "10:00",
   "day_end": "22:00",
-  "max_posts_per_run": 3,
+  "max_posts_per_run": 6,
   "caption_template": "{text}\n\n{hashtags}",
   "hashtags": "",
   "default_text": "",

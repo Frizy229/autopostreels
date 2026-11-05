@@ -34,7 +34,7 @@
   </main>
 
   <button id="fab" class="fab" title="Добавить папку с рилсами"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
-  <div id="dropOverlay" class="overlay" hidden><div><b>Отпусти папку здесь</b><span>видео, описания и обложки</span></div></div>
+  <div id="dropOverlay" class="overlay" hidden><div><b>Отпусти папку здесь</b><span>видео, описания и обложки (можно с подпапками по аккаунтам)</span></div></div>
 
   <div id="sheet" class="sheet" hidden>
     <div class="sheet-card">
@@ -44,6 +44,15 @@
       <div id="pvBar" class="bar" hidden><i></i></div>
       <div id="pvStatus" class="muted"></div>
       <div class="sheet-btns"><button id="pvGo" class="btn primary">Загрузить в очередь</button><button id="pvCancel" class="btn">Отмена</button></div>
+    </div>
+  </div>
+
+  <div id="delSheet" class="sheet" hidden>
+    <div class="sheet-card">
+      <div id="delTitle" class="pv-title"></div>
+      <div id="delText" class="muted"></div>
+      <div id="delStatus" class="muted"></div>
+      <div class="sheet-btns"><button id="delGo" class="btn primary-danger">Убрать</button><button id="delCancel" class="btn">Отмена</button></div>
     </div>
   </div>
 

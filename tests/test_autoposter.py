@@ -242,6 +242,88 @@ COVER (Instagram @two): c2.jpg
         self.assertEqual(cap.count("#"), 30)
 
 
+class SubfolderTests(Base):
+    """Папка дня с подпапками по аккаунтам: каждый аккаунт получает только свои рилсы."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_accounts("dayzerorules", "rulezerosurvivel", "survivelzerorule")
+        for acc in ("dayzerorules", "rulezerosurvivel", "survivelzerorule"):
+            self.folder(f"001_batch/{acc}", [f"short-{i}.mp4" for i in range(1, 8)],
+                        txt=f"REELS CAPTION (Instagram):\ncap {acc}\n")
+
+    def items(self):
+        return a.folder_items(self.root / "queue" / "001_batch", self.state)
+
+    def test_items_belong_to_own_account(self):
+        items = self.items()
+        self.assertEqual(len(items), 21)
+        for it in items:
+            self.assertEqual([x["name"] for x in it["pending"]], [it["group"]])
+        self.assertEqual(items[0]["id"], "001_batch/dayzerorules/short-1.mp4")
+
+    def test_plan_per_account_independent(self):
+        plan = a.build_plan(self.items(), at(10), at(22))
+        self.assertEqual(len(plan), 21)
+        for acc in ("dayzerorules", "rulezerosurvivel", "survivelzerorule"):
+            times = [plan[f"{acc}/short-{i}.mp4"][11:16] for i in range(1, 8)]
+            self.assertEqual(times, ["10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"])
+
+    def test_schedule_due_first_slot_three_reels(self):
+        folder, due = a.schedule(self.cfg, self.state, at(10, 5))
+        self.assertEqual(folder.name, "001_batch")
+        self.assertEqual(sorted(i["group"] for i in due), ["dayzerorules", "rulezerosurvivel", "survivelzerorule"])
+        self.assertTrue(all(i["video"].name == "short-1.mp4" for i in due))
+
+    def test_unknown_subfolder_ignored(self):
+        self.folder("001_batch/stranger", ["x.mp4"])
+        self.assertEqual(len(self.items()), 21)
+
+    def test_subfolder_name_with_at_and_suffix(self):
+        self.folder("002_b/@dayzerorules", ["a.mp4"])
+        self.folder("002_b/rulezerosurvivel_reels", ["b.mp4"])
+        items = a.folder_items(self.root / "queue" / "002_b", self.state)
+        self.assertEqual(sorted(i["group"] for i in items), ["dayzerorules", "rulezerosurvivel"])
+
+    def test_done_only_when_every_account_finished(self):
+        for it in self.items():
+            if it["group"] != "survivelzerorule":
+                acc = it["pending"][0]
+                a.acc_posted(self.state, acc)[it["id"]] = {"at": "x"}
+        a.sweep_finished(self.cfg, self.state)
+        self.assertTrue((self.root / "queue" / "001_batch").exists())
+        for it in self.items():
+            a.acc_posted(self.state, it["pending"][0])[it["id"]] = {"at": "x"}
+        a.sweep_finished(self.cfg, self.state)
+        self.assertFalse((self.root / "queue" / "001_batch").exists())
+        self.assertTrue((self.root / "posted" / "001_batch").exists())
+
+    def test_flat_and_subfolders_together(self):
+        self.folder("001_batch", ["common.mp4"])
+        items = self.items()
+        self.assertEqual(len(items), 22)
+        flat = [i for i in items if i["group"] == ""][0]
+        self.assertEqual(len(flat["pending"]), 3)
+
+    def test_remove_folder(self):
+        self.state["active"] = {"folder": "001_batch", "date": "2026-11-04", "plan": {}}
+        a.save_state(self.state)
+        self.assertEqual(a.cmd_remove(argparse.Namespace(name="001_batch")), 0)
+        self.assertFalse((self.root / "queue" / "001_batch").exists())
+        self.assertIsNone(a.load_state()["active"])
+        self.assertEqual(a.cmd_remove(argparse.Namespace(name="001_batch")), 1)
+        self.assertEqual(a.cmd_remove(argparse.Namespace(name="../x")), 1)
+
+    def test_deleted_active_folder_moves_on(self):
+        a.schedule(self.cfg, self.state, at(10, 5))
+        import shutil
+        shutil.rmtree(self.root / "queue" / "001_batch")
+        self.folder("002_next", ["1.mp4"])
+        a.save_state(self.state)
+        folder, due = a.schedule(self.cfg, self.state, at(12, 0))
+        self.assertIsNone(folder)  # сегодня уже стартовали, следующая папка завтра
+
+
 class FakeIG:
     """Подмена Instagram: считает публикации, умеет падать по сценарию."""
     log = []
@@ -278,12 +360,10 @@ class FakeIG:
         return f"https://ig/{mid}"
 
 
-class PostTests(Base):
+class PostBase(Base):
     def setUp(self):
         super().setUp()
         FakeIG.log, FakeIG.fail_upload, FakeIG.fail_always = [], {}, set()
-        self.folder("001_a", ["1.mp4", "2.mp4", "3.mp4"],
-                    txt="REELS CAPTION (Instagram @one):\nC-one\n\nREELS CAPTION (Instagram @two):\nC-two\n")
         (self.root / "config.json").write_text(json.dumps({
             "timezone": "Asia/Tomsk",
             "accounts": [{"name": "one", "token_env": "T1"}, {"name": "two", "token_env": "T2", "user_id": "9"}]}))
@@ -304,6 +384,13 @@ class PostTests(Base):
 
     def state_now(self):
         return a.load_state()
+
+
+class PostTests(PostBase):
+    def setUp(self):
+        super().setUp()
+        self.folder("001_a", ["1.mp4", "2.mp4", "3.mp4"],
+                    txt="REELS CAPTION (Instagram @one):\nC-one\n\nREELS CAPTION (Instagram @two):\nC-two\n")
 
     def test_posts_to_all_accounts_with_own_captions(self):
         self.run_post(at(10, 5))
@@ -364,6 +451,27 @@ class PostTests(Base):
         n = len(FakeIG.log)
         self.run_post(at(10, 6))
         self.assertEqual(len(FakeIG.log), n)
+
+
+class PostSubfolderTests(PostBase):
+    def setUp(self):
+        super().setUp()
+        for acc in ("one", "two"):
+            self.folder(f"001_b/{acc}", ["1.mp4", "2.mp4"], txt=f"REELS CAPTION (Instagram):\nC-{acc}\n")
+
+    def test_each_account_posts_only_own_reels(self):
+        self.run_post(at(10, 5))
+        st = self.state_now()
+        self.assertEqual(list(st["posted"]), ["001_b/one/1.mp4"])
+        self.assertEqual(list(st["posted_acc"]["two"]), ["001_b/two/1.mp4"])
+        caps = sorted((e[1], e[2]) for e in FakeIG.log if e[0] == "container")
+        self.assertEqual(caps, [("tok1", "C-one"), ("tok2", "C-two")])
+
+    def test_batch_finishes_after_all(self):
+        for hour in (10, 22):
+            self.run_post(at(hour, 5))
+        self.assertTrue((self.root / "posted" / "001_b").exists())
+        self.assertEqual(len([e for e in FakeIG.log if e[0] == "publish"]), 4)
 
 
 if __name__ == "__main__":
