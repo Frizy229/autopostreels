@@ -27,6 +27,7 @@ const DEFAULTS = {
   lang: 'ru', whisperModel: 'large-v3-turbo', gpu: true,
   encoder: 'nvenc', quality: 'best', loudnorm: true, fps: 30,
   outputDir: '', lane: 'queue',
+  autoSend: true,        // после сборки сразу отдать папку виджету автопостера (он загрузит её в очередь)
   texts: {
     captionInstagram: '{title}\n\ntwitch: evelone2004\n{hashtags}',
     captionTiktok: '{title} twitch: evelone2004 {hashtags}',
@@ -45,6 +46,7 @@ const DEFAULTS = {
   net: { mode: 'system', proxy: '' },
 };
 
+const MAX_CHANNELS = 60;
 const LANES = { queue: 'Общая очередь (все сети)', 'queue-instagram': 'Только Instagram', 'queue-tiktok': 'Только TikTok' };
 
 const num = (v, lo, hi, d) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
@@ -67,7 +69,7 @@ function normalize(raw) {
   s.fillerQueries = fq.length ? fq : [...FILLER_QUERIES];
   s.fillerCC = !!s.fillerCC;
   let ch = Array.isArray(s.channels) ? s.channels : [];
-  ch = ch.slice(0, 20).map((c, i) => {
+  ch = ch.slice(0, MAX_CHANNELS).map((c, i) => {
     const o = typeof c === 'string' ? { name: c } : (c && typeof c === 'object' ? c : {});
     return { ...o, name: String(o.name || '').trim().replace(/^@+/, '') || `channel${i + 1}` };
   });
@@ -91,7 +93,7 @@ function normalize(raw) {
   s.lang = /^[a-z]{2}$|^auto$/.test(s.lang) ? s.lang : 'ru';
   s.theme = pick(s.theme, { dark: 1, light: 1, system: 1 }, 'dark');
   s.searchMinMin = num(s.searchMinMin, 0, 600, DEFAULTS.searchMinMin);
-  for (const k of ['vary', 'allowMirror', 'allowSpeed', 'gpu', 'loudnorm', 'subsOn']) s[k] = !!s[k];
+  for (const k of ['vary', 'allowMirror', 'allowSpeed', 'gpu', 'loudnorm', 'subsOn', 'autoSend']) s[k] = !!s[k];
   const ck = { ...DEFAULTS.cookies, ...((raw && raw.cookies && typeof raw.cookies === 'object') ? raw.cookies : {}) };
   s.cookies = { mode: pick(ck.mode, COOKIE_MODES, 'auto'), browser: pick(ck.browser, BROWSERS, 'firefox'), file: typeof ck.file === 'string' ? ck.file : '' };
   if (s.cookies.mode === 'file' && !s.cookies.file) s.cookies.mode = 'auto';
@@ -101,4 +103,4 @@ function normalize(raw) {
   return s;
 }
 
-module.exports = { DEFAULTS, LANES, normalize };
+module.exports = { DEFAULTS, LANES, MAX_CHANNELS, normalize };

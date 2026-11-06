@@ -39,5 +39,6 @@ contextBridge.exposeInMainWorld('api', {
   onProgress: (cb) => on('upload:progress', cb),
   onAppearance: (cb) => on('appearance', cb),
   onRefresh: (cb) => on('refresh', cb),
+  onHandoff: (cb) => on('handoff', cb),
   onConfig: (cb) => on('cfg', cb),
 });

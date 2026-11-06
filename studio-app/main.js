@@ -5,6 +5,7 @@ const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net, session } = require('electron');
 const { normalize, LANES } = require('./lib/settings');
 const { LAYOUTS, FITS, CAM_LAYOUTS } = require('./lib/layout');
+const handoff = require('./lib/handoff');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
 const { BROWSERS, COOKIE_MODES, NET_MODES, proxyFromPac } = require('./lib/sources');
 const { Tools, download, whisperAssets, exe, errorTail, exitHint } = require('./lib/tools');
@@ -207,6 +208,11 @@ function registerIpc() {
     shell.showItemInFolder(f);
     return true;
   });
+  // автопостер: папку грузит виджет (Reels Widget) — через общую папку %APPDATA%\Reels Handoff
+  const hoDir = () => handoff.handoffDir(app.getPath('appData'));
+  handle('handoff:send', (folder) => handoff.request(hoDir(), { folder, lane: handoff.laneOfQueue(settings.lane), name: path.basename(folder) }));
+  handle('handoff:status', (id) => handoff.status(hoDir(), id));
+  handle('handoff:accounts', () => handoff.readAccounts(hoDir(), handoff.laneOfQueue(settings.lane) === 'shared' ? '' : handoff.laneOfQueue(settings.lane)));
   handle('open:path', (p) => shell.openPath(p));
   handle('open:show', (p) => shell.showItemInFolder(p));
   handle('open:url', (u) => { if (/^https?:\/\//.test(u)) shell.openExternal(u); });

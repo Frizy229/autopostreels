@@ -536,6 +536,8 @@ bridge.onProgress(({ frac, text }) => {
   $('pvStatus').className = 'muted small'; $('pvStatus').textContent = text;
 });
 $('pvGo').addEventListener('click', upload);
+// папка пришла из Reels Studio: виджет грузит её сам, здесь только сообщение
+bridge.onHandoff(({ text, ok }) => toast(ok ? text : `⚠ ${text}`, ok ? 5000 : 12000));
 $('pvCancel').addEventListener('click', () => { pending.shift(); delete $('pvTexts').dataset.ready; if (!pending.length) $('sheet').hidden = true; else showNext(); });
 $('fab').addEventListener('click', async () => { const p = await bridge.pickFolder().catch(() => []); if (p && p.length) addFolders(p); });
 

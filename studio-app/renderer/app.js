@@ -85,7 +85,11 @@ function jobUpdate(j) {
       const r = j.result || {};
       toast(`В библиотеку фона добавлено: ${(r.added || []).length}${(r.skipped || []).length ? `, уже были: ${r.skipped.length}` : ''}${(r.failed || []).length ? `, не скачалось: ${r.failed.length}` : ''}`, 4000);
     }
-    else if (cur.kind === 'build') { toast('Папка готова'); if (S.page === 'build') render(); }
+    else if (cur.kind === 'build') {
+      toast('Папка готова');
+      if (S.settings.autoSend && j.result && j.result.folder && !(j.result.problems || []).length) sendToAutoposter(cur);
+      if (S.page === 'build') render();
+    }
     setTimeout(() => { S.jobs.delete(j.id); renderDock(); }, j.error ? 9000 : 3500);
   }
   if (cur.kind === 'filler' && j.done) { S.fill.busy = false; refreshFillerLib(); }
@@ -652,6 +656,7 @@ function pageChannels(el) {
           <div class="chan"><span class="n num">${i + 1}</span><input class="input" data-ch="${i}" value="${esc(c.name)}">
             <span class="badge" title="раскладка">${esc((S.cat.layouts[s.formats[i % s.formats.length]] || '').split(',')[0])}</span>
             <span class="badge" title="субтитры">${esc((S.cat.subStyles[s.subStyles[i % s.subStyles.length]] || {}).name || '')}</span></div>`).join('')}</div>
+        <div class="row" style="margin-top:10px"><button class="btn sm" id="chFromAp">${ic('users', 'sm')}Взять аккаунты из автопостера</button><small class="muted grow">имена должны совпадать с аккаунтами, иначе виджет не примет папку</small></div>
         <div class="row" style="margin-top:12px"><span class="grow muted">Роликов на канал в день</span>
           <div class="stepper"><button id="pcMinus">${ic('minus', 'sm')}</button><output class="num">${s.perChannel}</output><button id="pcPlus">${ic('plus', 'sm')}</button></div></div>
         <div class="grid g2" style="margin-top:12px">
@@ -702,10 +707,19 @@ function pageChannels(el) {
   const setCh = async (n) => {
     const ch = [...s.channels];
     while (ch.length < n) ch.push({ name: `channel${ch.length + 1}` });
-    ch.length = Math.max(1, Math.min(20, n));
+    ch.length = Math.max(1, Math.min(60, n));
     await saveSettings({ channels: ch }, true); render();
   };
   $('#chMinus').onclick = () => setCh(s.channels.length - 1);
+  $('#chFromAp').onclick = async () => {
+    try {
+      const r = await call('handoffAccounts');
+      if (!r) { toast('Виджет ещё не передал аккаунты: запусти Reels Widget (с токеном GitHub) и подожди минуту', 6000); return; }
+      if (!r.accounts.length) { toast('В автопостере нет аккаунтов для выбранной очереди (Сборка → «Очередь автозалива»)', 6000); return; }
+      await saveSettings({ channels: r.accounts.map((a) => ({ name: a.name })) }, true); render();
+      toast(`Каналы: ${r.accounts.map((a) => a.name).join(', ')}`, 5000);
+    } catch (e) { fail(e); }
+  };
   $('#chPlus').onclick = () => setCh(s.channels.length + 1);
   $('#pcMinus').onclick = async () => { await saveSettings({ perChannel: s.perChannel - 1 }, true); render(); };
   $('#pcPlus').onclick = async () => { await saveSettings({ perChannel: s.perChannel + 1 }, true); render(); };
@@ -745,6 +759,7 @@ function pageBuild(el) {
             <div class="field"><span>Очередь автозалива</span><select class="input" id="lane">${Object.entries(S.cat.lanes).map(([k, v]) => `<option value="${k}">${esc(v)} (${k}/)</option>`).join('')}</select></div>
             <div class="field"><span>Имя папки дня</span><input class="input" id="fname" placeholder="${esc((ready.find((p) => buildSel.has(p.id)) || {}).title || 'evelone')}"></div>
           </div>
+          <label class="switch"><div><b>Сразу в автопостер</b><small>после сборки папка уходит в виджет Reels Widget, он загружает её в очередь (виджет должен быть запущен)</small></div><input type="checkbox" id="autoSend" ${s.autoSend ? 'checked' : ''}></label>
           <div class="row"><button class="btn primary grow" id="go" ${!sum.selected || running ? 'disabled' : ''}>${ic('scissors')}Собрать ${sum.need} ${H.plural(sum.need, 'ролик', 'ролика', 'роликов')}</button>
             ${running ? `<button class="btn" id="stop">${ic('circle-stop')}Стоп</button>` : ''}</div>
         </div>
@@ -753,6 +768,7 @@ function pageBuild(el) {
     <div class="card" id="bprog"></div>`;
   $('#lane').value = s.lane;
   $('#lane').onchange = (e) => saveSettings({ lane: e.target.value }, true);
+  $('#autoSend').onchange = (e) => saveSettings({ autoSend: e.target.checked }, true);
   $('#outPick').onclick = async () => { const d = await call('pickFolder', 'Куда класть готовые папки'); if (d) { await saveSettings({ outputDir: d }); render(); } };
   $$('[data-bp]').forEach((i) => { i.onchange = () => { if (i.checked) buildSel.add(i.dataset.bp); else buildSel.delete(i.dataset.bp); render(); }; });
   $('#go').onclick = async () => {
@@ -776,7 +792,9 @@ function renderBuildProgress() {
   const res = b.result;
   el.innerHTML = `
     <div class="row"><h3 class="grow">${b.done ? (b.error ? 'Сборка остановлена' : 'Готово') : 'Собираю'}</h3>
+      ${res && (!b.ap || b.ap.state === 'done' && !b.ap.ok) ? `<button class="btn" id="apSend">${ic('upload')}В автопостер</button>` : ''}
       ${res ? `<button class="btn primary" id="openOut">${ic('folder-open')}Открыть папку</button>` : ''}</div>
+    ${apBlock(b.ap)}
     ${b.done ? '' : `<div class="row" style="margin:8px 0"><small class="grow muted">${esc(b.text || '')}</small><span class="num muted">${Math.round((b.progress || 0) * 100)}%</span></div><div class="bar"><i style="width:${(b.progress || 0) * 100}%"></i></div>`}
     ${b.error ? `<p class="err">${esc(b.error)}</p>` : ''}
     ${res ? `<p class="hint">${res.videos} роликов в <b>${esc(res.folder)}</b>. ${res.problems.length ? `<span class="err">Проблемы: ${esc(res.problems.join('; '))}</span>` : 'Проверка формата автозалива пройдена.'}${res.encoderFallback ? ' <span class="warnc">Видеокарта не взялась, ролики собраны на процессоре (Настройки → Видео → Проверить).</span>' : ''}</p>` : ''}
@@ -784,8 +802,40 @@ function renderBuildProgress() {
     ${((res && res.rejected) || b.rejected || []).length ? `<p class="hint warnc">Не прошли правила: ${((res && res.rejected) || b.rejected).map((r) => `${esc(r.at)} (${esc(r.issues.join(', '))})`).join('; ')}</p>` : ''}
     <div class="log">${b.files.map((f) => `<div class="ln"><span class="okc">${ic('circle-check', 'sm')}</span><span>${esc(f.split(/[\\/]/).slice(-2).join(' / '))}</span><button class="btn sm ghost" data-show="${esc(f)}">показать</button></div>`).join('')}</div>`;
   if ($('#openOut')) $('#openOut').onclick = () => call('openPath', res.folder);
+  if ($('#apSend')) $('#apSend').onclick = () => sendToAutoposter(b);
   $$('[data-frame]').forEach((x) => { x.onclick = async () => { await openProject(x.dataset.frame); if (S.project) openFramer(S.project); }; });
   $$('[data-show]').forEach((x) => { x.onclick = () => call('showItem', x.dataset.show); });
+}
+
+/** Отдать готовую папку виджету автопостера и следить, как он её грузит. */
+async function sendToAutoposter(b) {
+  try {
+    const id = await call('handoffSend', b.result.folder);
+    b.ap = { id, state: 'waiting', since: Date.now() };
+    if (S.page === 'build') renderBuildProgress();
+    const tick = async () => {
+      const st = await call('handoffStatus', id).catch(() => null);
+      if (!st) return;
+      b.ap = { ...b.ap, ...st };
+      if (S.build === b && S.page === 'build') renderBuildProgress();
+      if (st.state === 'done') { toast(st.ok ? `В автопостере: ${st.dest}` : `Автопостер не принял папку: ${st.error}`, st.ok ? 5000 : 12000); return; }
+      setTimeout(tick, 2000);
+    };
+    setTimeout(tick, 1500);
+  } catch (e) { fail(e); }
+}
+
+function apBlock(ap) {
+  if (!ap) return '';
+  const slow = ap.state === 'waiting' && Date.now() - ap.since > 20000;
+  const text = ap.state === 'waiting' ? (slow ? 'Виджет не отвечает. Запусти Reels Widget (значок в трее): он заберёт папку сам, как только откроется.' : 'Передаю папку виджету автопостера…')
+    : ap.state === 'working' ? `Виджет загружает: ${ap.text || '…'}`
+      : ap.state === 'done' && ap.ok ? `В очереди автопостера: ${ap.dest}. Дальше ролики выйдут по расписанию.`
+        : ap.state === 'done' ? `Виджет не загрузил папку: ${ap.error}${/не совпадает ни с одним аккаунтом/.test(ap.error || '') ? ' Нажми «Каналы и тексты» → «Взять аккаунты из автопостера» и собери заново.' : ''}`
+          : 'Заявка потерялась, отправь ещё раз.';
+  const cls = ap.state === 'done' ? (ap.ok ? 'okc' : 'err') : slow ? 'warnc' : 'muted';
+  return `<div class="card notice" style="margin:10px 0"><span class="${cls}">${ic(ap.state === 'done' && ap.ok ? 'circle-check' : 'upload')}</span><div class="grow"><b>Автопостер</b><small>${esc(text)}</small>
+    ${ap.state === 'working' && ap.frac != null ? `<div class="bar" style="margin-top:6px"><i style="width:${Math.round(ap.frac * 100)}%"></i></div>` : ''}</div></div>`;
 }
 
 /** Видео без рамки вебки из отклонённых моментов → кнопки, которые сразу открывают рамку. */
