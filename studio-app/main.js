@@ -179,12 +179,13 @@ function registerIpc() {
   handle('filler:remove', (file) => pipeline.removeFiller(file));
   handle('project:analyze', (id) => startJob('analyze', 'Поиск моментов', (p, signal) => pipeline.analyze(id, p, signal).then(slim)));
   handle('project:check', (id) => startJob('check', 'Проверка правил', (p, signal) => pipeline.check(id, p, signal).then(slim)));
-  handle('project:clip', async (id, mid) => {
-    // кусок для предпросмотра в окне (файл — как есть, ссылка — скачанный кусок)
+  handle('project:clip', async (id, mid, margin = 0) => {
+    // кусок для предпросмотра в окне (файл — как есть, ссылка — скачанный кусок); margin — запас вокруг для обрезки
     const pr = pipeline.get(id);
     const m = pr.moments.find((x) => x.id === mid);
-    const v = await pipeline.videoFor(pr, m.start, m.end);
-    return { src: fileUrl(v.input), start: m.start - v.offset, end: m.end - v.offset };
+    const pad = Math.min(60, Math.max(0, +margin || 0));
+    const v = await pipeline.videoFor(pr, Math.max(0, m.start - pad), m.end + pad);
+    return { src: fileUrl(v.input), start: m.start - v.offset, end: m.end - v.offset, offset: v.offset };
   });
 
   // сборка

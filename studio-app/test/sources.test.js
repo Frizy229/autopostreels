@@ -39,4 +39,24 @@ assert.ok(au.includes('ba[ext=m4a]/ba/b') && !au.includes('--merge-output-format
 assert.ok(S.downloadArgs('U', { chat: true }).includes('--skip-download'));
 assert.strictEqual(S.parseProgress('[download]  42.5% of 10.00MiB at 1MiB/s'), 0.425);
 assert.strictEqual(S.parseProgress('[info] x'), null);
-console.log('источники: 30 проверок');
+// Instagram Reels и много ссылок сразу
+assert.strictEqual(S.platformOf('https://www.instagram.com/reel/C9xYz12/?igsh=1'), 'instagram');
+assert.strictEqual(S.platformOf('https://www.tiktok.com/@a/video/1'), 'tiktok');
+assert.ok(S.needsAuth('https://www.instagram.com/reel/C9xYz12/'), 'Instagram — с cookies, как YouTube');
+assert.ok(!S.needsAuth('https://www.twitch.tv/videos/1'));
+assert.strictEqual(S.authPlan({ mode: 'auto' }, 'https://www.instagram.com/reel/1/').length, 1 + S.AUTO_BROWSERS.length);
+assert.deepStrictEqual(S.parseLinks('https://www.instagram.com/reel/A1/\nhttps://youtu.be/x, https://www.instagram.com/reel/A1/ текст (https://www.twitch.tv/videos/5).'),
+  ['https://www.instagram.com/reel/A1/', 'https://youtu.be/x', 'https://www.twitch.tv/videos/5']);
+assert.deepStrictEqual(S.parseLinks('нет ссылок'), []);
+assert.ok(S.isInstagramProfile('https://www.instagram.com/evelone2004/'));
+assert.ok(S.isInstagramProfile('https://instagram.com/evelone2004/reels/'));
+assert.ok(!S.isInstagramProfile('https://www.instagram.com/reel/C9xYz12/'));
+assert.ok(!S.isInstagramProfile('https://www.instagram.com/p/C9xYz12/'));
+assert.ok(S.isAuthError('ERROR: [Instagram] C9x: Requested content is not available, rate-limit reached or login required. Use --cookies'));
+assert.match(S.authHelp([null], 'https://www.instagram.com/reel/1/'), /Instagram не отдаёт/);
+assert.match(S.authHelp([null], 'https://youtu.be/1'), /YouTube просит/);
+assert.ok(S.isShortSource({ kind: 'url', duration: 45 }));
+assert.ok(!S.isShortSource({ kind: 'url', duration: 7200 }));
+assert.ok(!S.isShortSource({ kind: 'file', duration: 45 }));
+assert.ok(!S.isShortSource({ kind: 'url', duration: 0 }), 'длина неизвестна — качаем кусками, как раньше');
+console.log('источники: 48 проверок');

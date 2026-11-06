@@ -140,8 +140,8 @@ function pageSearch(el) {
       <select id="sort" class="input" style="width:150px;height:30px"><option value="views">по просмотрам</option><option value="date">по дате</option><option value="duration">по длине</option></select>
     </div>
     <div class="grid g2" style="margin-bottom:18px">
-      <div class="drop" id="drop">${ic('file-video')} Перетащи сюда видео стрима или <button class="btn sm" id="pick">выбери файлы</button></div>
-      <div class="card" style="padding:12px"><div class="row"><input id="url" class="input grow" placeholder="Ссылка на видео: YouTube, Twitch, Kick, VK"><button class="btn primary" id="addUrl">${ic('plus')}Добавить</button></div></div>
+      <div class="drop" id="drop">${ic('file-video')} Перетащи сюда видео (стрим, лонг, рилс) или <button class="btn sm" id="pick">выбери файлы</button></div>
+      <div class="card" style="padding:12px"><div class="row"><textarea id="url" class="input grow" rows="2" style="resize:vertical" placeholder="Ссылки: Instagram Reels, YouTube (лонги и шортсы), Twitch, Kick, VK. Можно сразу несколько, каждую с новой строки"></textarea><button class="btn primary" id="addUrl">${ic('plus')}Добавить</button></div></div>
     </div>
     <div id="res"></div>`;
   const doSearch = async (q) => {
@@ -171,11 +171,18 @@ function pageSearch(el) {
   drawResults();
 }
 
-async function addUrl(url) {
-  if (!/^https?:\/\//.test(String(url).trim())) { toast('Нужна ссылка вида https://…'); return; }
+async function addUrl(text) {
+  const links = H.parseLinks(text);
+  if (!links.length) { toast('Нужна ссылка вида https://…'); return; }
   if (!S.tools.ytdlp) { toast('Сначала поставь yt-dlp: Настройки → Компоненты'); return; }
-  toast('Добавляю…', 1500);
-  try { const p = await call('addUrl', url.trim()); await refreshProjects(); openProject(p.id); } catch (e) { fail(e); }
+  let first = null, failed = 0;
+  for (const [i, url] of links.entries()) {
+    toast(links.length > 1 ? `Добавляю ${i + 1} из ${links.length}…` : 'Добавляю…', 2500);
+    // eslint-disable-next-line no-await-in-loop
+    try { const p = await call('addUrl', url); first = first || p; } catch (e) { failed++; fail(links.length > 1 ? new Error(`${url}\n${e.message || e}`) : e); }
+  }
+  if (first) { if ($('#url')) $('#url').value = ''; await refreshProjects(); openProject(first.id); }
+  if (links.length > 1) toast(`Добавлено ${links.length - failed} из ${links.length}`, 4000);
 }
 
 function drawResults() {
@@ -369,7 +376,7 @@ function projectMain(pr) {
     ${!pr.frame && needCam ? `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>Отметь, где вебка</b><small>Без рамки ролики «вебка сверху» не соберутся. Нажми «Рамка вебки» → «Найти лицо» → «Сохранить». Если вебки в видео нет — «Без вебки».</small></div></div>` : ''}
     <div class="card">
       <div class="row wrap">
-        <div class="grow"><h3>${esc(pr.title)}</h3><p class="hint" style="margin:0">${esc(pr.streamer || pr.source.platform)} · ${fmtTime(pr.source.duration)} · ${pr.source.width}×${pr.source.height}${pr.chatCount ? ` · чат: ${pr.chatCount} сообщений` : ''}</p></div>
+        <div class="grow"><h3>${esc(pr.title)}</h3><p class="hint" style="margin:0">${esc(pr.streamer || pr.source.platform)} · ${fmtTime(pr.source.duration)} · ${pr.source.width}×${pr.source.height}${pr.chatCount ? ` · чат: ${pr.chatCount} сообщений` : ''}${(pr.blurs || []).length ? ` · блюр: ${pr.blurs.length}` : ''}</p></div>
         <button class="btn ${!pr.frame && needCam ? 'primary' : ''}" id="frameBtn">${ic('scan-face')}${pr.frame ? (nCams > 1 ? `Вебки: ${nCams} ✓` : nCams ? 'Рамка вебки ✓' : 'Без вебки ✓') : 'Рамка вебки'}</button>
         <button class="btn ${pr.analyzed ? '' : 'primary'}" id="anBtn" ${job ? 'disabled' : ''}>${ic('audio-lines')}${pr.analyzed ? 'Искать заново' : 'Найти моменты'}</button>
         <button class="btn" id="chkBtn" ${job || !sel ? 'disabled' : ''}>${ic('shield-check')}Проверить</button>
@@ -392,12 +399,13 @@ function projectMain(pr) {
       <div class="moments">${pr.moments.map((m) => `
         <div class="mom ${m.selected ? '' : 'off'} ${S.activeMoment === m.id ? 'active' : ''}" data-m="${m.id}">
           <button class="box ${m.selected ? 'on' : ''}" data-sel title="Брать в нарезку">${m.selected ? ic('check', 'sm') : ''}</button>
-          <div class="tm"><b>${fmtTime(m.start)}–${fmtTime(m.end)}</b><span class="muted">${Math.round(m.end - m.start)} с${m.manual ? ' · свой' : ''}</span>
+          <div class="tm"><b>${fmtTime(m.start)}–${fmtTime(m.end)}</b><span class="muted">${Math.round(m.end - m.start)} с${m.manual ? ' · свой' : ''}${m.whole && !m.trimmed ? ' · всё видео' : ''}${m.trimmed ? ' · обрезан' : ''}</span>
             <div class="score"><i style="width:${Math.max(4, (m.score || 0) / maxScore * 100)}%"></i></div></div>
           <div class="grow"><input class="input" data-title value="${esc(m.title || '')}" placeholder="Заголовок: строка 1 | строка 2">
             <div class="chk">${checkBadges(m)}</div></div>
           <div class="tools">
             <button class="btn sm icon ghost" data-play title="Посмотреть">${ic('play', 'sm')}</button>
+            <button class="btn sm icon ghost" data-edit title="Обрезать и заблюрить">${ic('scissors', 'sm')}</button>
             <button class="btn sm ${m.ok ? 'primary' : 'ghost'}" data-ok title="Эвелон — главное лицо">${ic('scan-face', 'sm')}</button>
           </div>
         </div>`).join('')}</div>
@@ -427,6 +435,7 @@ function bindProject(pr) {
     $('[data-ok]', row).onclick = async () => { await updFull((ms) => { const m = ms.find((x) => x.id === id); m.ok = !m.ok; }); render(); };
     $('[data-title]', row).onchange = (e) => updFull((ms) => { ms.find((x) => x.id === id).title = e.target.value.trim(); });
     $('[data-play]', row).onclick = () => playMoment(pr, id);
+    $('[data-edit]', row).onclick = () => openEditor(pr, id).catch(fail);
   });
   $('#selAll').onclick = async () => { await updFull((ms) => ms.forEach((m) => { m.selected = true; })); await refreshProjects(); render(); };
   $('#selNone').onclick = async () => { await updFull((ms) => ms.forEach((m) => { m.selected = false; })); await refreshProjects(); render(); };
@@ -483,6 +492,119 @@ async function playMoment(pr, id) {
     const c = await call('clip', pr.id, id);
     el.innerHTML = `<video class="vprev" controls autoplay src="${esc(c.src)}#t=${c.start.toFixed(2)},${c.end.toFixed(2)}" style="margin:6px 0 4px"></video>`;
   } catch (e) { el.innerHTML = ''; fail(e); }
+}
+
+// ------------------------------------------------------------------ обрезка и блюр
+/** Окно момента: обрезать начало и конец, размыть области (ник, вотермарка, лицо, чужой чат) на всё видео или на время. */
+async function openEditor(pr, mid) {
+  const m = $('#modal');
+  const full = await call('project', pr.id);
+  const mom = full.moments.find((x) => x.id === mid);
+  if (!mom) return;
+  const W = pr.source.width || 1920, Hh = pr.source.height || 1080;
+  const dur = pr.source.duration || mom.end;
+  const ed = { start: mom.start, end: mom.end, blurs: (full.blurs || []).map((b) => ({ ...b })) };
+  let clip = null; // {src, offset}: видео-кусок и сколько секунд исходника до его начала
+  m.hidden = false;
+  m.innerHTML = `<div class="dlg">
+    <div class="row"><div class="grow"><h2>Обрезка и блюр</h2><p class="hint">Двигай ползунок видео и жми «сюда», чтобы поставить начало и конец. Блюр — размытая рамка: тяни её мышью, уголок меняет размер. Блюр действует на всё видео-источник, во всех его роликах.</p></div>
+      <button class="btn ghost icon" id="ex">${ic('x')}</button></div>
+    <div id="estage" class="estage"><div class="empty">Готовлю видео…</div></div>
+    <div class="grid g2" style="margin-top:12px">
+      <div class="card flat"><h3>Обрезка</h3>
+        <div class="row" style="margin-top:6px"><span class="muted" style="width:60px">Начало</span><input class="input num" id="eS" style="width:96px"><button class="btn sm" id="eSnow">${ic('arrow-right', 'sm')}сюда</button></div>
+        <div class="row" style="margin-top:6px"><span class="muted" style="width:60px">Конец</span><input class="input num" id="eE" style="width:96px"><button class="btn sm" id="eEnow">${ic('arrow-right', 'sm')}сюда</button></div>
+        <div class="row" style="margin-top:8px"><button class="btn sm" id="ePlay">${ic('play', 'sm')}Проиграть отрезок</button><small class="muted grow" id="eLen"></small></div>
+      </div>
+      <div class="card flat"><div class="row"><h3 class="grow">Блюр</h3><button class="btn sm" id="eAdd">${ic('plus', 'sm')}Добавить блюр</button></div>
+        <div id="eBl" class="stack" style="margin-top:6px"></div></div>
+    </div>
+    <div class="row" style="margin-top:14px"><span class="grow"></span><button class="btn ghost" id="eCancel">Отмена</button><button class="btn primary" id="eSave">${ic('check')}Сохранить</button></div></div>`;
+  const close = () => { m.hidden = true; m.innerHTML = ''; };
+  $('#ex').onclick = close; $('#eCancel').onclick = close;
+  const vid = () => $('#ev');
+  const now = () => (vid() && clip ? clip.offset + vid().currentTime : ed.start);
+  const tf = (t) => H.fmtTimeP(t);
+  const active = (b, t) => (b.start == null || t >= b.start) && (b.end == null || t <= b.end);
+  const drawTrim = () => {
+    $('#eS').value = tf(ed.start); $('#eE').value = tf(ed.end);
+    $('#eLen').textContent = `длина ${Math.round((ed.end - ed.start) * 10) / 10} с`;
+  };
+  const drawRects = () => {
+    const ov = $('#eov');
+    if (!ov) return;
+    const t = now();
+    ov.innerHTML = ed.blurs.map((b, i) => `<div class="rect blur ${active(b, t) ? '' : 'off'}" data-i="${i}"><span class="lbl">блюр ${i + 1}</span><button class="del" data-del="${i}" title="Убрать блюр">×</button><span class="h"></span></div>`).join('');
+    $$('.rect', ov).forEach((el) => { const b = ed.blurs[+el.dataset.i]; Object.assign(el.style, { left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` }); });
+    $$('[data-del]', ov).forEach((x) => { x.onpointerdown = (e) => e.stopPropagation(); x.onclick = () => { ed.blurs.splice(+x.dataset.del, 1); drawAll(); }; });
+    $$('.rect', ov).forEach((el) => {
+      el.onpointerdown = (e) => {
+        if (e.target.dataset.del != null) return;
+        const resize = e.target.classList.contains('h');
+        const B = ov.getBoundingClientRect(), i = +el.dataset.i, st = { ...ed.blurs[i] }, x0 = e.clientX, y0 = e.clientY;
+        el.setPointerCapture(e.pointerId);
+        el.onpointermove = (ev) => {
+          const dx = (ev.clientX - x0) / B.width, dy = (ev.clientY - y0) / B.height;
+          const r = H.clampRect(resize ? { ...st, w: st.w + dx, h: st.h + dy } : { ...st, x: st.x + dx, y: st.y + dy }, 0.02);
+          Object.assign(ed.blurs[i], r);
+          Object.assign(el.style, { left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` });
+        };
+        el.onpointerup = () => { el.onpointermove = null; };
+        e.stopPropagation(); e.preventDefault();
+      };
+    });
+  };
+  const drawList = () => {
+    $('#eBl').innerHTML = ed.blurs.length ? ed.blurs.map((b, i) => `
+      <div class="blrow" data-b="${i}"><b>${i + 1}</b>
+        <label class="row muted" style="font-size:12.5px"><input type="checkbox" data-all ${b.start == null && b.end == null ? 'checked' : ''}> всё видео</label>
+        ${b.start == null && b.end == null ? '' : `<span class="row">с <input class="input num" data-bs value="${b.start == null ? '' : tf(b.start)}" placeholder="начала" style="width:78px"><button class="btn sm ghost" data-bsn title="С текущего места видео">сюда</button>
+          по <input class="input num" data-be value="${b.end == null ? '' : tf(b.end)}" placeholder="конца" style="width:78px"><button class="btn sm ghost" data-ben title="До текущего места видео">сюда</button></span>`}
+      </div>`).join('') : '<small class="muted">Нет блюра. «Добавить блюр» поставит рамку посередине кадра: перетащи её на ник, вотермарку или лицо.</small>';
+    $$('.blrow').forEach((row) => {
+      const b = ed.blurs[+row.dataset.b];
+      $('[data-all]', row).onchange = (e) => { if (e.target.checked) { b.start = null; b.end = null; } else { b.start = Math.max(0, Math.floor(now())); b.end = Math.min(dur, b.start + 5); } drawAll(); };
+      const setT = (k, v) => { b[k] = v === '' ? null : v; drawRects(); };
+      if ($('[data-bs]', row)) {
+        $('[data-bs]', row).onchange = (e) => { const v = e.target.value.trim() === '' ? '' : H.parseTime(e.target.value); if (v === '' || Number.isFinite(v)) setT('start', v); };
+        $('[data-be]', row).onchange = (e) => { const v = e.target.value.trim() === '' ? '' : H.parseTime(e.target.value); if (v === '' || Number.isFinite(v)) setT('end', v); };
+        $('[data-bsn]', row).onclick = () => { b.start = Math.round(now() * 10) / 10; drawAll(); };
+        $('[data-ben]', row).onclick = () => { b.end = Math.round(now() * 10) / 10; drawAll(); };
+      }
+    });
+  };
+  const drawAll = () => { drawTrim(); drawRects(); drawList(); };
+  $('#eS').onchange = (e) => { const v = H.parseTime(e.target.value); if (Number.isFinite(v)) ed.start = Math.max(0, v); drawTrim(); };
+  $('#eE').onchange = (e) => { const v = H.parseTime(e.target.value); if (Number.isFinite(v)) ed.end = Math.min(dur, v); drawTrim(); };
+  $('#eSnow').onclick = () => { ed.start = Math.round(now() * 10) / 10; drawTrim(); };
+  $('#eEnow').onclick = () => { ed.end = Math.round(now() * 10) / 10; drawTrim(); };
+  $('#ePlay').onclick = () => { const v = vid(); if (!v) return; v.currentTime = Math.max(0, ed.start - clip.offset); v.play(); };
+  $('#eAdd').onclick = () => { if (ed.blurs.length >= 12) { toast('Не больше 12 блюров'); return; } ed.blurs.push({ id: `b${Date.now().toString(36)}`, x: 0.35, y: 0.4, w: 0.3, h: 0.14, start: null, end: null }); drawAll(); };
+  $('#eSave').onclick = async () => {
+    if (!(ed.end - ed.start >= 1)) { toast('Конец должен быть хотя бы на секунду позже начала'); return; }
+    try {
+      const f2 = await call('project', pr.id);
+      const ms = f2.moments.map((x) => (x.id === mid ? { ...x, start: ed.start, end: ed.end } : x));
+      await call('updateProject', pr.id, { moments: ms, blurs: ed.blurs });
+      S.project = await call('project', pr.id);
+      await refreshProjects(); close(); render();
+      toast(ed.blurs.length ? `Сохранено, блюров: ${ed.blurs.length}` : 'Сохранено');
+    } catch (e) { fail(e); }
+  };
+  drawAll();
+  try {
+    clip = await call('clip', pr.id, mid, 20);
+    const box = $('#estage');
+    if (!box) return;
+    // размер сцены под кадр источника: рамки блюра в долях кадра совпадают с картинкой
+    const maxW = box.clientWidth || 800, maxH = Math.round(window.innerHeight * 0.5);
+    const k = Math.min(maxW / W, maxH / Hh);
+    box.innerHTML = `<div class="evid" style="width:${Math.round(W * k)}px;height:${Math.round(Hh * k)}px"><video id="ev" src="${esc(clip.src)}" controls preload="auto"></video><div id="eov" class="eov"></div></div>`;
+    const v = vid();
+    v.addEventListener('loadedmetadata', () => { v.currentTime = Math.max(0, ed.start - clip.offset); }, { once: true });
+    v.addEventListener('timeupdate', () => { if ($('#eov')) $$('.rect', $('#eov')).forEach((el) => el.classList.toggle('off', !active(ed.blurs[+el.dataset.i] || {}, now()))); });
+    drawRects();
+  } catch (e) { const box = $('#estage'); if (box) box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 
 // ------------------------------------------------------------------ рамка вебки
@@ -987,8 +1109,8 @@ function pageSettings(el) {
         </div>
       </div>
       <div class="card">
-        <h3>Вход в YouTube</h3>
-        <p class="hint">Если YouTube пишет «Sign in to confirm you're not a bot», программе нужны cookies браузера, где ты вошёл в YouTube. Перед загрузкой закрой этот браузер. Лучше всего работает Firefox. Twitch и файлы с диска работают без входа.</p>
+        <h3>Вход на сайты (YouTube, Instagram)</h3>
+        <p class="hint">Если YouTube пишет «Sign in to confirm you're not a bot» или Instagram не отдаёт рилс, программе нужны cookies браузера, где ты вошёл в YouTube и Instagram. Перед загрузкой закрой этот браузер. Лучше всего работает Firefox. Twitch и файлы с диска работают без входа.</p>
         <div class="stack">
           <div class="field"><span>Способ</span><select class="input" id="ckMode">${Object.entries(S.cat.cookieModes).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>
             <small class="muted">${s.cookies.mode === 'auto' ? 'сначала без входа, при проверке «не бот» — cookies Firefox, Edge, Chrome и других по очереди' : ''}</small></div>

@@ -94,6 +94,33 @@ if (process.platform === 'win32' || spawnSync('ffmpeg', ['-version']).status !==
   assert.strictEqual(done3.length, 4);
   assert.ok(done3.every((e) => ['duo', 'pip', 'camonly', 'below'].includes(e.layout)) && new Set(done3.map((e) => e.layout)).size >= 3, `раскладки: ${done3.map((e) => e.layout)}`);
   for (const e of done3) assert.match(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', e.file], { encoding: 'utf8' }).stdout, /1080,1920/);
+  // рилс (вертикальное короткое видео): один момент на всю длину, обрезка сбрасывает слова, блюр области
+  const reel = path.join(tmp, 'reel.mp4');
+  ff(['-f', 'lavfi', '-i', 'testsrc2=s=360x640:r=25:d=20', '-f', 'lavfi', '-i', 'sine=f=440:d=20', '-map', '0:v', '-map', '1:a',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', reel]);
+  settings = normalize({ ...settings, channels: ['ig1'], perChannel: 1, formats: ['full'], subsOn: false, rules: { minWords: 0 } });
+  const rp = await pl.addFile(reel);
+  pl.update(rp.id, { frame: { cams: [], content: { x: 0, y: 0, w: 1, h: 1 } } });
+  const ra = await pl.analyze(rp.id);
+  assert.strictEqual(ra.moments.length, 1, 'короткое видео — один момент');
+  assert.ok(ra.moments[0].start === 0 && Math.abs(ra.moments[0].end - 20) < 0.5, `весь ролик: ${ra.moments[0].end}`);
+  const tr = pl.update(rp.id, { moments: [{ ...ra.moments[0], words: [{ s: 1, e: 2, w: 'x' }], check: { ok: true }, start: 2, end: 9 }] });
+  assert.ok(tr.moments[0].trimmed && !tr.moments[0].words && !tr.moments[0].check, 'после обрезки слова и проверка сброшены');
+  assert.throws(() => pl.update(rp.id, { moments: [{ ...tr.moments[0], start: 5, end: 5.2 }] }), /не короче секунды/);
+  const grab = (file) => spawnSync('ffmpeg', ['-v', 'error', '-ss', '3', '-i', file, '-frames:v', '1', '-vf', 'crop=540:960:270:480,scale=54:96', '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1']).stdout;
+  const sharp = await pl.build({ projectIds: [rp.id], name: 'рилс' });
+  const fileOf = (r) => path.join(r.folder, fs.readdirSync(r.folder).find((x) => x.endsWith('.mp4')));
+  const d1 = parseFloat(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', fileOf(sharp)], { encoding: 'utf8' }).stdout);
+  assert.ok(Math.abs(d1 - 7) < 0.6, `обрезанный ролик 7 с: ${d1}`);
+  pl.update(rp.id, { blurs: [{ x: 0, y: 0, w: 1, h: 1, start: 4, end: 8 }, { x: 2, y: -1, w: 0.3, h: 0.2 }] });
+  assert.deepStrictEqual(pl.get(rp.id).blurs.map((b) => [b.x, b.y]), [[0, 0], [0.7, 0]], 'рамка блюра внутри кадра');
+  const blurred = await pl.build({ projectIds: [rp.id], name: 'рилс блюр' });
+  const a = grab(fileOf(sharp)), b = grab(fileOf(blurred));
+  if (process.env.DUMP) for (const [n, r] of [['sharp', sharp], ['blur', blurred]]) spawnSync('ffmpeg', ['-v', 'error', '-y', '-ss', '3', '-i', fileOf(r), '-frames:v', '1', '-vf', 'scale=270:480', path.join(process.env.DUMP, `${n}.png`)]);
+  const diff = a.reduce((n, v, i) => n + Math.abs(v - b[i]), 0) / a.length;
+  const edges = (buf) => { let n = 0; for (let i = 1; i < buf.length; i++) n += Math.abs(buf[i] - buf[i - 1]); return n / buf.length; };
+  assert.ok(diff > 3 && edges(b) < edges(a) * 0.85, `блюр виден: разница ${diff.toFixed(1)}, резкость ${edges(a).toFixed(1)} → ${edges(b).toFixed(1)}`);
+
   // понятная ошибка whisper
   const { whisperHelp } = require('../lib/pipeline');
   const wh = whisperHelp({ message: 'whisper-cli.exe: код 11', res: { code: 11, stderr: "read_audio_data: failed to read audio data\nerror: failed to read audio file 'w_1.wav'\nwhisper_print_timings: total time = 1315.98 ms\nerror: 1 input file(s) failed" } });
@@ -101,5 +128,5 @@ if (process.platform === 'win32' || spawnSync('ffmpeg', ['-version']).status !==
   assert.doesNotMatch(wh, /print_timings/);
   assert.match(whisperHelp({ message: 'x', res: { code: 10, stderr: 'whisper-cli: failed to process audio' } }), /видеопамяти/);
   if (process.env.KEEP) console.log('папка:', res.folder); else fs.rmSync(tmp, { recursive: true, force: true });
-  console.log('конвейер: 31 проверка на настоящем ffmpeg');
+  console.log('конвейер: 39 проверок на настоящем ffmpeg');
 })().catch((e) => { console.error(e); process.exit(1); });
