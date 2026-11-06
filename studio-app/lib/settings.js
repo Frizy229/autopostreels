@@ -6,7 +6,7 @@ const { SUB_STYLES, TITLE_STYLES } = require('./subs');
 const { ENCODERS } = require('./render');
 const { MODELS } = require('./transcribe');
 const { DEFAULT_RULES } = require('./rules');
-const { BROWSERS, COOKIE_MODES } = require('./sources');
+const { BROWSERS, COOKIE_MODES, FILLER_QUERIES, parseQueryLine } = require('./sources');
 
 const DEFAULTS = {
   theme: 'dark', material: 'acrylic',
@@ -19,6 +19,8 @@ const DEFAULTS = {
   formats: ['stream', 'filler', 'full', 'camfull'],
   subStyles: ['stream', 'neon', 'ice', 'sunset', 'pink', 'yellow'],
   fillerDir: '',         // папка с мини-играми/фоновыми роликами для раскладки «стрим сверху, игра снизу»
+  fillerQueries: FILLER_QUERIES,  // быстрые запросы в разделе «Фон»: «Название = запрос»
+  fillerCC: false,       // искать фон только под лицензией Creative Commons
   subStyle: 'stream', titleStyle: 'glow_blue', maxWords: 3, titleDur: 0, subsOn: true,
   vary: true, allowMirror: false, allowSpeed: true,
   lang: 'ru', whisperModel: 'large-v3-turbo', gpu: true,
@@ -57,6 +59,10 @@ function normalize(raw) {
   const ss = (Array.isArray(s.subStyles) ? s.subStyles : []).filter((f) => SUB_STYLES[f]);
   s.subStyles = ss.length ? [...new Set(ss)] : ['stream'];
   s.fillerDir = typeof s.fillerDir === 'string' ? s.fillerDir : '';
+  const fq = (Array.isArray(s.fillerQueries) ? s.fillerQueries : String(s.fillerQueries || '').split(/\r?\n/))
+    .map((l) => String(l || '').trim()).filter((l) => parseQueryLine(l)).slice(0, 40);
+  s.fillerQueries = fq.length ? fq : [...FILLER_QUERIES];
+  s.fillerCC = !!s.fillerCC;
   let ch = Array.isArray(s.channels) ? s.channels : [];
   ch = ch.slice(0, 20).map((c, i) => {
     const o = typeof c === 'string' ? { name: c } : (c && typeof c === 'object' ? c : {});

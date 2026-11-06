@@ -9,9 +9,9 @@ const { buildFilter, filterPath } = require('./layout');
 const { buildAss } = require('./subs');
 const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
-const { layoutOutput, writeTexts, checkFolder, nextFolderNumber } = require('./output');
+const { layoutOutput, writeTexts, checkFolder, nextFolderNumber, slugify } = require('./output');
 const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe } = require('./render');
-const { listArgs, downloadArgs, parseList, parseProgress, platformOf, VIDEO_EXT, searchTarget, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
+const { listArgs, downloadArgs, parseList, parseProgress, statusOf, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
 const { checkMoment } = require('./rules');
 const { whisperArgs, wavArgs, parseWhisperJson, MODELS } = require('./transcribe');
 
@@ -116,12 +116,26 @@ class Pipeline {
   /** Звук источника: файл как есть, ссылка — только звуковая дорожка в кэш. */
   async audioSource(pr, onProgress, signal) {
     if (pr.source.kind === 'file') return pr.source.path;
-    const done = fs.readdirSync(path.dirname(this.cache(pr, 'x'))).find((f) => /^audio\.(m4a|webm|opus|mp3|aac)$/.test(f));
+    const dir = path.dirname(this.cache(pr, 'x'));
+    const ready = (x) => /^audio\.(m4a|webm|opus|mp3|aac|mp4|mkv|ts|ogg)$/i.test(x);
+    const done = fs.readdirSync(dir).find(ready);
     if (done) return this.cache(pr, done);
-    await this.ytdlp(downloadArgs(pr.source.url, { audioOnly: true, out: this.cache(pr, 'audio.%(ext)s'), ffmpeg: this.tools.ffmpeg }), pr.source.url, {
-      signal, onLine: (l) => { const p = parseProgress(l); if (p != null && onProgress) onProgress(p, 'Скачиваю звук'); },
-    });
-    const f = fs.readdirSync(path.dirname(this.cache(pr, 'x'))).find((x) => /^audio\./.test(x) && !x.endsWith('.part'));
+    let p = 0, last = '', lastAt = Date.now();
+    const say = (text) => onProgress && onProgress(p, text);
+    // yt-dlp молчит дольше минуты — показать, что последним он писал (чтобы не казалось, что всё зависло)
+    const timer = setInterval(() => { if (Date.now() - lastAt > 60000) say(`Жду yt-dlp ${Math.round((Date.now() - lastAt) / 60000)} мин: ${last.slice(0, 90) || 'нет ответа'}`); }, 15000);
+    try {
+      await this.ytdlp(downloadArgs(pr.source.url, { audioOnly: true, out: this.cache(pr, 'audio.%(ext)s'), ffmpeg: this.tools.ffmpeg }), pr.source.url, {
+        signal, onLine: (l) => {
+          last = l; lastAt = Date.now();
+          const v = parseProgress(l);
+          if (v != null) { p = v; say('Скачиваю звук'); return; }
+          const st = statusOf(l);
+          if (st) say(st);
+        },
+      });
+    } finally { clearInterval(timer); }
+    const f = fs.readdirSync(dir).find(ready) || fs.readdirSync(dir).find((x) => /^audio\./.test(x) && !/\.(part|ytdl|temp|tmp)$/i.test(x) && !/\.part-Frag/i.test(x));
     if (!f) throw new Error('Звук не скачался');
     return this.cache(pr, f);
   }
@@ -129,11 +143,16 @@ class Pipeline {
   async chatTimes(pr, signal) {
     if (pr.source.kind !== 'url') return [];
     try {
-      await this.ytdlp(downloadArgs(pr.source.url, { chat: true, out: this.cache(pr, 'chat.%(ext)s') }), pr.source.url, { signal });
+      // чат длинного стрима качается страница за страницей и может идти десятки минут: даём 3 минуты, потом без чата
+      const ctrl = new AbortController();
+      const stop = () => ctrl.abort();
+      if (signal) { if (signal.aborted) stop(); signal.addEventListener('abort', stop, { once: true }); }
+      const t = setTimeout(stop, 180000);
+      try { await this.ytdlp(downloadArgs(pr.source.url, { chat: true, out: this.cache(pr, 'chat.%(ext)s') }), pr.source.url, { signal: ctrl.signal }); } catch (e) { if (signal && signal.aborted) throw e; } finally { clearTimeout(t); if (signal) signal.removeEventListener('abort', stop); }
       const d = path.dirname(this.cache(pr, 'x'));
       const f = fs.readdirSync(d).find((x) => /^chat\..*\.(json|live_chat\.json)$/.test(x) || /^chat\.(live_chat|rechat)/.test(x));
       return f ? parseChat(fs.readFileSync(path.join(d, f), 'utf8')) : [];
-    } catch { return []; }
+    } catch (e) { if (signal && signal.aborted) throw e; return []; }
   }
 
   /** Найти моменты. Возвращает обновлённый проект. */
@@ -145,6 +164,7 @@ class Pipeline {
     const env = new Envelope(8000, 0.5);
     const dur = pr.source.duration || 1;
     let samples = 0;
+    if (onProgress) onProgress(0.4, 'Слушаю звук');
     await this.tools.run(this.tools.ffmpeg, envelopeArgs(audio), {
       signal, onStdout: (b) => { env.push(b); samples += b.length / 2; if (onProgress) onProgress(0.4 + 0.5 * Math.min(1, samples / 8000 / dur), 'Слушаю звук'); },
     });
@@ -240,6 +260,68 @@ class Pipeline {
   }
 
   /** Мини-игры из папки (кэш длительностей). */
+  // ------------------------------------------------------------ фон: залипательные видео и мини-игры
+  /** Поиск фона на YouTube (cc — только Creative Commons). */
+  async searchFillers(q, o = {}) {
+    const target = fillerTarget(q, { cc: !!o.cc, limit: o.limit || 30 });
+    const r = await this.ytdlp(listArgs(target, o.limit || 30), target, { okIfStdout: true });
+    const text = r.stdout.toString('utf8').trim();
+    return text ? filterFillers(parseList(text)) : [];
+  }
+
+  /** Библиотека фона: видео в папке фона. id — из имени «название-ID.mp4», чтобы не качать второй раз. */
+  fillerLibrary() {
+    const dir = this.settings().fillerDir;
+    if (!dir) return { dir: '', files: [] };
+    const files = safeList(dir).filter((x) => VIDEO_EXT.test(x)).map((name) => {
+      let size = 0; try { size = fs.statSync(path.join(dir, name)).size; } catch { /* нет */ }
+      const m = /-\[([\w-]{6,})\]\.\w+$/.exec(name);
+      return { name, path: path.join(dir, name), size, id: m ? m[1] : null };
+    });
+    return { dir, files };
+  }
+
+  /** Скачать найденные видео в папку фона. list: [{id, url, title, duration}]. Уже скачанные пропускаются. */
+  async addFillers(list, onProgress, signal) {
+    const dir = this.settings().fillerDir;
+    if (!dir) throw new Error('Не выбрана папка фона');
+    fs.mkdirSync(dir, { recursive: true });
+    const have = new Set(this.fillerLibrary().files.map((f) => f.id).filter(Boolean));
+    const added = [], skipped = [], failed = [];
+    for (const [i, e] of list.entries()) {
+      const id = String(e.id || '').replace(/[^\w-]/g, '').slice(0, 40) || uid();
+      if (have.has(id)) { skipped.push(e.title); continue; }
+      const base = `${slugify(e.title || 'video', 40)}-[${id}]`;
+      const say = (p, t) => onProgress && onProgress((i + p) / list.length, `${i + 1} из ${list.length}: ${t}`);
+      say(0, e.title || 'видео');
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await this.ytdlp(fillerDownloadArgs(e.url, { out: path.join(dir, `${base}.%(ext)s`), ffmpeg: this.tools.ffmpeg, duration: e.duration }), e.url, {
+          signal, onLine: (l) => { const p = parseProgress(l); if (p != null) say(p, e.title || 'видео'); },
+        });
+        const f = safeList(dir).find((x) => x.startsWith(base) && VIDEO_EXT.test(x));
+        if (!f) throw new Error('файл не появился');
+        added.push(path.join(dir, f)); have.add(id);
+      } catch (err) {
+        if (signal && signal.aborted) throw err;
+        failed.push(`${e.title}: ${String(err.message).split('\n')[0]}`);
+      }
+    }
+    this._fillers = null;
+    if (!added.length && failed.length) throw new Error(`Не скачалось:\n${failed.slice(0, 3).join('\n')}`);
+    return { added, skipped, failed, dir };
+  }
+
+  /** Убрать видео из библиотеки фона (только из папки фона). */
+  removeFiller(file) {
+    const dir = this.settings().fillerDir;
+    const full = path.resolve(file);
+    if (!dir || path.dirname(full) !== path.resolve(dir) || !VIDEO_EXT.test(full)) throw new Error('Это не файл из папки фона');
+    fs.rmSync(full, { force: true });
+    this._fillers = null;
+    return this.fillerLibrary();
+  }
+
   async fillers() {
     const dir = this.settings().fillerDir;
     if (!dir) return [];

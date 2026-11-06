@@ -10,6 +10,7 @@ const ic = (name, cls = '') => `<i class="ic ${cls}" style="--i:url(icons/${name
 const S = {
   page: 'search', info: null, settings: null, tools: null, cat: null,
   results: [], searching: false, lastQuery: '',
+  fill: { results: [], q: '', searching: false, sel: new Set(), lib: { dir: '', files: [] }, busy: false },
   projects: [], current: null, project: null, activeMoment: null,
   jobs: new Map(), build: null,
 };
@@ -31,6 +32,7 @@ const fail = (e) => toast(e.message || String(e), e && /не бот/.test(e.mess
 // ------------------------------------------------------------------ навигация
 const PAGES = {
   search: { t: 'Поиск', sub: 'лонги, записи стримов и нарезки', icon: 'search' },
+  fillers: { t: 'Фон', sub: 'залипательные видео и мини-игры для нижней половины', icon: 'gamepad-2' },
   projects: { t: 'Моменты', sub: 'источники и найденные отрезки', icon: 'scissors' },
   edit: { t: 'Монтаж', sub: 'раскладки, субтитры, заголовки', icon: 'layout-template' },
   channels: { t: 'Каналы и тексты', sub: 'сколько каналов, подписи, правила', icon: 'users' },
@@ -40,7 +42,7 @@ const PAGES = {
 
 function renderNav() {
   $('#nav').innerHTML = Object.entries(PAGES).map(([k, p], i) => `
-    ${i === 5 ? '<div class="sep"></div>' : ''}
+    ${k === 'settings' ? '<div class="sep"></div>' : ''}
     <button data-page="${k}" class="${S.page === k ? 'on' : ''}">${ic(p.icon)}<span>${p.t}</span>
       ${k === 'projects' && S.projects.length ? `<span class="badge">${S.projects.length}</span>` : ''}
     </button>`).join('');
@@ -63,7 +65,7 @@ function render() {
   $('#topActions').innerHTML = '';
   const page = $('#page');
   page.className = 'page' + (S.page === 'projects' ? ' split' : '');
-  ({ search: pageSearch, projects: pageProjects, edit: pageEdit, channels: pageChannels, build: pageBuild, settings: pageSettings })[S.page](page);
+  ({ search: pageSearch, fillers: pageFillers, projects: pageProjects, edit: pageEdit, channels: pageChannels, build: pageBuild, settings: pageSettings })[S.page](page);
 }
 
 // ------------------------------------------------------------------ задачи
@@ -79,9 +81,14 @@ function jobUpdate(j) {
       refreshProjects().then(() => { if (S.current) loadProject(S.current); });
       toast(cur.kind === 'analyze' ? `Найдено моментов: ${j.result.moments.length}` : 'Проверка закончена');
     } else if (cur.kind === 'install') { refreshTools(); toast(`${cur.label}: готово${typeof j.result === 'string' && !j.result.includes('\\') && !j.result.includes('/') ? ` — ${j.result}` : ''}`); }
+    else if (cur.kind === 'filler') {
+      const r = j.result || {};
+      toast(`В библиотеку фона добавлено: ${(r.added || []).length}${(r.skipped || []).length ? `, уже были: ${r.skipped.length}` : ''}${(r.failed || []).length ? `, не скачалось: ${r.failed.length}` : ''}`, 4000);
+    }
     else if (cur.kind === 'build') { toast('Папка готова'); if (S.page === 'build') render(); }
     setTimeout(() => { S.jobs.delete(j.id); renderDock(); }, j.error ? 9000 : 3500);
   }
+  if (cur.kind === 'filler' && j.done) { S.fill.busy = false; refreshFillerLib(); }
   if (cur.kind === 'analyze' || cur.kind === 'check') { const el = $('#projJob'); if (el && S.page === 'projects') el.innerHTML = jobInline(cur); }
 }
 const jobInline = (j) => (j && !j.done ? `<div class="row"><small class="grow muted">${esc(j.text || '')}</small><span class="num muted">${Math.round((j.progress || 0) * 100)}%</span></div><div class="bar"><i style="width:${(j.progress || 0) * 100}%"></i></div>` : '');
@@ -191,6 +198,107 @@ function drawResults() {
     </div>`).join('')}</div>`;
   $$('[data-add]').forEach((b) => { b.onclick = () => addUrl(S.results[+b.dataset.add].url); });
   $$('[data-open]').forEach((b) => { b.onclick = () => call('openUrl', S.results[+b.dataset.open].url); });
+}
+
+// ------------------------------------------------------------------ Фон: залипательные видео и мини-игры
+const fillerChips = () => S.settings.fillerQueries.map((l) => { const i = l.indexOf('='); return i < 0 ? { t: l.trim(), q: l.trim() } : { t: l.slice(0, i).trim(), q: l.slice(i + 1).trim() }; }).filter((x) => x.q);
+async function refreshFillerLib() {
+  try { S.fill.lib = await call('fillerList'); } catch { /* нет папки */ }
+  if (S.page === 'fillers') { drawFillers(); drawFillerLib(); }
+}
+
+function pageFillers(el) {
+  const s = S.settings, F = S.fill;
+  el.innerHTML = `
+    <div class="search-box">${ic('search')}<input id="fq" class="input" placeholder="Что искать: «slime asmr», «чистка ковров», «subway surfers gameplay» или ссылка" value="${esc(F.q)}"></div>
+    <div class="quick">${fillerChips().map((x) => `<button class="chip ${F.q === x.q ? 'on' : ''}" data-fq="${esc(x.q)}">${esc(x.t)}</button>`).join('')}</div>
+    <div class="row wrap" style="margin:-4px 0 16px;gap:10px">
+      <div class="seg" id="lic"><button data-cc="0" class="${s.fillerCC ? '' : 'on'}">Все видео</button><button data-cc="1" class="${s.fillerCC ? 'on' : ''}">Только Creative Commons</button></div>
+      <small class="muted grow">${s.fillerCC ? 'Видео, которые авторы разрешили переиспользовать. Найдётся меньше, зато без претензий.' : 'Всё подряд с YouTube. Чужие ролики могут поймать жалобу правообладателя; безопаснее «Creative Commons» или свои записи мини-игр.'}</small>
+      <button class="btn sm ghost" id="fqEdit">${ic('settings', 'sm')}Запросы</button>
+    </div>
+    <div id="fbar"></div>
+    <div id="fres"></div>
+    <div class="card" id="flib" style="margin-top:18px"></div>`;
+  const doSearch = async (q) => {
+    if (!q.trim()) return;
+    if (!S.tools.ytdlp) { toast('Сначала поставь yt-dlp: Настройки → Компоненты'); return; }
+    F.q = q; F.searching = true; F.sel.clear(); drawFillers();
+    $$('[data-fq]').forEach((b) => b.classList.toggle('on', b.dataset.fq === q));
+    try { F.results = await call('fillerSearch', q, { cc: S.settings.fillerCC, limit: 30 }); } catch (e) { fail(e); F.results = []; }
+    F.searching = false; drawFillers();
+  };
+  $('#fq').onkeydown = (e) => { if (e.key === 'Enter') doSearch(e.target.value); };
+  $$('[data-fq]').forEach((b) => { b.onclick = () => { $('#fq').value = b.dataset.fq; doSearch(b.dataset.fq); }; });
+  $$('#lic [data-cc]').forEach((b) => { b.onclick = async () => { await saveSettings({ fillerCC: b.dataset.cc === '1' }, true); render(); if (F.q) doSearch(F.q); }; });
+  $('#fqEdit').onclick = () => { go('settings'); setTimeout(() => { const t = $('#fqList'); if (t) { t.scrollIntoView({ behavior: 'smooth', block: 'center' }); t.focus(); } }, 300); };
+  drawFillers();
+  refreshFillerLib();
+}
+
+function addFillers(list) {
+  if (!list.length) return;
+  if (S.fill.busy) { toast('Уже качаю, подожди'); return; }
+  S.fill.busy = true;
+  call('fillerAdd', list.map((v) => ({ id: v.id, url: v.url, title: v.title, duration: v.duration })))
+    .then((id) => { S.jobs.set(id, { id, kind: 'filler', label: 'Фон: скачиваю', progress: 0 }); renderDock(); S.fill.sel.clear(); drawFillers(); toast(`Качаю в библиотеку: ${list.length}`, 1800); })
+    .catch((e) => { S.fill.busy = false; fail(e); });
+}
+
+function drawFillers() {
+  const F = S.fill, el = $('#fres'), bar = $('#fbar');
+  if (!el) return;
+  const have = new Set((F.lib.files || []).map((f) => f.id).filter(Boolean));
+  const fresh = F.results.filter((v) => !have.has(v.id));
+  bar.innerHTML = F.results.length && !F.searching ? `
+    <div class="card fbar"><b>${F.sel.size ? `Выбрано: ${F.sel.size}` : 'Нажми на превью, чтобы выбрать'}</b><span class="grow"></span>
+      <button class="btn sm ghost" id="fAll" ${fresh.length ? '' : 'disabled'}>Выбрать все новые</button>
+      <button class="btn sm primary" id="fAdd" ${F.sel.size && !F.busy ? '' : 'disabled'}>${ic('download', 'sm')}В библиотеку${F.sel.size ? ` (${F.sel.size})` : ''}</button></div>` : '';
+  if (F.searching) { el.innerHTML = `<div class="empty">${ic('refresh-cw')}<b>Ищу…</b>yt-dlp смотрит YouTube</div>`; return; }
+  if (!F.results.length) {
+    el.innerHTML = `<div class="empty">${ic('gamepad-2')}<b>Найди фон для нижней половины</b>Нажми запрос сверху: чистка ковров, ржавые вещи, слаймы, мини-игры…<br>Выбранные видео скачиваются прямо в библиотеку фона, монтаж берёт их сам.</div>`;
+    return;
+  }
+  el.innerHTML = `<div class="results">${F.results.map((v, i) => {
+    const inLib = have.has(v.id), on = F.sel.has(v.id);
+    return `<div class="vcard ${on ? 'sel' : ''} ${inLib ? 'inlib' : ''}">
+      <div class="thumb" data-pick="${i}" style="background-image:url('${esc(v.thumb)}');cursor:${inLib ? 'default' : 'pointer'}">
+        ${inLib ? `<span class="lib-tag">${ic('check', 'sm')}в библиотеке</span>` : `<span class="tick">${ic(on ? 'square-check' : 'square')}</span>`}
+        ${v.duration ? `<span class="badge num">${fmtTime(v.duration)}</span>` : ''}
+      </div>
+      <div class="body">
+        <div class="t" title="${esc(v.title)}">${esc(v.title)}</div>
+        <div class="meta">${esc(v.channel)}${v.views ? ` · ${H.fmtViews(v.views)} просм.` : ''}${v.duration > 660 ? ' · возьмём первые 10 мин' : ''}</div>
+        <div class="act">${inLib ? '' : `<button class="btn sm primary" data-one="${i}" ${F.busy ? 'disabled' : ''}>${ic('download', 'sm')}В библиотеку</button>`}
+          <button class="btn sm ghost" data-fopen="${i}" title="Открыть на YouTube">${ic('external-link', 'sm')}</button></div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+  $$('[data-pick]').forEach((b) => { b.onclick = () => { const v = F.results[+b.dataset.pick]; if (have.has(v.id)) return; if (F.sel.has(v.id)) F.sel.delete(v.id); else F.sel.add(v.id); drawFillers(); }; });
+  $$('[data-one]').forEach((b) => { b.onclick = () => addFillers([F.results[+b.dataset.one]]); });
+  $$('[data-fopen]').forEach((b) => { b.onclick = () => call('openUrl', F.results[+b.dataset.fopen].url); });
+  if ($('#fAll')) $('#fAll').onclick = () => { fresh.forEach((v) => F.sel.add(v.id)); drawFillers(); };
+  if ($('#fAdd')) $('#fAdd').onclick = () => addFillers(F.results.filter((v) => F.sel.has(v.id)));
+}
+
+function drawFillerLib() {
+  const el = $('#flib');
+  if (!el) return;
+  const { dir, files } = S.fill.lib;
+  const mb = (b) => `${Math.max(1, Math.round(b / 1048576))} МБ`;
+  el.innerHTML = `
+    <div class="row"><div class="grow"><h3>Библиотека фона <span class="badge num">${files.length}</span></h3>
+      <p class="hint" style="margin:0">Отсюда монтаж берёт низ для раскладки «Стрим сверху, мини-игра снизу». Звук фона в ролик не идёт.</p></div>
+      <button class="btn sm" id="flOpen" ${dir ? '' : 'disabled'}>${ic('folder-open', 'sm')}Открыть папку</button>
+      <button class="btn sm ghost" id="flPick">Сменить папку</button></div>
+    <small class="muted">${esc(dir || 'папка не выбрана')}</small>
+    ${files.length ? `<div class="flist">${files.map((f, i) => `<div class="fitem"><span class="grow" title="${esc(f.name)}">${esc(f.name.replace(/-\[[\w-]+\]\.\w+$/, ''))}</span><span class="muted num">${mb(f.size)}</span>
+      <button class="btn sm ghost" data-fshow="${i}" title="Показать в папке">${ic('eye', 'sm')}</button><button class="btn sm ghost" data-frm="${i}" title="Убрать из библиотеки">${ic('trash-2', 'sm')}</button></div>`).join('')}</div>`
+    : '<p class="muted" style="margin:10px 0 0">Пока пусто: выбери видео выше или положи свои записи мини-игр в эту папку.</p>'}`;
+  if (dir) $('#flOpen').onclick = () => call('openPath', dir);
+  $('#flPick').onclick = async () => { const d = await call('pickFolder', 'Папка библиотеки фона'); if (d) { await saveSettings({ fillerDir: d }, true); refreshFillerLib(); } };
+  $$('[data-fshow]').forEach((b) => { b.onclick = () => call('showItem', files[+b.dataset.fshow].path); });
+  $$('[data-frm]').forEach((b) => { b.onclick = async () => { try { S.fill.lib = await call('fillerRemove', files[+b.dataset.frm].path); drawFillerLib(); drawFillers(); } catch (e) { fail(e); } }; });
 }
 
 // ------------------------------------------------------------------ Моменты
@@ -694,6 +802,12 @@ function pageSettings(el) {
         <p class="hint" style="margin-top:12px">Данные программы: ${esc(S.info.userData)}</p>
       </div>
       <div class="card">
+        <h3>Запросы для фона</h3>
+        <p class="hint">Кнопки в разделе «Фон». По строке на кнопку: «Название = что искать». Искать лучше по-английски, так находится больше.</p>
+        <textarea class="input" id="fqList" rows="9" style="width:100%;font-size:12.5px;line-height:1.5;resize:vertical">${esc(s.fillerQueries.join('\n'))}</textarea>
+        <div class="row" style="margin-top:8px"><span class="grow"></span><button class="btn sm ghost" id="fqReset">Как было</button><button class="btn sm primary" id="fqSave">Сохранить</button></div>
+      </div>
+      <div class="card">
         <h3>Вход в YouTube</h3>
         <p class="hint">Если YouTube пишет «Sign in to confirm you're not a bot», программе нужны cookies браузера, где ты вошёл в YouTube. Перед загрузкой закрой этот браузер. Лучше всего работает Firefox. Twitch и файлы с диска работают без входа.</p>
         <div class="stack">
@@ -714,6 +828,8 @@ function pageSettings(el) {
   $('#q').onchange = (e) => saveSettings({ quality: e.target.value }, true);
   $('#fps').onchange = (e) => saveSettings({ fps: +e.target.value }, true);
   $('#mat').onchange = async (e) => { await saveSettings({ material: e.target.value }, true); document.body.dataset.material = S.info.appearance.win11 && e.target.value !== 'none' ? e.target.value : 'none'; };
+  $('#fqSave').onclick = async () => { await saveSettings({ fillerQueries: $('#fqList').value.split(/\r?\n/) }); render(); };
+  $('#fqReset').onclick = async () => { await saveSettings({ fillerQueries: [] }); render(); };
   $('#ckBrowser').value = s.cookies.browser;
   const setCk = async (patch) => { await saveSettings({ cookies: { ...s.cookies, ...patch } }, true); render(); };
   $('#ckMode').value = s.cookies.mode;
