@@ -1,12 +1,23 @@
 'use strict';
 // Аргументы ffmpeg для рендера ролика и обложки + разбор прогресса. Запуск — в tools.js.
 
+// Потолок битрейта (кбит/с) обязателен: без него шумная картинка (игра, конфетти) раздувала ролик за 95 МБ,
+// а GitHub (очередь автопостера) не принимает файлы больше ~100 МБ. Качество при этом задаёт CRF/CQ.
+const vbv = (k) => ['-maxrate', `${k}k`, '-bufsize', `${k * 2}k`];
 const ENCODERS = {
-  cpu: { name: 'Процессор (x264)', args: (q) => ['-c:v', 'libx264', '-preset', q === 'fast' ? 'veryfast' : 'medium', '-crf', q === 'fast' ? '22' : '19'] },
-  nvenc: { name: 'NVIDIA (NVENC)', args: (q) => ['-c:v', 'h264_nvenc', '-preset', q === 'fast' ? 'p4' : 'p6', '-rc', 'vbr', '-cq', q === 'fast' ? '23' : '20', '-b:v', '0'] },
-  qsv: { name: 'Intel (QuickSync)', args: (q) => ['-c:v', 'h264_qsv', '-global_quality', q === 'fast' ? '24' : '21'] },
-  amf: { name: 'AMD (AMF)', args: (q) => ['-c:v', 'h264_amf', '-quality', q === 'fast' ? 'speed' : 'quality', '-rc', 'cqp', '-qp_i', '20', '-qp_p', '22'] },
+  cpu: { name: 'Процессор (x264)', args: (q, k = MAX_KBPS) => ['-c:v', 'libx264', '-preset', q === 'fast' ? 'veryfast' : 'medium', '-crf', q === 'fast' ? '22' : '19', ...vbv(k)] },
+  nvenc: { name: 'NVIDIA (NVENC)', args: (q, k = MAX_KBPS) => ['-c:v', 'h264_nvenc', '-preset', q === 'fast' ? 'p4' : 'p6', '-rc', 'vbr', '-cq', q === 'fast' ? '23' : '20', '-b:v', '0', ...vbv(k)] },
+  qsv: { name: 'Intel (QuickSync)', args: (q, k = MAX_KBPS) => ['-c:v', 'h264_qsv', '-b:v', `${Math.round(k * 0.7)}k`, ...vbv(k)] },
+  amf: { name: 'AMD (AMF)', args: (q, k = MAX_KBPS) => ['-c:v', 'h264_amf', '-quality', q === 'fast' ? 'speed' : 'quality', '-rc', 'vbr_peak', '-b:v', `${Math.round(k * 0.7)}k`, ...vbv(k)] },
 };
+const MAX_KBPS = 12000;          // больше для 1080×1920 30 к/с не нужно ни TikTok, ни Instagram
+const MAX_FILE_MB = 85;          // запас до лимита GitHub 95 МБ (звук и контейнер сверху)
+
+/** Потолок видео-битрейта (кбит/с), чтобы ролик длиной durSec точно влез в MAX_FILE_MB. */
+function videoKbps(durSec, fileMb = MAX_FILE_MB, audioKbps = 192) {
+  const budget = Math.floor(fileMb * 8 * 1024 / Math.max(1, durSec) - audioKbps);
+  return Math.max(1500, Math.min(MAX_KBPS, budget));
+}
 
 /**
  * o: input, start, end (секунды исходника), filter (из layout.buildFilter), output, encoder, quality, fps, loudnorm.
@@ -29,7 +40,7 @@ function renderArgs(o) {
   }
   a.push('-filter_complex', filter, '-map', o.filter.vLabel);
   if (aLabel) a.push('-map', aLabel);
-  a.push(...enc.args(o.quality), '-r', String(o.fps || 30), '-pix_fmt', 'yuv420p');
+  a.push(...enc.args(o.quality, o.maxKbps || MAX_KBPS), '-r', String(o.fps || 30), '-pix_fmt', 'yuv420p');
   if (aLabel) a.push('-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2'); else a.push('-an');
   if (o.maxDur) a.push('-t', String(o.maxDur));
   a.push('-movflags', '+faststart', o.output);
@@ -72,4 +83,4 @@ function parseProbe(json) {
   return { width: w, height: h, duration: parseFloat((o.format || {}).duration || v.duration || 0) || 0, fps: fd ? fn / fd : 30, hasAudio: !!a };
 }
 
-module.exports = { ENCODERS, renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe };
+module.exports = { ENCODERS, renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe, videoKbps, MAX_KBPS, MAX_FILE_MB };

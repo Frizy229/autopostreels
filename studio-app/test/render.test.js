@@ -27,4 +27,16 @@ const pr = R.parseProbe({ streams: [{ codec_type: 'video', width: 1080, height: 
 assert.deepStrictEqual(pr, { width: 1920, height: 1080, duration: 12.5, fps: 60, hasAudio: true });
 assert.strictEqual(R.parseProbe({ streams: [] }).hasAudio, false);
 for (const k of Object.keys(R.ENCODERS)) assert.ok(R.ENCODERS[k].args('fast').length > 2);
-console.log('рендер: 18 проверок');
+
+// потолок битрейта: 60 с влезают в 85 МБ, короткие — не выше 12 Мбит/с, длинные — не ниже 1.5 Мбит/с
+assert.strictEqual(R.videoKbps(10), 12000);
+const k60 = R.videoKbps(60);
+assert.ok((k60 + 192) * 60 / 8 / 1024 <= 85 && k60 > 10000, `60 с: ${k60}`);
+assert.ok((R.videoKbps(180) + 192) * 180 / 8 / 1024 <= 85, '3 минуты тоже влезают');
+assert.strictEqual(R.videoKbps(100000), 1500);
+for (const e of Object.keys(R.ENCODERS)) {
+  const x = R.renderArgs({ input: 'i', filter: f, output: 'o', encoder: e, maxKbps: 9000 }).join(' ');
+  assert.match(x, /-maxrate 9000k -bufsize 18000k/, `${e}: есть потолок`);
+}
+assert.match(R.renderArgs({ input: 'i', filter: f, output: 'o' }).join(' '), /-maxrate 12000k/, 'потолок по умолчанию');
+console.log('рендер: 27 проверок');
