@@ -25,7 +25,8 @@ eq(normalize({ fillerQueries: [] }).fillerQueries, S.FILLER_QUERIES, 'пусто
 eq(normalize({}).fillerCC, false);
 
 // поиск: обычный и только Creative Commons
-eq(S.fillerTarget('slime asmr', { limit: 30 }), 'ytsearch30:slime asmr');
+eq(S.fillerTarget('slime asmr', { limit: 30 }), 'https://www.youtube.com/results?search_query=slime%20asmr', '«Все видео» — тем же способом, что и Creative Commons (у Alex ytsearch давал пусто)');
+ok(!S.fillerTarget('x').includes('&sp='), 'без фильтра');
 const cc = S.fillerTarget('чистка ковров', { cc: true });
 ok(cc.startsWith('https://www.youtube.com/results?search_query=') && cc.includes(encodeURIComponent('чистка ковров')) && cc.endsWith('&sp=EgIwAQ%3D%3D'), 'фильтр Creative Commons');
 ok(S.needsAuth(cc), 'поиск CC идёт со входом в YouTube, если надо');

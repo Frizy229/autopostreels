@@ -101,6 +101,37 @@ eq(normalize({ cookies: { mode: 'x', browser: 'netscape' } }).cookies, { mode: '
   await assert.rejects(pl.addUrl(yt), (e) => e.code !== 'AUTH' && /Video unavailable/.test(e.message)); n++;
   eq(calls.length, 1);
 
+
+  // поиск: пустая выдача без входа → ещё раз с cookies; пусто везде → понятная ошибка, журнал; зависание → лимит
+  settings = normalize({});
+  pl._auth = null;
+  const json = (n) => Buffer.from(JSON.stringify({ entries: Array.from({ length: n }, (_, i) => ({ id: `id${i}`, title: `v${i}`, duration: 100, url: `https://www.youtube.com/watch?v=id${i}` })) }));
+  tools.run = async (cmd, args) => {
+    calls.push(args);
+    const br = args.includes('--cookies-from-browser') ? args[args.indexOf('--cookies-from-browser') + 1] : null;
+    if (br === 'edge') return { code: 0, stdout: json(3), stderr: '' };
+    if (br) return { code: 1, stdout: Buffer.from(''), stderr: `ERROR: could not find ${br} cookies database` };
+    return { code: 0, stdout: json(0), stderr: '' };
+  };
+  calls.length = 0;
+  const found = await pl.searchFillers('rusty restoration satisfying');
+  eq(found.length, 3, 'пусто без входа → нашлось с cookies Edge');
+  ok(calls[0][calls[0].length - 1].startsWith('https://www.youtube.com/results?search_query=rusty'), 'обычный поиск через страницу результатов');
+  eq((await pl.search('эвелон стрим', 10)).length, 3, 'поиск лонгов тем же путём');
+
+  pl._auth = null;
+  tools.run = async (cmd, args) => { calls.push(args); return args.includes('--cookies-from-browser') ? { code: 1, stdout: Buffer.from(''), stderr: 'ERROR: could not find cookies database' } : { code: 0, stdout: json(0), stderr: 'WARNING: [youtube] No supported JavaScript runtime could be found' }; };
+  await assert.rejects(pl.searchFillers('x'), (e) => e.code === 'EMPTY' && /ничего не вернул/.test(e.message) && /JavaScript runtime/.test(e.message)); n++;
+  ok(fs.readFileSync(path.join(tmp, 'logs', 'yt-dlp.txt'), 'utf8').includes('JavaScript runtime'), 'журнал последней ошибки');
+
+  pl._auth = null;
+  tools.run = (cmd, args, opts) => new Promise((resolve, reject) => {
+    opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('Отменено'), { code: 'ABORT' })), { once: true });
+  });
+  const t0 = Date.now();
+  await assert.rejects(pl.ytdlp(['-J', 'x'], 'https://www.youtube.com/results?search_query=x', { accept: () => true, timeoutSec: 0.3 }), (e) => e.code === 'TIMEOUT' && /не ответил/.test(e.message)); n++;
+  ok(Date.now() - t0 < 3000, 'лимит времени срабатывает');
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`вход в YouTube: ${n} проверок`);
 })().catch((e) => { console.error(e); process.exit(1); });

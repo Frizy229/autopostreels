@@ -142,12 +142,12 @@ function pageSearch(el) {
   const doSearch = async (q) => {
     if (!q.trim()) return;
     if (!S.tools.ytdlp) { toast('Сначала поставь yt-dlp: Настройки → Компоненты'); return; }
-    S.lastQuery = q; S.searching = true; drawResults();
+    S.lastQuery = q; S.searching = true; S.searchError = ''; drawResults();
     try {
       const minMin = +$('#minMin').value || 0;
       saveSettings({ searchMinMin: minMin }, true);
       S.results = await call('search', q, { minMin, sort: $('#sort').value, limit: 40 });
-    } catch (e) { fail(e); S.results = []; }
+    } catch (e) { S.searchError = e.message || String(e); S.results = []; }
     S.searching = false; drawResults();
   };
   $('#q').onkeydown = (e) => { if (e.key === 'Enter') doSearch(e.target.value); };
@@ -177,6 +177,12 @@ function drawResults() {
   const el = $('#res');
   if (!el) return;
   if (S.searching) { el.innerHTML = `<div class="empty">${ic('refresh-cw')}<b>Ищу…</b>yt-dlp смотрит YouTube и Twitch</div>`; return; }
+  if (!S.results.length && S.searchError) {
+    el.innerHTML = searchError(S.searchError);
+    $('#retry').onclick = () => { $('#q').value = S.lastQuery; $('#q').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); };
+    $('#ytLog').onclick = async () => { if (!(await call('openLog'))) toast('Журнала пока нет'); };
+    return;
+  }
   if (!S.results.length) {
     el.innerHTML = `<div class="empty">${ic('list-video')}<b>Найди лонг или запись стрима</b>Нажми быструю кнопку сверху или вставь ссылку.<br>Нарезки лучше делать из записей, где Эвелон в кадре и много говорит.</div>`;
     return;
@@ -199,6 +205,10 @@ function drawResults() {
   $$('[data-add]').forEach((b) => { b.onclick = () => addUrl(S.results[+b.dataset.add].url); });
   $$('[data-open]').forEach((b) => { b.onclick = () => call('openUrl', S.results[+b.dataset.open].url); });
 }
+
+/** Ошибка поиска на месте результатов: видна, пока не начнёшь новый поиск. */
+const searchError = (msg) => `<div class="empty err-box">${ic('triangle-alert')}<b>Поиск не получился</b><div class="err-text">${esc(msg)}</div>
+  <div class="row" style="justify-content:center;margin-top:12px"><button class="btn sm primary" id="retry">${ic('refresh-cw', 'sm')}Повторить</button><button class="btn sm ghost" id="ytLog">Журнал yt-dlp</button></div></div>`;
 
 // ------------------------------------------------------------------ Фон: залипательные видео и мини-игры
 const fillerChips = () => S.settings.fillerQueries.map((l) => { const i = l.indexOf('='); return i < 0 ? { t: l.trim(), q: l.trim() } : { t: l.slice(0, i).trim(), q: l.slice(i + 1).trim() }; }).filter((x) => x.q);
@@ -223,9 +233,9 @@ function pageFillers(el) {
   const doSearch = async (q) => {
     if (!q.trim()) return;
     if (!S.tools.ytdlp) { toast('Сначала поставь yt-dlp: Настройки → Компоненты'); return; }
-    F.q = q; F.searching = true; F.sel.clear(); drawFillers();
+    F.q = q; F.searching = true; F.error = ''; F.sel.clear(); drawFillers();
     $$('[data-fq]').forEach((b) => b.classList.toggle('on', b.dataset.fq === q));
-    try { F.results = await call('fillerSearch', q, { cc: S.settings.fillerCC, limit: 30 }); } catch (e) { fail(e); F.results = []; }
+    try { F.results = await call('fillerSearch', q, { cc: S.settings.fillerCC, limit: 30 }); } catch (e) { F.error = e.message || String(e); F.results = []; }
     F.searching = false; drawFillers();
   };
   $('#fq').onkeydown = (e) => { if (e.key === 'Enter') doSearch(e.target.value); };
@@ -255,6 +265,12 @@ function drawFillers() {
       <button class="btn sm ghost" id="fAll" ${fresh.length ? '' : 'disabled'}>Выбрать все новые</button>
       <button class="btn sm primary" id="fAdd" ${F.sel.size && !F.busy ? '' : 'disabled'}>${ic('download', 'sm')}В библиотеку${F.sel.size ? ` (${F.sel.size})` : ''}</button></div>` : '';
   if (F.searching) { el.innerHTML = `<div class="empty">${ic('refresh-cw')}<b>Ищу…</b>yt-dlp смотрит YouTube</div>`; return; }
+  if (!F.results.length && F.error) {
+    el.innerHTML = searchError(F.error);
+    $('#retry').onclick = () => { $('#fq').value = F.q; $('#fq').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); };
+    $('#ytLog').onclick = async () => { if (!(await call('openLog'))) toast('Журнала пока нет'); };
+    return;
+  }
   if (!F.results.length) {
     el.innerHTML = `<div class="empty">${ic('gamepad-2')}<b>Найди фон для нижней половины</b>Нажми запрос сверху: чистка ковров, ржавые вещи, слаймы, мини-игры…<br>Выбранные видео скачиваются прямо в библиотеку фона, монтаж берёт их сам.</div>`;
     return;

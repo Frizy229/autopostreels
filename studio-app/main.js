@@ -193,6 +193,12 @@ function registerIpc() {
     const r = await dialog.showOpenDialog(win, { title, properties: ['openFile'], filters: Array.isArray(filters) ? filters : undefined });
     return r.canceled ? null : r.filePaths[0];
   });
+  handle('open:log', () => {
+    const f = path.join(userData(), 'logs', 'yt-dlp.txt');
+    if (!fs.existsSync(f)) return false;
+    shell.showItemInFolder(f);
+    return true;
+  });
   handle('open:path', (p) => shell.openPath(p));
   handle('open:show', (p) => shell.showItemInFolder(p));
   handle('open:url', (u) => { if (/^https?:\/\//.test(u)) shell.openExternal(u); });
