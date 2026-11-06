@@ -2,11 +2,11 @@
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net, session } = require('electron');
 const { normalize, LANES } = require('./lib/settings');
 const { LAYOUTS } = require('./lib/layout');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
-const { BROWSERS, COOKIE_MODES } = require('./lib/sources');
+const { BROWSERS, COOKIE_MODES, NET_MODES, proxyFromPac } = require('./lib/sources');
 const { Tools, download, whisperAssets, exe, errorTail, exitHint } = require('./lib/tools');
 const { Pipeline } = require('./lib/pipeline');
 const { MODELS, modelUrl } = require('./lib/transcribe');
@@ -21,6 +21,12 @@ const userData = () => app.getPath('userData');
 const settingsPath = () => path.join(userData(), 'settings.json');
 let settings = normalize({});
 let win = null;
+// прокси Windows для youtube.com (VPN-программы в режиме «системный прокси»); yt-dlp сам его не видит
+let sysProxy = '';
+async function refreshSysProxy() {
+  try { sysProxy = proxyFromPac(await session.defaultSession.resolveProxy('https://www.youtube.com')); } catch { sysProxy = ''; }
+  return sysProxy;
+}
 
 function loadSettings() {
   try { settings = normalize(JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))); } catch { settings = normalize({}); }
@@ -80,7 +86,9 @@ const handle = (name, fn) => ipcMain.handle(name, async (_e, ...args) => {
 
 function registerIpc() {
   handle('app:info', () => ({ version: app.getVersion(), appearance: appearance(), userData: userData(),
-    catalog: { layouts: LAYOUTS, subStyles: SUB_STYLES, titleStyles: TITLE_STYLES, lanes: LANES, browsers: BROWSERS, cookieModes: COOKIE_MODES } }));
+    catalog: { layouts: LAYOUTS, subStyles: SUB_STYLES, titleStyles: TITLE_STYLES, lanes: LANES, browsers: BROWSERS, cookieModes: COOKIE_MODES, netModes: NET_MODES } }));
+  handle('net:info', async () => ({ system: await refreshSysProxy() }));
+  handle('net:test', async () => { await refreshSysProxy(); return pipeline.testYoutube(); });
   handle('settings:get', () => settings);
   handle('settings:set', (patch) => {
     const prevMat = settings.material;
@@ -239,7 +247,9 @@ app.whenReady().then(() => {
   loadSettings();
   nativeTheme.themeSource = settings.theme;
   tools = new Tools(path.join(userData(), 'bin'));
-  pipeline = new Pipeline({ tools, dataDir: userData(), fontsDir: fontsDir(), settings: () => settings });
+  pipeline = new Pipeline({ tools, dataDir: userData(), fontsDir: fontsDir(), settings: () => settings, systemProxy: () => sysProxy });
+  refreshSysProxy();
+  setInterval(refreshSysProxy, 60000);
   registerIpc();
   createWindow();
 });

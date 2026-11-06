@@ -824,6 +824,17 @@ function pageSettings(el) {
         <div class="row" style="margin-top:8px"><span class="grow"></span><button class="btn sm ghost" id="fqReset">Как было</button><button class="btn sm primary" id="fqSave">Сохранить</button></div>
       </div>
       <div class="card">
+        <h3>Сеть</h3>
+        <p class="hint">Если YouTube не открывается (в России его часто блокируют), нужен VPN или прокси. Программа сама берёт прокси, который включил VPN в Windows. Если VPN работает только в браузере, укажи его прокси вручную, например <code>socks5://127.0.0.1:1080</code>.</p>
+        <div class="stack">
+          <div class="field"><span>Подключение для YouTube</span><select class="input" id="netMode">${Object.entries(S.cat.netModes).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>
+            <small class="muted" id="netSys">${s.net.mode === 'system' ? 'проверяю прокси Windows…' : ''}</small></div>
+          <div class="field" ${s.net.mode === 'manual' ? '' : 'hidden'}><span>Адрес прокси</span>
+            <div class="row"><input class="input grow" id="netProxy" value="${esc(s.net.proxy)}" placeholder="socks5://127.0.0.1:1080 или 127.0.0.1:10809"><button class="btn" id="netSave">Сохранить</button></div></div>
+          <div class="row"><button class="btn" id="netTest">${ic('refresh-cw', 'sm')}Проверить YouTube</button><small class="grow" id="netRes"></small></div>
+        </div>
+      </div>
+      <div class="card">
         <h3>Вход в YouTube</h3>
         <p class="hint">Если YouTube пишет «Sign in to confirm you're not a bot», программе нужны cookies браузера, где ты вошёл в YouTube. Перед загрузкой закрой этот браузер. Лучше всего работает Firefox. Twitch и файлы с диска работают без входа.</p>
         <div class="stack">
@@ -846,6 +857,16 @@ function pageSettings(el) {
   $('#mat').onchange = async (e) => { await saveSettings({ material: e.target.value }, true); document.body.dataset.material = S.info.appearance.win11 && e.target.value !== 'none' ? e.target.value : 'none'; };
   $('#fqSave').onclick = async () => { await saveSettings({ fillerQueries: $('#fqList').value.split(/\r?\n/) }); render(); };
   $('#fqReset').onclick = async () => { await saveSettings({ fillerQueries: [] }); render(); };
+  $('#netMode').value = s.net.mode;
+  $('#netMode').onchange = async (e) => { await saveSettings({ net: { ...s.net, mode: e.target.value } }, true); render(); };
+  if ($('#netSave')) $('#netSave').onclick = async () => { await saveSettings({ net: { ...s.net, proxy: $('#netProxy').value.trim() } }); };
+  if (s.net.mode === 'system') call('netInfo').then((r) => { const el = $('#netSys'); if (el) el.textContent = r.system ? `найден прокси Windows: ${r.system}` : 'прокси в Windows нет — подключение напрямую (VPN в режиме TUN тоже подойдёт)'; }).catch(() => {});
+  $('#netTest').onclick = async () => {
+    const out = $('#netRes'); out.innerHTML = '<span class="muted">Проверяю…</span>';
+    if (s.net.mode === 'manual' && $('#netProxy') && $('#netProxy').value.trim() !== s.net.proxy) await saveSettings({ net: { ...s.net, proxy: $('#netProxy').value.trim() } }, true);
+    const r = await call('netTest');
+    out.innerHTML = r.ok ? `<span class="okc">YouTube открывается (${(r.ms / 1000).toFixed(1)} с${r.proxy ? `, через ${esc(r.proxy)}` : ''})</span>` : `<span class="err" style="white-space:pre-line">${esc(r.error)}</span>`;
+  };
   $('#ckBrowser').value = s.cookies.browser;
   const setCk = async (patch) => { await saveSettings({ cookies: { ...s.cookies, ...patch } }, true); render(); };
   $('#ckMode').value = s.cookies.mode;
