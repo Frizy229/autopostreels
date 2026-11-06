@@ -101,4 +101,20 @@ const withAss = L.buildFilter({ layout: 'crop', srcW: 1920, srcH: 1080, ass: "'a
 assert.match(withAss.filter, /,ass='a.ass':fontsdir='f',format=yuv420p\[vout\]$/);
 // путь Windows для фильтра
 assert.strictEqual(L.filterPath('C:\\Users\\Alex\\subs.ass'), "'C\\:/Users/Alex/subs.ass'");
-console.log('раскладки: 60 проверок');
+// блюр областей
+const nb = L.normBlurs([{ x: 0.9, y: 0.5, w: 0.3, h: 0.2, start: 10, end: 5 }, { x: 0, y: 0, w: 1, h: 1, start: '', end: null }]);
+assert.deepStrictEqual([nb[0].x, nb[0].start, nb[0].end], [0.7, 5, 10], 'рамка в кадре, время по порядку');
+assert.ok(nb[1].start === null && nb[1].end === null, 'пусто — на всё видео');
+assert.strictEqual(L.normBlurs(Array.from({ length: 20 }, () => ({}))).length, L.MAX_BLURS);
+const bf = L.blursFor([{ x: 0, y: 0, w: 0.5, h: 0.5, start: 100, end: 110 }, { x: 0, y: 0, w: 0.1, h: 0.1, start: 200, end: 210 }, { x: 0.5, y: 0.5, w: 0.2, h: 0.2 }], 95, 125);
+assert.deepStrictEqual(bf.map((b) => [b.from, b.to]), [[5, 15], [null, null]], 'время от начала ролика; чужой отрезок не попал; весь ролик — null');
+const blurF = L.buildFilter({ layout: 'full', srcW: 1920, srcH: 1080, blurs: bf });
+assert.match(blurF.filter, /^\[0:v\]split=2\[bm0\]\[bs0\];\[bs0\]crop=960:540:0:0,gblur=sigma=30:steps=2\[bk0\];\[bm0\]\[bk0\]overlay=0:0:enable='between\(t,5,15\)'\[vb0\]/);
+assert.match(blurF.filter, /overlay=960:540\[vb\];\[vb\]crop=/, 'раскладка берёт уже размытый кадр');
+assert.strictEqual((blurF.filter.match(/\[0:v\]/g) || []).length, 1, '[0:v] берётся один раз');
+for (const lay of Object.keys(L.LAYOUTS)) {
+  const f = L.buildFilter({ layout: lay, srcW: 1920, srcH: 1080, cams: [{ x: 0.7, y: 0, w: 0.3, h: 0.3 }], filler: true, blurs: bf }).filter;
+  assert.ok(f.includes('[vb]') && (f.match(/\[0:v\]/g) || []).length === 1, `блюр в раскладке ${lay}`);
+}
+assert.doesNotMatch(L.buildFilter({ layout: 'full', srcW: 1920, srcH: 1080, blurs: [] }).filter, /gblur/);
+console.log('раскладки: 76 проверок');

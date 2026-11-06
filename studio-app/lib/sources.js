@@ -1,5 +1,5 @@
 'use strict';
-// Источники: ссылки YouTube/Twitch и файлы с диска. Здесь только аргументы yt-dlp и разбор его ответа,
+// Источники: ссылки YouTube/Twitch/Instagram Reels и файлы с диска. Здесь только аргументы yt-dlp и разбор его ответа,
 // запуск — в tools.js. Для длинных стримов сначала качается только звук (поиск моментов),
 // потом видео лишь нужных отрезков (--download-sections), а не все 3 часа.
 
@@ -9,6 +9,8 @@ function platformOf(url) {
   const u = String(url || '').toLowerCase();
   if (/twitch\.tv/.test(u)) return 'twitch';
   if (/youtube\.com|youtu\.be/.test(u)) return 'youtube';
+  if (/instagram\.com/.test(u)) return 'instagram';
+  if (/tiktok\.com/.test(u)) return 'tiktok';
   if (/kick\.com/.test(u)) return 'kick';
   if (/vkvideo\.ru|vk\.com\/video/.test(u)) return 'vk';
   if (/^https?:\/\//.test(u)) return 'web';
@@ -16,6 +18,23 @@ function platformOf(url) {
   return null;
 }
 const isUrl = (s) => /^https?:\/\/\S+$/i.test(String(s || '').trim());
+
+/** Все ссылки из вставленного текста (через пробел, запятую или с новой строки), без повторов. */
+function parseLinks(text) {
+  const out = [];
+  for (const m of String(text || '').matchAll(/https?:\/\/[^\s,;"'<>]+/gi)) {
+    const u = m[0].replace(/[).,]+$/, '');
+    if (!out.includes(u)) out.push(u);
+  }
+  return out;
+}
+
+/** Профиль Instagram целиком (не рилс): yt-dlp его не скачивает, нужны ссылки на сами рилсы. */
+const isInstagramProfile = (url) => /instagram\.com\/(?!reels?\/|p\/|tv\/|stories\/)[\w.]+\/?(reels\/?)?(\?.*)?$/i.test(String(url || ''));
+
+/** Короткий источник (рилс, клип до 10 минут): качается целиком один раз, а не кусками. */
+const SHORT_SEC = 600;
+const isShortSource = (src) => !!src && src.kind === 'url' && src.duration > 0 && src.duration <= SHORT_SEC;
 
 /** Запрос → что передать yt-dlp: ссылка как есть, иначе поиск YouTube. */
 function searchTarget(q, limit = 20) {
@@ -124,17 +143,18 @@ function parseProgress(line) {
 
 // ------------------------------------------------------------------ вход в YouTube (cookies)
 // YouTube всё чаще отвечает «Sign in to confirm you're not a bot». Тогда yt-dlp нужны cookies браузера,
-// в котором выполнен вход в YouTube, или файл cookies.txt. Twitch, Kick, VK и файлы с диска идут без cookies.
+// в котором выполнен вход в YouTube, или файл cookies.txt. Instagram без входа часто не отдаёт рилсы — те же cookies.
+// Twitch, Kick, VK и файлы с диска идут без cookies.
 
 const BROWSERS = { firefox: 'Firefox', edge: 'Edge', chrome: 'Chrome', brave: 'Brave', opera: 'Opera', vivaldi: 'Vivaldi', chromium: 'Chromium' };
 // Firefox первым: cookies Chrome/Edge на Windows зашифрованы привязкой к приложению и часто не читаются
 const AUTO_BROWSERS = ['firefox', 'edge', 'chrome', 'brave', 'opera', 'vivaldi'];
 const COOKIE_MODES = { auto: 'Автоматически', none: 'Без входа', browser: 'Из браузера', file: 'Файл cookies.txt' };
 
-/** Нужны ли cookies для этой цели yt-dlp: только YouTube и поиск YouTube. */
+/** Нужны ли cookies для этой цели yt-dlp: YouTube (и его поиск) и Instagram. */
 function needsAuth(target) {
   const t = String(target || '');
-  return /^ytsearch\d*:/i.test(t) || platformOf(t) === 'youtube';
+  return /^ytsearch\d*:/i.test(t) || ['youtube', 'instagram'].includes(platformOf(t));
 }
 
 /** Аргументы yt-dlp для одного способа входа: null — без cookies. */
@@ -159,18 +179,25 @@ function authPlan(cfg, target) {
 }
 
 /** YouTube просит войти: проверка «не бот», возраст, вход. */
-const isAuthError = (text) => /sign in to confirm|not a bot|use --cookies|--cookies-from-browser|login required|sign in to view|confirm your age|age[- ]restricted/i.test(String(text || ''));
+const isAuthError = (text) => /sign in to confirm|not a bot|use --cookies|--cookies-from-browser|login required|sign in to view|confirm your age|age[- ]restricted|rate-?limit reached|requested content is not available|restricted video|unable to extract shared data/i.test(String(text || ''));
 /** Cookies не прочитались: нет браузера/профиля, база занята открытым браузером, шифрование Chrome/Edge. */
 const isCookieError = (text) => /cookies? database|could not find .*(browser|profile|cookies)|failed to decrypt|decrypt.*cookie|dpapi|app.?bound|could not copy .*cookie|permission denied.*cookie|cookies? file|does not look like a netscape/i.test(String(text || ''));
 
 const authName = (a) => (!a ? 'без входа' : a.file ? 'файл cookies.txt' : `cookies ${BROWSERS[a.browser] || a.browser}`);
 
-/** Что сказать человеку, когда YouTube не пустил ни одним способом. */
-function authHelp(tried) {
+/** Что сказать человеку, когда сайт не пустил ни одним способом. target — для Instagram свой текст. */
+function authHelp(tried, target = '') {
   const list = (tried || []).map(authName).join(', ');
+  if (platformOf(target) === 'instagram') {
+    return 'Instagram не отдаёт этот рилс без входа (или рилс закрыт, удалён, аккаунт приватный).\n'
+      + 'Что сделать: войди в Instagram в Firefox (лучше всего) или в Edge/Chrome, закрой этот браузер и повтори. '
+      + 'Либо выбери браузер или файл cookies.txt в Настройках → «Вход на сайты».'
+      + (list ? `\nПробовал: ${list}.` : '')
+      + '\nЕсли качаешь много рилсов подряд, Instagram может временно ограничить скачивание: подожди 10–20 минут.';
+  }
   return 'YouTube просит подтвердить, что ты не бот.\n'
     + 'Что сделать: войди в YouTube в Firefox (лучше всего) или в Edge/Chrome, закрой этот браузер и повтори. '
-    + 'Либо выбери браузер или файл cookies.txt в Настройках → «Вход в YouTube».'
+    + 'Либо выбери браузер или файл cookies.txt в Настройках → «Вход на сайты».'
     + (list ? `\nПробовал: ${list}.` : '')
     + '\nЗаписи Twitch и файлы с диска работают без входа.';
 }
@@ -258,13 +285,13 @@ function proxyArgs(net, sys) {
 const isNetworkError = (text) => /getaddrinfo failed|failed to resolve|name or service not known|temporary failure in name resolution|nodename nor servname|errno 11001|winerror 1006[01]|winerror 10054|connection (refused|reset|aborted)|timed out|network is unreachable|no route to host|unable to connect to proxy|proxyerror|ssl: (unexpected_eof|wrong_version)|eof occurred in violation/i.test(String(text || ''));
 
 function netHelp(target, viaProxy) {
-  const site = platformOf(target) === 'youtube' || /^ytsearch/i.test(String(target)) ? 'YouTube' : 'Сайт';
+  const site = platformOf(target) === 'youtube' || /^ytsearch/i.test(String(target)) ? 'YouTube' : platformOf(target) === 'instagram' ? 'Instagram' : 'Сайт';
   return `${site} недоступен в этой сети: программа не может подключиться к серверу.\n`
     + (viaProxy ? 'Прокси из настроек не отвечает: проверь его адрес или включи VPN.\n' : 'Включи VPN или укажи прокси в Настройках → «Сеть», затем нажми «Проверить YouTube».\n')
     + 'Записи Twitch и файлы с диска работают без этого.';
 }
 
-module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf,
+module.exports = { VIDEO_EXT, platformOf, isUrl, parseLinks, isInstagramProfile, SHORT_SEC, isShortSource, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf,
   NET_MODES, proxyFromPac, normProxy, proxyArgs, isNetworkError, netHelp, ytResultsUrl,
   FILLER_QUERIES, parseQueryLine, fillerTarget, filterFillers, fillerDownloadArgs,
   BROWSERS, AUTO_BROWSERS, COOKIE_MODES, needsAuth, cookieArgs, authPlan, isAuthError, isCookieError, authName, authHelp };

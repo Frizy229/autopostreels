@@ -11,6 +11,21 @@
     const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = t % 60;
     return (h ? `${h}:${String(m).padStart(2, '0')}` : String(m)) + ':' + String(s).padStart(2, '0');
   }
+  /** Время с десятыми: 62.5 → «1:02.5» (для точной обрезки). */
+  function fmtTimeP(sec) {
+    const t = Math.max(0, Math.round((sec || 0) * 10) / 10);
+    const whole = Math.floor(t), frac = Math.round((t - whole) * 10);
+    return fmtTime(whole) + (frac ? `.${frac}` : '');
+  }
+  /** Все ссылки из вставленного текста, без повторов (как parseLinks в lib/sources.js). */
+  function parseLinks(text) {
+    const out = [];
+    for (const m of String(text || '').matchAll(/https?:\/\/[^\s,;"'<>]+/gi)) {
+      const u = m[0].replace(/[).,]+$/, '');
+      if (!out.includes(u)) out.push(u);
+    }
+    return out;
+  }
   function parseTime(s) {
     const parts = String(s || '').trim().split(':').map(Number);
     if (!parts.length || parts.some((p) => !Number.isFinite(p))) return NaN;
@@ -107,5 +122,5 @@
     return { need, selected, repeats: Math.max(0, need - selected), uniq, ok: selected > 0 };
   }
 
-  return { esc, fmtTime, parseTime, fmtViews, plural, clampRect, faceToCam, biggestFace, camsOf, facesToCams, nextCamSlot, subCss, layoutBands, captionPreview, buildSummary };
+  return { esc, fmtTime, fmtTimeP, parseLinks, parseTime, fmtViews, plural, clampRect, faceToCam, biggestFace, camsOf, facesToCams, nextCamSlot, subCss, layoutBands, captionPreview, buildSummary };
 }));

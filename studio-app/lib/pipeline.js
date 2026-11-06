@@ -5,13 +5,13 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { buildFilter, filterPath, camsOf, CAM_LAYOUTS } = require('./layout');
+const { buildFilter, filterPath, camsOf, CAM_LAYOUTS, normBlurs, blursFor } = require('./layout');
 const { buildAss } = require('./subs');
 const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
 const { layoutOutput, writeTexts, checkFolder, nextFolderNumber, slugify } = require('./output');
 const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe, videoKbps, MAX_FILE_MB } = require('./render');
-const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
+const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, isInstagramProfile, isShortSource, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
 const { checkMoment } = require('./rules');
 const { whisperArgs, wavArgs, parseWhisperJson, MODELS } = require('./transcribe');
 
@@ -48,7 +48,18 @@ class Pipeline {
   update(id, patch) {
     const pr = this.get(id);
     for (const [k, v] of Object.entries(patch || {})) {
-      if (k === 'moments' && Array.isArray(v)) pr.moments = v;
+      if (k === 'moments' && Array.isArray(v)) {
+        // момент обрезали: старые слова и проверка относятся к прежним границам
+        const was = new Map((pr.moments || []).map((m) => [m.id, m]));
+        pr.moments = v.map((m) => {
+          const o = was.get(m.id);
+          const start = Math.max(0, +m.start), end = Math.min(pr.source.duration || Infinity, +m.end);
+          if (!(end - start >= 1)) throw new Error('Отрезок должен быть не короче секунды');
+          if (o && (o.start !== start || o.end !== end)) { const { words, check, ...rest } = m; return { ...rest, start, end, peak: Math.min(end, Math.max(start, m.peak || start)), trimmed: true }; }
+          return { ...m, start, end };
+        });
+      }
+      else if (k === 'blurs') pr.blurs = normBlurs(v);
       else if (['frame', 'title', 'streamer'].includes(k)) pr[k] = v;
     }
     return this.save(pr);
@@ -106,7 +117,7 @@ class Pipeline {
     if (empty && !authHit) last = emptyRes;
     this.logYtdlp([...net, ...args], last);
     if (netFail) throw Object.assign(new Error(netHelp(target, net.length && net[1])), { code: 'NET', res: last });
-    if (authHit) throw Object.assign(new Error(authHelp(tried.filter(Boolean).length ? tried : [])), { code: 'AUTH', res: last });
+    if (authHit) throw Object.assign(new Error(authHelp(tried.filter(Boolean).length ? tried : [], target)), { code: 'AUTH', res: last });
     const tail = String((last && last.stderr) || '').trim().split(/\r?\n/).filter((l) => l && !/^\[(debug|info)\]/i.test(l)).slice(-3).join('\n');
     if (empty) throw Object.assign(new Error(`YouTube ничего не вернул.${tail ? `\n${tail}` : ''}\nПопробуй другой запрос, обнови yt-dlp (Настройки → Компоненты) или войди в YouTube (Настройки → «Вход в YouTube»).`), { code: 'EMPTY', res: last });
     throw Object.assign(new Error(`yt-dlp: код ${last.code}\n${tail}`), { res: last });
@@ -147,12 +158,20 @@ class Pipeline {
   }
 
   async addUrl(url) {
+    if (isInstagramProfile(url)) throw new Error('Это профиль Instagram, а не рилс. Профиль целиком программа не скачивает (Instagram это закрыл): открой нужные рилсы и вставь ссылки на них, можно сразу несколько.');
     const r = await this.ytdlp(['-J', '--no-warnings', '--no-playlist', url], url);
     const raw = JSON.parse(r.stdout.toString('utf8'));
     const e = parseList(raw)[0];
-    const pr = { id: uid(), created: Date.now(), title: e.title, streamer: e.channel || '',
-      source: { kind: 'url', url: e.url || url, duration: e.duration, width: raw.width || 1920, height: raw.height || 1080,
-        hasAudio: true, platform: platformOf(url), thumb: e.thumb, views: e.views }, moments: [], frame: null };
+    const platform = platformOf(url);
+    const width = raw.width || 1920, height = raw.height || 1080;
+    // у рилса заголовок «Video by ник»: лучше первая строка подписи
+    const desc = String(raw.description || '').split('\n').map((x) => x.trim()).find(Boolean) || '';
+    const title = platform === 'instagram' && desc ? desc.slice(0, 90) : e.title;
+    const pr = { id: uid(), created: Date.now(), title, streamer: e.channel || raw.uploader_id || '',
+      source: { kind: 'url', url: e.url || url, duration: e.duration, width, height,
+        hasAudio: true, platform, thumb: e.thumb, views: e.views }, moments: [], blurs: [],
+      // вертикальное видео (рилс) — обычно без отдельной вебки: сразу «Без вебки», рамку можно поменять
+      frame: height > width ? { cams: [], cam: null, content: { x: 0, y: 0, w: 1, h: 1 } } : null };
     return this.save(pr);
   }
 
@@ -166,6 +185,7 @@ class Pipeline {
   /** Звук источника: файл как есть, ссылка — только звуковая дорожка в кэш. */
   async audioSource(pr, onProgress, signal) {
     if (pr.source.kind === 'file') return pr.source.path;
+    if (isShortSource(pr.source)) return this.wholeVideo(pr, onProgress, signal);
     const dir = path.dirname(this.cache(pr, 'x'));
     const ready = (x) => /^audio\.(m4a|webm|opus|mp3|aac|mp4|mkv|ts|ogg)$/i.test(x);
     const done = fs.readdirSync(dir).find(ready);
@@ -205,6 +225,17 @@ class Pipeline {
     } catch (e) { if (signal && signal.aborted) throw e; return []; }
   }
 
+  /** Короткое видео по ссылке (рилс): скачать целиком один раз — и звук, и картинка берутся из него. */
+  async wholeVideo(pr, onProgress, signal) {
+    const out = this.cache(pr, 'full.mp4');
+    if (fs.existsSync(out)) return out;
+    await this.ytdlp(downloadArgs(pr.source.url, { out, ffmpeg: this.tools.ffmpeg }), pr.source.url, {
+      signal, onLine: (l) => { const p = parseProgress(l); if (p != null && onProgress) onProgress(p, 'Скачиваю видео'); },
+    });
+    if (!fs.existsSync(out)) throw new Error('Видео не скачалось');
+    return out;
+  }
+
   /** Найти моменты. Возвращает обновлённый проект. */
   async analyze(id, onProgress, signal) {
     const pr = this.get(id);
@@ -222,7 +253,10 @@ class Pipeline {
     if (onProgress) onProgress(0.92, 'Смотрю чат');
     const chat = await this.chatTimes(pr, signal);
     const need = Math.max(20, Math.ceil(s.channels.length * s.perChannel * 1.5));
-    const found = findMoments(values, { winSec: env.winSec, minLen: s.minLen, maxLen: s.maxLen, count: need, chat });
+    // короткое видео (рилс, клип) — один момент на всю длину, обрезать можно вручную
+    const whole = dur <= Math.max(60, s.maxLen) * 1.3;
+    const found = whole ? [{ start: 0, end: Math.round(dur * 100) / 100, peak: dur / 2, score: 0, whole: true }]
+      : findMoments(values, { winSec: env.winSec, minLen: s.minLen, maxLen: s.maxLen, count: need, chat });
     const old = new Map((pr.moments || []).map((m) => [`${m.start}-${m.end}`, m]));
     pr.moments = found.map((m, i) => old.get(`${m.start}-${m.end}`) || { id: uid(), ...m, title: '', selected: i < need });
     pr.envelope = downsample(values, 600);
@@ -246,6 +280,7 @@ class Pipeline {
   /** Видео для отрезка: файл как есть; ссылка — скачать только этот кусок (с запасом 2 с). */
   async videoFor(pr, start, end, onProgress, signal) {
     if (pr.source.kind === 'file') return { input: pr.source.path, offset: 0 };
+    if (isShortSource(pr.source)) return { input: await this.wholeVideo(pr, onProgress && ((p) => onProgress(p)), signal), offset: 0 };
     const a = Math.max(0, Math.floor(start - 2)), b = Math.ceil(end + 2);
     const out = this.cache(pr, `v_${a}_${b}.mp4`);
     if (!fs.existsSync(out)) {
@@ -463,7 +498,9 @@ class Pipeline {
         const fl = fillers[h % fillers.length];
         filler = { path: fl.path, offset: Math.max(0, (h % 997) / 997 * Math.max(0, fl.duration - dur - 1)).toFixed(2) };
       }
-      const base = { layout: v.layout || s.layout, srcW: pr.source.width, srcH: pr.source.height, cams: camsOf(fr), content: fr.content || null, fit: s.fit,
+      // блюр: время из исходника → время от начала ролика (до ускорения)
+      const blurs = blursFor(pr.blurs, m.start, m.end);
+      const base = { layout: v.layout || s.layout, srcW: pr.source.width, srcH: pr.source.height, cams: camsOf(fr), content: fr.content || null, fit: s.fit, blurs,
         split: fr.split || s.split, variant: v, hasAudio: pr.source.hasAudio !== false, filler: !!filler };
       const anchors = buildFilter(base).anchors;
       const assFile = this.cache(pr, `s_${i}_${m.id}.ass`);

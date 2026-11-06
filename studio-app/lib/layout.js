@@ -110,6 +110,53 @@ const cover = (w, h) => `scale=${w}:${h}:force_original_aspect_ratio=increase:fl
  *       variant {mirror, zoom, sat, bright, speed}, ass (уже экранированный путь или null), fontsDir.
  * Возвращает { filter, vLabel, aLabel, anchors: {titleY, subsY, contentTop, contentBottom}, layout, cams }.
  */
+// ------------------------------------------------------------------ блюр областей
+// Блюр задаётся на проект (на всё видео-источник): рамка в долях кадра и время в секундах исходника.
+// start/end = null — на всё видео. Ставится до раскладки, поэтому размыто и в вебке, и в контенте, и в фоне.
+const MAX_BLURS = 12;
+
+/** Привести список блюров из окна к виду для сохранения: рамка внутри кадра, время по порядку. */
+function normBlurs(list) {
+  return (Array.isArray(list) ? list : []).slice(0, MAX_BLURS).map((b, i) => {
+    const w = clamp(+b.w || 0.2, 0.02, 1), h = clamp(+b.h || 0.1, 0.02, 1);
+    const r = { id: String(b.id || `b${i + 1}`).slice(0, 20), x: clamp(+b.x || 0, 0, 1 - w), y: clamp(+b.y || 0, 0, 1 - h), w, h,
+      start: b.start == null || b.start === '' ? null : Math.max(0, +b.start), end: b.end == null || b.end === '' ? null : Math.max(0, +b.end),
+      strength: clamp(Math.round(+b.strength || 30), 5, 80) };
+    if (r.start != null && r.end != null && r.end < r.start) [r.start, r.end] = [r.end, r.start];
+    return r;
+  }).filter((r) => [r.x, r.y, r.w, r.h].every(Number.isFinite));
+}
+
+/**
+ * Блюры, которые попадают в отрезок [mStart, mEnd] исходника, со временем от начала ролика:
+ * {x, y, w, h, strength, from, to} (from/to = null — весь ролик).
+ */
+function blursFor(list, mStart, mEnd) {
+  const dur = mEnd - mStart;
+  return normBlurs(list).filter((b) => (b.start == null || b.start < mEnd) && (b.end == null || b.end > mStart)).map((b) => {
+    const from = b.start == null ? 0 : Math.max(0, b.start - mStart), to = b.end == null ? dur : Math.min(dur, b.end - mStart);
+    return { x: b.x, y: b.y, w: b.w, h: b.h, strength: b.strength, from: from <= 0.01 && to >= dur - 0.01 ? null : +from.toFixed(2), to: from <= 0.01 && to >= dur - 0.01 ? null : +to.toFixed(2) };
+  });
+}
+
+/** Цепочка фильтров: [0:v] → размытые области → [label]. '' — блюров нет. */
+function blurChain(blurs, srcW, srcH, label = 'vb') {
+  if (!blurs || !blurs.length) return '';
+  const parts = [];
+  let cur = '0:v';
+  blurs.forEach((b, i) => {
+    const r = rectPx(b, srcW, srcH);
+    const sigma = Math.max(2, Math.round(b.strength || 30) * Math.min(srcW, srcH) / 1080);
+    const en = b.from == null ? '' : `:enable='between(t,${b.from},${b.to})'`;
+    const out = i === blurs.length - 1 ? label : `vb${i}`;
+    parts.push(`[${cur}]split=2[bm${i}][bs${i}]`);
+    parts.push(`[bs${i}]crop=${r.w}:${r.h}:${r.x}:${r.y},gblur=sigma=${sigma}:steps=2[bk${i}]`);
+    parts.push(`[bm${i}][bk${i}]overlay=${r.x}:${r.y}${en}[${out}]`);
+    cur = out;
+  });
+  return parts.join(';');
+}
+
 function buildFilter(opts) {
   const { srcW, srcH } = opts;
   let layout = LAYOUTS[opts.layout] ? opts.layout : 'stream';
@@ -225,6 +272,13 @@ function buildFilter(opts) {
   if (opts.ass) tail += `,ass=${opts.ass}${opts.fontsDir ? `:fontsdir=${opts.fontsDir}` : ''}`;
   tail += ',format=yuv420p[vout]';
   parts.push(tail);
+  // блюр областей — до раскладки: кадр источника [0:v] заменяется на уже размытый [vb]
+  const bc = blurChain(opts.blurs, srcW, srcH);
+  if (bc) {
+    const i = parts.findIndex((p) => p.startsWith('[0:v]'));
+    parts[i] = `[vb]${parts[i].slice(5)}`;
+    parts.unshift(bc);
+  }
   let aLabel = opts.hasAudio === false ? null : '0:a?';
   if (aLabel && v.speed !== 1) { parts.push(`[0:a]atempo=${v.speed}[aout]`); aLabel = '[aout]'; }
   return { filter: parts.join(';'), vLabel: '[vout]', aLabel, anchors, layout, cams: camRects.length, pieces };
@@ -239,4 +293,4 @@ function filterPath(p) {
   return `'${s}'`;
 }
 
-module.exports = { OUT_W, OUT_H, MAX_CAMS, LAYOUTS, CAM_LAYOUTS, FITS, rectPx, zoomRect, fitAspect, camsOf, camGrid, fitInto, buildFilter, filterPath, even };
+module.exports = { MAX_BLURS, normBlurs, blursFor, blurChain, OUT_W, OUT_H, MAX_CAMS, LAYOUTS, CAM_LAYOUTS, FITS, rectPx, zoomRect, fitAspect, camsOf, camGrid, fitInto, buildFilter, filterPath, even };

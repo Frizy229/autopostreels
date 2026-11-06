@@ -97,7 +97,7 @@ ok(/^yt-dlp: /.test(S.statusOf('WARNING: [youtube] No supported JavaScript runti
   await assert.rejects(pl.addFillers([{ id: 'broken', url: 'https://youtu.be/broken', title: 'Битое' }]), /Не скачалось/); n++;
 
   // звук для поиска моментов: без -x, подписи этапов вместо «застывших 40%»
-  const pr = pl.save({ id: 'p1', created: 1, title: 't', source: { kind: 'url', url: 'https://www.youtube.com/watch?v=CCCCCCCCCC3', duration: 60 }, moments: [] });
+  const pr = pl.save({ id: 'p1', created: 1, title: 't', source: { kind: 'url', url: 'https://www.youtube.com/watch?v=CCCCCCCCCC3', duration: 3600 }, moments: [] });
   const say = [];
   const audio = await pl.audioSource(pr, (p, t) => say.push(t));
   ok(/audio\.webm$/.test(audio), 'webm/opus берётся как есть');
@@ -105,6 +105,16 @@ ok(/^yt-dlp: /.test(S.statusOf('WARNING: [youtube] No supported JavaScript runti
   ok(!dl.includes('-x') && !dl.includes('--audio-format'), 'без перекодирования');
   ok(say.includes('Получаю данные видео') && say.includes('Скачиваю звук'));
   eq(await pl.audioSource(pr), audio, 'второй раз из кэша');
+
+  // рилс (короткое видео по ссылке): качается целиком один раз, звук и картинка из одного файла
+  const reel = pl.save({ id: 'p2', created: 2, title: 'r', source: { kind: 'url', url: 'https://www.instagram.com/reel/DDD/', duration: 40 }, moments: [] });
+  const before = calls.length;
+  const ra = await pl.audioSource(reel);
+  ok(/full\.mp4$/.test(ra), 'звук рилса — из целого видео');
+  const rv = await pl.videoFor(reel, 5, 20);
+  eq([rv.input, rv.offset], [ra, 0], 'кусок рилса — тот же файл, без --download-sections');
+  eq(calls.length - before, 1, 'рилс скачан один раз');
+  ok(!calls[calls.length - 1].includes('--download-sections'));
 
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`фон и звук: ${n} проверок`);
