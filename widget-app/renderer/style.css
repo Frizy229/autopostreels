@@ -201,3 +201,10 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin-top: 8px; }
 .acc-multi .am-row input[type=checkbox] { width: auto; margin: 0; }
 .acc-multi .am-row input[type=text] { grid-column: 2; }
 .acc-multi .am-note { grid-column: 2; font-size: 11px; opacity: .7; }
+/* пошаговая настройка Facebook в окне «+ аккаунт» */
+.guide { margin-bottom: 10px; }
+.guide h5 { margin: 12px 0 6px; font-size: 12px; }
+.guide ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.guide li { font-size: 12px; line-height: 1.45; }
+.guide .g-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.guide code { display: block; margin-top: 4px; font-size: 11px; word-break: break-all; opacity: .8; }

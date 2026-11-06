@@ -126,6 +126,42 @@ function planInstagramBatch(picks, accounts = []) {
   return { entries, errors };
 }
 
+/**
+ * Пошаговая настройка входа через Facebook для окна «+ аккаунт»: разделы с шагами, у шага может быть ссылка
+ * (url, link — подпись кнопки) и текст для копирования (copy, copyLabel). Ссылки на страницы приложения
+ * прямые, когда ID приложения уже вписан, иначе ведут в список приложений.
+ */
+function facebookGuide({ appId = '', redirect = '', repo = '' } = {}) {
+  const dev = 'https://developers.facebook.com';
+  const app = (p) => (appId ? `${dev}/apps/${appId}/${p}` : `${dev}/apps/`);
+  const pick = appId ? '' : ' (сначала открой приложение Auto из списка)';
+  return [
+    { title: 'Один раз: подключить вход через Facebook', steps: [
+      { text: 'Открой список приложений Meta и зайди в приложение Auto. Войди в Facebook тем аккаунтом, который управляет Страницами.', url: `${dev}/apps/`, link: 'Мои приложения' },
+      { text: `Настройки приложения → Основное. Скопируй «ID приложения» и вставь в поле «ID приложения Meta» ниже. Потом у «Секрета приложения» нажми «Показать», введи пароль Facebook, скопируй и вставь в «Секрет приложения Meta». Нажми «Сохранить ключ».${pick}`, url: app('settings/basic/'), link: 'Основные настройки' },
+      { text: `Добавь продукт «Вход через Facebook» (или «Вход через Facebook для бизнеса»): «Настроить».${pick}`, url: app('add/'), link: 'Добавить продукт' },
+      { text: `Вход через Facebook → Настройки → поле «Действительные URI перенаправления для OAuth»: вставь адрес ниже, нажми Enter и «Сохранить изменения». Переключатели «Вход через OAuth клиента» и «Вход через веб-OAuth» должны быть включены.${pick}`, url: app('fb-login/settings/'), link: 'Настройки входа', copy: redirect, copyLabel: 'Скопировать адрес' },
+      { text: 'Нажми «Войти через Facebook» в этом окне. Если Facebook пишет «Invalid Scopes» или «Функция недоступна», сделай следующий шаг, иначе пропусти его.' },
+      { text: `Только при ошибке: «Вход через Facebook для бизнеса» → Конфигурации → «Создать конфигурацию» → тип «Маркер доступа пользователя» → отметь разрешения из списка (кнопка ниже копирует их) → Создать. Скопируй «ID конфигурации» в поле «ID конфигурации входа» ниже и «Сохранить ключ».${pick}`, url: app('business-login/configurations/'), link: 'Конфигурации', copy: FB_SCOPES.split(',').join(', '), copyLabel: 'Скопировать разрешения' },
+      { text: 'Токену GitHub виджета нужно право «Secrets: Read and write» (токен → Edit → Repository permissions → Secrets). Если уже добавлял для TikTok, ничего делать не надо.', url: 'https://github.com/settings/personal-access-tokens', link: 'Токены GitHub' },
+    ] },
+    { title: 'Каждый новый аккаунт Instagram (~2 минуты)', steps: [
+      { text: 'В приложении Instagram на этом аккаунте: Профиль → ☰ → «Тип аккаунта и инструменты» → «Переключиться на профессиональный» → «Автор» или «Бизнес».' },
+      { text: 'Создай Страницу Facebook для этого аккаунта (имя любое, можно как ник). У каждого аккаунта Instagram своя Страница.', url: 'https://www.facebook.com/pages/create', link: 'Создать Страницу' },
+      { text: 'Привяжи Instagram к Странице: Meta Business Suite → выбери эту Страницу слева вверху → Настройки → «Аккаунты Instagram» (или «Связанные аккаунты») → «Подключить» → войди в Instagram.', url: 'https://business.facebook.com/latest/settings/', link: 'Meta Business Suite' },
+      { text: 'Здесь: «Войти через Facebook» → «Изменить настройки» / «Выбрать Страницы» → отметь ВСЕ Страницы и все аккаунты Instagram → «Продолжить». Новые аккаунты будут уже отмечены в списке → «Сохранить отмеченные».' },
+      { text: 'Привязал сразу несколько аккаунтов? Достаточно одного входа на все.' },
+    ] },
+    { title: 'Друг со своей копией', steps: [
+      { text: 'Ты: Роли приложения → Роли → «Добавить людей» → «Тестировщик» → имя или ID Facebook друга.', url: app('roles/roles/'), link: 'Роли приложения' },
+      { text: 'Друг: принимает приглашение на странице запросов (войдя в свой Facebook), потом в своём виджете вставляет ID и секрет приложения Meta от тебя и входит через Facebook. Его токены попадут только в его репозиторий.', url: `${dev}/requests/`, link: 'Запросы (для друга)' },
+    ] },
+    ...(repo ? [{ title: 'Если что-то не работает', steps: [
+      { text: 'Цветная точка у аккаунта показывает состояние токена. Подробности каждого запуска в журнале.', url: `https://github.com/${repo}/actions`, link: 'Журнал запусков' },
+    ] }] : []),
+  ];
+}
+
 /** Тот же адрес возврата? Сравниваем без хвоста «/», параметров и #. */
 const bare = (u) => { try { const x = new URL(u); return `${x.origin}${x.pathname}`.replace(/\/+$/, ''); } catch { return ''; } };
 const isRedirect = (url, redirectUri) => !!bare(redirectUri) && bare(url) === bare(redirectUri);
@@ -182,6 +218,6 @@ function accountHealth(acc, index, secretNames, tokens, now = new Date()) {
 }
 
 module.exports = {
-  TT_SCOPES, IG_SCOPES, FB_SCOPES, facebookAuthUrl, instagramChoices, planInstagramBatch, secretSuffix, secretNameFor, cleanName, suggestName, nameError, upsertAccount, removeAccount, tokenEnvOf,
+  TT_SCOPES, IG_SCOPES, FB_SCOPES, facebookAuthUrl, facebookGuide, instagramChoices, planInstagramBatch, secretSuffix, secretNameFor, cleanName, suggestName, nameError, upsertAccount, removeAccount, tokenEnvOf,
   tiktokAuthUrl, instagramAuthUrl, isRedirect, parseRedirect, needsBrowser, accountHealth,
 };
