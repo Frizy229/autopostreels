@@ -8,6 +8,7 @@ const { GitHub } = require('./lib/github');
 const tiktok = require('./lib/tiktok');
 const accounts = require('./lib/accounts');
 const crypto = require('crypto');
+const handoff = require('./lib/handoff');
 
 const DEFAULTS = {
   repo: 'Frizy229/autopostreels', branch: 'main', theme: 'system', material: 'acrylic', tint: 55,
@@ -448,12 +449,45 @@ handle('win:hide', () => win.hide());
 handle('win:quit', () => { quitting = true; app.quit(); });
 handle('win:pin', (v) => { cfg.alwaysOnTop = !!v; saveCfg(); win.setAlwaysOnTop(cfg.alwaysOnTop); return cfg.alwaysOnTop; });
 
+// ------------------------------------------------ папки из Reels Studio
+// Studio кладёт заявку в %APPDATA%\Reels Handoff, виджет загружает папку в нужную очередь сам.
+let handoffBusy = false, accountsAt = 0;
+async function pollHandoff() {
+  if (handoffBusy) return;
+  const dir = handoff.handoffDir(app.getPath('appData'));
+  // раз в 5 минут — список аккаунтов для Studio (каналы = аккаунты автопостера)
+  if (Date.now() - accountsAt > 5 * 60e3 && getToken()) {
+    accountsAt = Date.now();
+    try { handoff.writeAccounts(dir, (await gh().readJson('config.json')).accounts); } catch { /* нет сети — в следующий раз */ }
+  }
+  const job = handoff.take(dir);
+  if (!job) return;
+  handoffBusy = true;
+  const tell = (text, ok) => { if (win) win.webContents.send('handoff', { text, ok }); };
+  try {
+    if (!fs.existsSync(job.folder) || !fs.statSync(job.folder).isDirectory()) throw new Error(`Папки нет: ${job.folder}`);
+    tell(`Reels Studio прислала папку ${path.basename(job.folder)}, загружаю…`, true);
+    const dest = await gh().uploadFolder(job.folder, (frac, text) => {
+      handoff.progress(dir, job.id, frac, text);
+      if (win) win.webContents.send('upload:progress', { frac, text });
+    }, await accountNames(job.lane), { lane: job.lane });
+    handoff.finish(dir, job.id, { ok: true, dest });
+    tell(`Загружено из Reels Studio: ${dest}`, true);
+    if (win) win.webContents.send('refresh');
+  } catch (e) {
+    handoff.finish(dir, job.id, { ok: false, error: e.message, code: e.code || '' });
+    tell(`Не загрузил папку из Reels Studio: ${e.message}`, false);
+  } finally { handoffBusy = false; }
+}
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', showWin);
   app.whenReady().then(() => {
     loadCfg();
     createWindow(); createTray(); applyAutostart(); applyAppearance();
+    setInterval(() => pollHandoff().catch(() => { handoffBusy = false; }), 3000);
+    setInterval(() => handoff.cleanup(handoff.handoffDir(app.getPath('appData'))), 3600e3);
   });
   app.on('before-quit', () => { quitting = true; });
   app.on('window-all-closed', () => {});
