@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('api', {
   pickFolder: call('dialog:folder'),
   pickFile: call('dialog:file'),
   openPath: call('open:path'),
+  openLog: call('open:log'),
   showItem: call('open:show'),
   openUrl: call('open:url'),
   pathOf: (file) => webUtils.getPathForFile(file),

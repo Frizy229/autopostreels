@@ -21,7 +21,16 @@ const isUrl = (s) => /^https?:\/\/\S+$/i.test(String(s || '').trim());
 function searchTarget(q, limit = 20) {
   const s = String(q || '').trim();
   if (isUrl(s)) return s;
-  return `ytsearch${limit}:${s}`;
+  return ytResultsUrl(s);
+}
+
+/**
+ * Поиск YouTube через страницу результатов youtube.com/results (как в браузере). Раньше был `ytsearchN:`,
+ * но у Alex он возвращал пустую выдачу, а страница результатов (фильтр Creative Commons) работала.
+ * sp — фильтр YouTube: EgIwAQ== — только Creative Commons.
+ */
+function ytResultsUrl(q, sp) {
+  return `https://www.youtube.com/results?search_query=${encodeURIComponent(String(q || '').trim())}${sp ? `&sp=${encodeURIComponent(sp)}` : ''}`;
 }
 
 /** Список видео (поиск, канал, плейлист) без скачивания. */
@@ -198,8 +207,7 @@ function parseQueryLine(line) {
 function fillerTarget(q, { cc = false, limit = 30 } = {}) {
   const s = String(q || '').trim();
   if (isUrl(s)) return s;
-  if (cc) return `https://www.youtube.com/results?search_query=${encodeURIComponent(s)}&sp=EgIwAQ%3D%3D`;
-  return `ytsearch${limit}:${s}`;
+  return ytResultsUrl(s, cc ? 'EgIwAQ==' : '');
 }
 
 /** Из найденного — то, что годится в фон: от 20 с, без трансляций; сначала самые просматриваемые. */
@@ -214,6 +222,6 @@ function fillerDownloadArgs(url, { out, ffmpeg, duration = 0, maxSec = 600 } = {
   return a;
 }
 
-module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf,
+module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf, ytResultsUrl,
   FILLER_QUERIES, parseQueryLine, fillerTarget, filterFillers, fillerDownloadArgs,
   BROWSERS, AUTO_BROWSERS, COOKIE_MODES, needsAuth, cookieArgs, authPlan, isAuthError, isCookieError, authName, authHelp };

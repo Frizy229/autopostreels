@@ -15,6 +15,7 @@ const { listArgs, downloadArgs, parseList, parseProgress, statusOf, fillerTarget
 const { checkMoment } = require('./rules');
 const { whisperArgs, wavArgs, parseWhisperJson, MODELS } = require('./transcribe');
 
+const hasEntries = (r, out) => { if (!out) return false; try { return parseList(out).length > 0; } catch { return false; } };
 const uid = () => crypto.randomBytes(5).toString('hex');
 
 class Pipeline {
@@ -62,23 +63,57 @@ class Pipeline {
     let plan = authPlan(cfg, target);
     const key = JSON.stringify(cfg);
     if (this._auth && this._auth.key === key && plan.length > 1) plan = [this._auth.auth, ...plan.filter((a) => JSON.stringify(a) !== JSON.stringify(this._auth.auth))];
-    const tried = [];
-    let authHit = false, last = null;
-    for (const auth of plan) {
-      const { okIfStdout, ...runOpts } = opts;
-      // eslint-disable-next-line no-await-in-loop
-      const r = await this.tools.run(this.tools.ytdlp, [...cookieArgs(auth), ...args], { ...runOpts, allowFail: true });
-      tried.push(auth);
-      const ok = r.code === 0 || (okIfStdout && r.stdout && r.stdout.toString('utf8').trim());
-      if (ok) { if (needsAuth(target)) this._auth = { key, auth }; return r; }
-      last = r;
-      if (isAuthError(r.stderr)) { authHit = true; continue; }
-      if (auth && isCookieError(r.stderr)) continue;
-      break;
+    const { accept, okIfStdout, timeoutSec, ...runOpts } = opts;
+    // лимит времени: поиск не должен висеть «Ищу…» бесконечно
+    let timedOut = false, timer = null;
+    const ctrl = timeoutSec ? new AbortController() : null;
+    if (ctrl) {
+      const stop = () => ctrl.abort();
+      if (runOpts.signal) { if (runOpts.signal.aborted) stop(); runOpts.signal.addEventListener('abort', stop, { once: true }); }
+      timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutSec * 1000);
+      runOpts.signal = ctrl.signal;
     }
+    const tried = [];
+    let authHit = false, last = null, empty = false, emptyRes = null;
+    try {
+      for (const auth of plan) {
+        let r;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          r = await this.tools.run(this.tools.ytdlp, [...cookieArgs(auth), ...args], { ...runOpts, allowFail: true });
+        } catch (e) {
+          if (timedOut) throw Object.assign(new Error(`yt-dlp не ответил за ${timeoutSec} с. Проверь интернет или VPN и повтори; если не поможет, обнови yt-dlp в Настройках → Компоненты.`), { code: 'TIMEOUT' });
+          throw e;
+        }
+        tried.push(auth);
+        const out = r.stdout ? r.stdout.toString('utf8').trim() : '';
+        // accept: ответ годится (например, в поиске есть хоть одно видео); иначе — код 0 или (okIfStdout) непустой вывод
+        const ok = accept ? accept(r, out) : (r.code === 0 || (okIfStdout && out));
+        if (ok) { if (needsAuth(target)) this._auth = { key, auth }; return r; }
+        last = r;
+        if (isAuthError(r.stderr)) { authHit = true; continue; }
+        if (auth && isCookieError(r.stderr)) continue;
+        // пустой ответ без ошибки: YouTube иногда отдаёт пустую выдачу без входа — пробуем дальше с cookies
+        if (accept && r.code === 0) { empty = true; emptyRes = emptyRes || r; }
+        if (accept && r.code === 0 && needsAuth(target) && plan.indexOf(auth) < plan.length - 1) continue;
+        break;
+      }
+    } finally { if (timer) clearTimeout(timer); }
+    if (empty && !authHit) last = emptyRes;
+    this.logYtdlp(args, last);
     if (authHit) throw Object.assign(new Error(authHelp(tried.filter(Boolean).length ? tried : [])), { code: 'AUTH', res: last });
-    const tail = String(last.stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-3).join('\n');
+    const tail = String((last && last.stderr) || '').trim().split(/\r?\n/).filter((l) => l && !/^\[(debug|info)\]/i.test(l)).slice(-3).join('\n');
+    if (empty) throw Object.assign(new Error(`YouTube ничего не вернул.${tail ? `\n${tail}` : ''}\nПопробуй другой запрос, обнови yt-dlp (Настройки → Компоненты) или войди в YouTube (Настройки → «Вход в YouTube»).`), { code: 'EMPTY', res: last });
     throw Object.assign(new Error(`yt-dlp: код ${last.code}\n${tail}`), { res: last });
+  }
+
+  /** Последняя неудачная команда yt-dlp — в журнал (папка программы/logs/yt-dlp.txt), чтобы можно было прислать. */
+  logYtdlp(args, r) {
+    try {
+      const dir = path.join(this.dataDir, 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'yt-dlp.txt'), `${new Date().toISOString()}\nyt-dlp ${args.join(' ')}\nкод: ${r ? r.code : '?'}\n\n${r ? String(r.stderr || '').slice(-20000) : ''}\n`);
+    } catch { /* не страшно */ }
   }
 
   async probe(file) {
@@ -106,10 +141,8 @@ class Pipeline {
 
   /** Поиск лонгов/нарезок: запрос, ссылка на канал или плейлист. */
   async search(q, limit = 20) {
-    const r = await this.ytdlp(listArgs(q, limit), searchTarget(q, limit), { okIfStdout: true });
-    const text = r.stdout.toString('utf8').trim();
-    if (!text) throw new Error(r.stderr.split(/\r?\n/).filter(Boolean).slice(-2).join(' ') || 'Ничего не найдено');
-    return parseList(text);
+    const r = await this.ytdlp(listArgs(q, limit), searchTarget(q, limit), { accept: hasEntries, timeoutSec: 90 });
+    return parseList(r.stdout.toString('utf8').trim());
   }
 
   // ------------------------------------------------------------ анализ
@@ -264,9 +297,10 @@ class Pipeline {
   /** Поиск фона на YouTube (cc — только Creative Commons). */
   async searchFillers(q, o = {}) {
     const target = fillerTarget(q, { cc: !!o.cc, limit: o.limit || 30 });
-    const r = await this.ytdlp(listArgs(target, o.limit || 30), target, { okIfStdout: true });
-    const text = r.stdout.toString('utf8').trim();
-    return text ? filterFillers(parseList(text)) : [];
+    const r = await this.ytdlp(listArgs(target, o.limit || 30), target, { accept: hasEntries, timeoutSec: 90 });
+    const list = filterFillers(parseList(r.stdout.toString('utf8').trim()));
+    if (!list.length) throw Object.assign(new Error('Нашлись только ролики короче 20 секунд. Попробуй другой запрос.'), { code: 'EMPTY' });
+    return list;
   }
 
   /** Библиотека фона: видео в папке фона. id — из имени «название-ID.mp4», чтобы не качать второй раз. */
