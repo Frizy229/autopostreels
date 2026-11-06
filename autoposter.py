@@ -142,7 +142,12 @@ def secret(name: str) -> str:
 def configure_accounts(cfg: dict) -> list[dict]:
     """Какие аккаунты сейчас работают: первый обязателен, остальные включаются, когда задан их токен."""
     global ACTIVE_ACCOUNTS
-    raw = cfg.get("accounts") or [{"name": "main"}]
+    raw = cfg.get("accounts") or []
+    if not raw:
+        # старый формат: без списка работает один аккаунт IG_TOKEN. Новая копия (например, у друга) без токена: аккаунтов нет
+        raw = [{"name": "main"}] if secret("IG_TOKEN") else []
+        if not raw:
+            log("В config.json нет аккаунтов: добавьте их в виджете (кнопка «+» у аккаунтов).")
     out = []
     for i, a in enumerate(raw):
         platform = (a.get("platform") or "instagram").lower()
@@ -153,9 +158,7 @@ def configure_accounts(cfg: dict) -> list[dict]:
                "platform": platform,
                "primary": i == 0}
         if platform == "tiktok":
-            if i == 0:
-                sys.exit("Ошибка: первым в config.json должен идти аккаунт Instagram, TikTok добавляйте после него.")
-            acc.update(token_env=a.get("token_env") or f"TT_TOKEN_{acc['name'].upper()}",
+            acc.update(token_env=a.get("token_env") or tt_secret_name(acc["name"]),
                        mode=(a.get("mode") or "inbox").lower(),
                        privacy=a.get("privacy") or "PUBLIC_TO_EVERYONE",
                        client_key_env=a.get("client_key_env") or "TT_CLIENT_KEY",
@@ -170,6 +173,32 @@ def configure_accounts(cfg: dict) -> list[dict]:
         out.append(acc)
     ACTIVE_ACCOUNTS = out
     return out
+
+
+def secret_suffix(name: str) -> str:
+    """Часть имени секрета из ника: в именах секретов GitHub можно только латиницу, цифры и _."""
+    return re.sub(r"[^A-Z0-9_]", "_", str(name).upper()).strip("_") or "ACC"
+
+
+def tt_secret_name(name: str) -> str:
+    return f"TT_TOKEN_{secret_suffix(name)}"
+
+
+def note_token(state: dict, acc: dict, ok: bool, error: str = "", expires: str = "") -> bool:
+    """Состояние токена аккаунта для виджета: state['tokens'][имя]. Меняем запись только когда что-то изменилось
+    (иначе каждый запуск давал бы коммит). Возвращает True, если запись изменилась."""
+    tokens = state.setdefault("tokens", {})
+    old = tokens.get(acc["name"]) or {}
+    row = {"ok": ok}
+    if error:
+        row["error"] = str(error)[:300]
+    if expires:
+        row["expires"] = expires
+    row["since"] = old.get("since") if old.get("ok") == ok and old.get("since") else dt.date.today().isoformat()
+    if row == old:
+        return False
+    tokens[acc["name"]] = row
+    return True
 
 
 def acc_posted(state: dict, acc: dict) -> dict:
@@ -885,6 +914,7 @@ class TikTok:
         self.mode = acc.get("mode", "inbox")
         self.refresh_token = refresh_token
         self.access_token = ""
+        self.refresh_expires = ""  # до какого числа действует refresh-токен (TikTok сообщает при продлении)
         self.timeout = int(cfg["status_timeout_sec"])
         self.host = "open.tiktokapis.com"
 
@@ -904,9 +934,11 @@ class TikTok:
         if not r.ok or "access_token" not in data:
             raise RuntimeError(f"TikTok не продлил токен (OAuthException): "
                                f"{data.get('error_description') or data.get('error') or r.status_code}. "
-                               f"Подключите аккаунт заново (workflow «TikTok: подключить аккаунт»).")
+                               f"Подключите аккаунт заново (виджет: аккаунт → «Переподключить»).")
         self.access_token = data["access_token"]
         mask(self.access_token)
+        if data.get("refresh_expires_in"):
+            self.refresh_expires = (dt.date.today() + dt.timedelta(seconds=int(data["refresh_expires_in"]))).isoformat()
         new_rt = data.get("refresh_token") or ""
         if new_rt and new_rt != self.refresh_token:
             mask(new_rt)
@@ -1035,6 +1067,9 @@ def tt_code_from(text: str) -> str:
 
 def cmd_post(args) -> int:
     cfg = load_config()
+    if not ACTIVE_ACCOUNTS:
+        log("Нет ни одного подключённого аккаунта: публиковать некуда.")
+        return 0
     state = load_state()
     tz = ZoneInfo(cfg["timezone"])
     now = dt.datetime.fromisoformat(args.now).replace(tzinfo=tz) if args.now else dt.datetime.now(tz)
@@ -1102,11 +1137,16 @@ def cmd_post(args) -> int:
         try:
             igs[acc["name"]].whoami()
         except RuntimeError as e:
+            if note_token(state, acc, False, str(e)):
+                save_state(state)
             if acc.get("platform") != "tiktok":
                 raise
             # TikTok не должен останавливать Instagram
             log(f"TikTok @{acc['name']} сейчас недоступен, пропускаю в этом запуске: {e}")
             dead.add(acc["name"])
+        else:
+            if note_token(state, acc, True, expires=getattr(igs[acc["name"]], "refresh_expires", "")):
+                save_state(state)
     posted = failed = 0
     for item in due[: int(cfg["max_posts_per_run"])]:
         for index, acc in enumerate(ACTIVE_ACCOUNTS):
@@ -1337,44 +1377,54 @@ def cmd_remove(args) -> int:
     return 0
 
 
-def cmd_refresh(args) -> int:
-    token = env("IG_TOKEN")
-    mask(token)
+def refresh_ig_token(token: str) -> tuple[str, int]:
+    """Продлить токен Instagram. Возвращает (новый токен, дней) или ('', 0), если продлевать не нужно/нельзя."""
     if token.startswith("EAA"):
-        if not (os.environ.get("FB_APP_ID") and os.environ.get("FB_APP_SECRET")):
-            log("Токен Facebook (системный пользователь). Если он бессрочный, продлевать не нужно. Пропускаю.")
-            return 0
-        app_id, secret = env("FB_APP_ID"), env("FB_APP_SECRET")
-        mask(secret)
+        app_id, app_secret = secret("FB_APP_ID"), secret("FB_APP_SECRET")
+        if not (app_id and app_secret):
+            log("Токен Facebook (системный пользователь или долгий токен). Без FB_APP_ID/FB_APP_SECRET не продлеваю.")
+            return "", 0
+        mask(app_secret)
         r = requests.get("https://graph.facebook.com/oauth/access_token", timeout=60, params={
             "grant_type": "fb_exchange_token", "client_id": app_id,
-            "client_secret": secret, "fb_exchange_token": token,
+            "client_secret": app_secret, "fb_exchange_token": token,
         })
     else:
         r = requests.get("https://graph.instagram.com/refresh_access_token", timeout=60, params={
             "grant_type": "ig_refresh_token", "access_token": token,
         })
-    data = r.json()
+    data = r.json() if r.content else {}
     if not r.ok or "access_token" not in data:
-        log(f"Не удалось продлить токен: {json.dumps(data.get('error', data), ensure_ascii=False)}")
-        return 1
-    new = data["access_token"]
-    mask(new)
-    days = int(data.get("expires_in", 0)) // 86400
-    log(f"Токен продлён, действует ещё ~{days} дн.")
+        raise RuntimeError(f"не удалось продлить токен: {json.dumps(data.get('error', data), ensure_ascii=False)[:300]}")
+    mask(data["access_token"])
+    return data["access_token"], int(data.get("expires_in", 0)) // 86400
 
-    pat = os.environ.get("GH_PAT", "").strip()
-    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
-    if pat and repo:
-        res = subprocess.run(["gh", "secret", "set", "IG_TOKEN", "--repo", repo, "--body", new],
-                             env={**os.environ, "GH_TOKEN": pat}, capture_output=True, text=True)
-        if res.returncode != 0:
-            log(f"Не удалось сохранить токен в GitHub Secrets: {res.stderr.strip()}")
-            return 1
-        log("Новый токен сохранён в секрет IG_TOKEN.")
-    elif new != token:
-        log("Токен изменился, но GH_PAT не задан: обновите секрет IG_TOKEN вручную.")
-    return 0
+
+def cmd_refresh(args) -> int:
+    """Продлить токены всех аккаунтов Instagram (токены Instagram Login живут 60 дней). TikTok продлевается сам."""
+    cfg = load_config()
+    accs = [a for a in configure_accounts(cfg) if a.get("platform", "instagram") == "instagram"]
+    code, seen = 0, set()
+    for acc in accs:
+        token = secret(acc["token_env"])
+        if not token or acc["token_env"] in seen:
+            continue
+        seen.add(acc["token_env"])
+        mask(token)
+        log(f"=== @{acc['name']} ({acc['token_env']})")
+        try:
+            new, days = refresh_ig_token(token)
+        except RuntimeError as e:
+            log(f"ОШИБКА: {e}")
+            code = 1
+            continue
+        if not new:
+            continue
+        log(f"Токен продлён, действует ещё ~{days} дн.")
+        if new != token and not save_github_secret(acc["token_env"], new):
+            log(f"Обновите секрет {acc['token_env']} вручную.")
+            code = 1
+    return code
 
 
 def _tt_account(name: str) -> dict:
@@ -1384,7 +1434,7 @@ def _tt_account(name: str) -> dict:
             accs = [x for x in configure_accounts({**cfg, "accounts": [cfg["accounts"][0], a]}) if x.get("platform") == "tiktok"]
             if accs:
                 return accs[0]
-            return {"name": a["name"], "token_env": a.get("token_env") or f"TT_TOKEN_{a['name'].upper()}",
+            return {"name": a["name"], "token_env": a.get("token_env") or tt_secret_name(a["name"]),
                     "mode": (a.get("mode") or "inbox").lower(),
                     "client_key_env": a.get("client_key_env") or "TT_CLIENT_KEY",
                     "client_secret_env": a.get("client_secret_env") or "TT_CLIENT_SECRET"}

@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { slug, inspectFolder, cleanTexts, LANES, laneByKey, VIDEO_EXT } = require('./core');
 const { push } = require('./gitpush');
+const { seal } = require('./secrets');
 
 const API = 'https://api.github.com';
 
@@ -237,6 +238,79 @@ class GitHub {
     const sha = await this.blob(Buffer.from(JSON.stringify(cfg, null, 2) + '\n', 'utf8'));
     await this.commitFiles({ 'config.json': sha }, message);
     return cfg;
+  }
+
+  // ---------------------------------------------------------------- секреты Actions (нужно право токена Secrets)
+  secretsError(e) {
+    if (e.status === 403 || e.status === 404) {
+      return Object.assign(new Error('Токену GitHub не хватает права Secrets: Read and write (github.com/settings/tokens → токен виджета → Repository permissions → Secrets).'), { code: 'NO_SECRETS' });
+    }
+    return e;
+  }
+
+  /** Имена секретов репозитория (значения GitHub не отдаёт никому). Без права: null. */
+  async secretNames() {
+    try {
+      const names = [];
+      for (let page = 1; page < 10; page++) {
+        const r = await this.req('GET', `/actions/secrets?per_page=100&page=${page}`);
+        if (!r) return null;
+        names.push(...(r.secrets || []).map((x) => x.name));
+        if ((r.secrets || []).length < 100) break;
+      }
+      return names;
+    } catch (e) {
+      if (e.status === 403 || e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /** Записать секрет: значение шифруется открытым ключом репозитория прямо здесь, на GitHub уходит только шифр. */
+  async setSecret(name, value) {
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(name) || /^GITHUB_/.test(name)) throw new Error(`Недопустимое имя секрета: ${name}`);
+    if (!value) throw new Error(`Пустое значение секрета ${name}.`);
+    try {
+      const key = await this.req('GET', '/actions/secrets/public-key');
+      if (!key) throw Object.assign(new Error('no key'), { status: 404 });
+      await this.req('PUT', `/actions/secrets/${name}`, { encrypted_value: seal(key.key, value), key_id: key.key_id });
+    } catch (e) { throw this.secretsError(e); }
+    return true;
+  }
+
+  async deleteSecret(name) {
+    try { await this.req('DELETE', `/actions/secrets/${name}`); } catch (e) {
+      if (e.status === 404) return false;
+      throw this.secretsError(e);
+    }
+    return true;
+  }
+
+  /**
+   * Чистый старт копии автопостера (например, у друга): убрать очереди, опубликованное, историю и аккаунты Alex.
+   * Секреты не копируются GitHub-ом вообще, их тут нет. Один коммит.
+   */
+  async resetCopy() {
+    const ref = await this.req('GET', `/git/ref/heads/${this.branch}`);
+    const head = ref.object.sha;
+    const base = (await this.req('GET', `/git/commits/${head}`)).tree.sha;
+    const all = (await this.req('GET', `/git/trees/${base}?recursive=1`)).tree.filter((e) => e.type === 'blob');
+    const dirs = LANES.flatMap((l) => [l.dir, l.posted]);
+    const files = {};
+    for (const e of all) {
+      const top = e.path.split('/')[0];
+      if (dirs.includes(top) && e.path.includes('/') && !e.path.endsWith('/.gitkeep')) files[e.path] = null;
+    }
+    for (const d of dirs) files[`${d}/.gitkeep`] = await this.blob(Buffer.from(''));
+    if (all.some((e) => e.path === 'tiktok_creator.json')) files['tiktok_creator.json'] = null;
+    files['state.json'] = await this.blob(Buffer.from(JSON.stringify({ posted: {}, skipped: {} }, null, 2) + '\n'));
+    files['stats.json'] = await this.blob(Buffer.from('{}\n'));
+    const cfgText = await this.readText('config.json');
+    const cfg = cfgText ? JSON.parse(cfgText) : {};
+    cfg.accounts = []; cfg.paused = [];
+    files['config.json'] = await this.blob(Buffer.from(JSON.stringify(cfg, null, 2) + '\n'));
+    const removed = Object.values(files).filter((v) => v === null).length;
+    await this.commitFiles(files, 'Чистый старт копии автопостера: без чужих аккаунтов и очередей (виджет)');
+    return removed;
   }
 
   /** Последние запуски «Публикация рилсов» (нужно право Actions: Read). Без права: null. */

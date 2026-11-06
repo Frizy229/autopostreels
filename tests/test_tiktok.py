@@ -66,9 +66,31 @@ class TikTokConfigTests(Base):
             accs = a.configure_accounts({"accounts": [{"name": "ig"}, {"name": "tt", "platform": "tiktok"}]})
         self.assertEqual([x["name"] for x in accs], ["ig"])
 
-    def test_tiktok_cannot_be_first(self):
-        with self.assertRaises(SystemExit):
-            a.configure_accounts({"accounts": [{"name": "tt", "platform": "tiktok"}]})
+    def test_tiktok_can_be_first(self):
+        # копия у друга может быть только с TikTok-аккаунтами
+        with mock.patch.dict("os.environ", {"TT_TOKEN_TT": "r"}, clear=True):
+            accs = a.configure_accounts({"accounts": [{"name": "tt", "platform": "tiktok"}]})
+        self.assertEqual([(x["name"], x["primary"], x["token_env"]) for x in accs], [("tt", True, "TT_TOKEN_TT")])
+
+    def test_secret_name_from_nick(self):
+        # точки и дефисы в нике TikTok недопустимы в имени секрета GitHub
+        self.assertEqual(a.tt_secret_name("evelon185"), "TT_TOKEN_EVELON185")
+        self.assertEqual(a.tt_secret_name("my.nick-2"), "TT_TOKEN_MY_NICK_2")
+
+    def test_no_accounts_without_token(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(a.configure_accounts({"accounts": []}), [])
+            self.assertEqual(a.cmd_post(argparse.Namespace(dry_run=False, only=None, now=None)), 0)
+        with mock.patch.dict("os.environ", {"IG_TOKEN": "x"}, clear=True):
+            self.assertEqual([x["name"] for x in a.configure_accounts({"accounts": []})], ["main"])
+
+    def test_note_token_changes_only_on_change(self):
+        st, acc = {}, {"name": "tt"}
+        self.assertTrue(a.note_token(st, acc, True, expires="2027-11-06"))
+        self.assertFalse(a.note_token(st, acc, True, expires="2027-11-06"))
+        self.assertTrue(a.note_token(st, acc, False, "OAuthException: invalid"))
+        self.assertEqual(st["tokens"]["tt"]["ok"], False)
+        self.assertIn("invalid", st["tokens"]["tt"]["error"])
 
     def test_caption_tiktok_block(self):
         txt = "REELS CAPTION (Instagram):\nIG text\n\nTIKTOK CAPTION:\nTT text\n"
@@ -256,6 +278,19 @@ class TikTokPostTests(Base):
         self.assertIn("001_a/1.mp4", st["posted"])
         self.assertEqual(st.get("failures", {}), {})
 
+    def test_token_status_saved_for_widget(self):
+        self.run_post(at(10, 5))
+        tokens = a.load_state()["tokens"]
+        self.assertTrue(tokens["tt"]["ok"])
+        self.assertTrue(tokens["one"]["ok"])
+
+    def test_dead_tiktok_token_noted(self):
+        with mock.patch.object(FakeTT, "whoami", side_effect=RuntimeError("TikTok не продлил токен (OAuthException): bad")):
+            self.assertEqual(self.run_post(at(10, 5)), 0)
+        st = a.load_state()
+        self.assertFalse(st["tokens"]["tt"]["ok"])
+        self.assertIn("001_a/1.mp4", st["posted"])  # Instagram вышел
+
     def test_tiktok_leftovers_skipped_next_day(self):
         FakeTT.limit = True
         self.run_post(at(10, 5))
@@ -269,6 +304,27 @@ class TikTokPostTests(Base):
         self.assertTrue((self.root / "posted" / "001_a").exists())
         self.assertIn("002_b/1.mp4", st["posted"])  # очередь пошла дальше
         self.assertIn("002_b/1.mp4", st["posted_acc"]["tt"])
+
+
+class RefreshTests(Base):
+    def test_refreshes_every_instagram_login_token(self):
+        cfg = {"accounts": [{"name": "one", "token_env": "IG_TOKEN"}, {"name": "two", "token_env": "IG_TOKEN_TWO"},
+                            {"name": "sys", "token_env": "IG_TOKEN_SYS"}, {"name": "tt", "platform": "tiktok"}]}
+        (self.root / "config.json").write_text(json.dumps(cfg))
+        env = {"IG_TOKEN": "IGAAone", "IG_TOKEN_TWO": "IGAAtwo", "IG_TOKEN_SYS": "EAAsys", "TT_TOKEN_TT": "r"}
+        got = []
+
+        def fake_get(url, timeout, params):
+            got.append(params["access_token"])
+            r = mock.Mock(ok=True, content=b"1")
+            r.json.return_value = {"access_token": params["access_token"] + "-new", "expires_in": 5184000}
+            return r
+
+        with mock.patch.dict("os.environ", env, clear=True), mock.patch.object(a.requests, "get", fake_get), \
+                mock.patch.object(a, "save_github_secret", return_value=True) as save:
+            self.assertEqual(a.cmd_refresh(argparse.Namespace()), 0)
+        self.assertEqual(got, ["IGAAone", "IGAAtwo"])  # системный EAA без ключей приложения не трогаем, TikTok сам
+        self.assertEqual([c.args for c in save.call_args_list], [("IG_TOKEN", "IGAAone-new"), ("IG_TOKEN_TWO", "IGAAtwo-new")])
 
 
 if __name__ == "__main__":

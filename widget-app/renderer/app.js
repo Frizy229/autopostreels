@@ -132,7 +132,9 @@ const empty = (t) => `<div class="empty">${t}</div>`;
 function renderNetbar() {
   const accs = netAccounts();
   const paused = isPaused();
-  $('nbAccs').innerHTML = accs.length ? accs.map((a) => `<span class="acc${paused ? ' off' : ''}">@${esc(a.name)}</span>`).join('') : '<span class="muted small">Нет аккаунтов</span>';
+  const hl = (a) => (a.health && a.health.level) || 'unknown';
+  $('nbAccs').innerHTML = accs.map((a) => `<button class="acc${paused ? ' off' : ''}" data-acc="${esc(a.name)}" title="${esc((a.health && a.health.text) || '')}"><i class="hd ${hl(a)}"></i>@${esc(a.name)}</button>`).join('')
+    + `<button class="acc add" data-addacc="1" title="Добавить аккаунт ${NET_NAME[net]}">+ ${accs.length ? 'аккаунт' : `Добавить аккаунт ${NET_NAME[net]}`}</button>`;
   let state = 'автозалив включён', hint = '';
   if (net === 'tiktok') {
     const direct = accs.some((a) => a.mode === 'direct');
@@ -144,7 +146,9 @@ function renderNetbar() {
     const t = (data && data.texts && data.texts.instagram) || {};
     if (t.comment || t.use_pinned_comment) hint = 'Под каждым рилсом автоматически появится первый комментарий.';
   }
-  if (!accs.length) { hint = `В config.json нет аккаунтов ${NET_NAME[net]}.`; state = 'не подключено'; }
+  if (!accs.length) { hint = `Нет аккаунтов ${NET_NAME[net]}: нажми «+ Добавить аккаунт», войди в него, и виджет всё настроит сам.`; state = 'не подключено'; }
+  const broken = accs.filter((a) => a.health && a.health.level === 'bad');
+  if (broken.length) hint = `Не работает: ${broken.map((a) => '@' + a.name).join(', ')}. Нажми на аккаунт → «Переподключить». ${hint}`;
   if (paused) { state = 'на паузе'; hint = `Автозалив в ${NET_NAME[net]} остановлен. Общая очередь (обе сети) тоже ждёт. Нажмите «Продолжить», остаток дня распределится заново.`; }
   $('nbState').textContent = state; $('nbState').classList.toggle('paused', paused);
   $('nbHint').textContent = hint;
@@ -196,6 +200,9 @@ const findFolder = (id) => { const s = snap(); return s && s.folders.find((x) =>
 const findVideo = (id) => { const s = snap(); if (!s) return null; for (const f of s.folders) { const v = f.videos.find((x) => x.id === id); if (v) return v; } return s.todayRows.find((r) => r.id === id) || null; };
 
 document.addEventListener('click', (e) => {
+  const accBtn = e.target.closest('[data-acc]');
+  if (accBtn) { openAccount(accBtn.dataset.acc); return; }
+  if (e.target.closest('[data-addacc]')) { openAddAccount(); return; }
   const del = e.target.closest('[data-del]');
   if (del) { e.stopPropagation(); askDelete(del.dataset.del); return; }
   const ft = e.target.closest('[data-ftexts]');
@@ -546,7 +553,116 @@ window.addEventListener('drop', (e) => {
   if (paths.length) addFolders(paths);
 });
 
+// ------------------------------------------------------------ аккаунты: добавить, переподключить, убрать
+// Вход в соцсеть идёт в отдельном окне, токен сам уходит в секрет GitHub (зашифрованным), аккаунт в config.json.
+let accNet = 'tiktok', accLogin = null, accFixed = '', accModeV = 'inbox';
+const accErr = (t, ok = false) => { $('accErr').textContent = t || ''; $('accErr').className = `small ${ok ? 'ok' : 'bad'}`; };
+const show = (id, on) => { $(id).hidden = !on; };
+function accStep(step) {
+  for (const id of ['accStep1', 'accStep2', 'accDone']) show(id, id === step);
+}
+function needKeys() {
+  return accNet === 'tiktok' ? !cfg.hasTtSecret : !(cfg.hasIgSecret && ((data && data.repoSetup && data.repoSetup.igAppId) || cfg.igAppId));
+}
+function renderKeys(force = false) {
+  show('accKeys', force || needKeys());
+  show('accKeysTt', accNet === 'tiktok'); show('accKeysIg', accNet === 'instagram');
+  $('kTtSecret').value = ''; $('kIgSecret').value = '';
+  $('kIgId').value = (data && data.repoSetup && data.repoSetup.igAppId) || cfg.igAppId || '';
+  $('kTtSecret').placeholder = cfg.hasTtSecret ? 'сохранён, оставь пустым чтобы не менять' : '';
+  $('kIgSecret').placeholder = cfg.hasIgSecret ? 'сохранён, оставь пустым чтобы не менять' : '';
+  $('accLogin').disabled = needKeys();
+}
+function openAddAccount(n = net, fixed = '', keysOnly = false) {
+  accNet = n; accFixed = fixed; accLogin = null; accModeV = 'inbox';
+  const nm = NET_NAME[accNet];
+  $('accTitle').textContent = fixed ? `Переподключить @${fixed}` : keysOnly ? `Ключ приложения ${nm}` : `Добавить аккаунт ${nm}`;
+  show('accView', false); show('accAdd', true); accStep(keysOnly ? '' : 'accStep1'); accErr('');
+  $('accLogin').textContent = `Войти в ${nm}`;
+  $('accIntro').textContent = accNet === 'tiktok'
+    ? 'Нажми «Войти в TikTok», войди в нужный аккаунт и нажми «Разрешить». Каждый раз окно входа чистое, так что можно добавить подряд сколько угодно аккаунтов. Пока приложение TikTok в песочнице (Sandbox), войти можно только аккаунтом из списка Target users.'
+    : 'Нажми «Войти в Instagram», войди в нужный аккаунт (профессиональный: автор или бизнес) и разреши доступ. Пока приложение Meta в режиме разработки, аккаунт должен быть в «Ролях приложения» как тестировщик Instagram.';
+  show('accTokenBox', accNet === 'instagram'); show('accPasteBox', false); $('accPasted').value = ''; $('accTokenIn').value = '';
+  if (!(data && data.canSecrets)) accErr('Токену GitHub не хватает права Secrets: Read and write. Добавь его на github.com/settings/tokens (токен виджета → Repository permissions → Secrets), иначе виджет не сможет сохранить вход.');
+  renderKeys(keysOnly);
+  $('accSheet').hidden = false;
+}
+function openAccount(name) {
+  const a = netAccounts().find((x) => x.name === name);
+  if (!a) return;
+  accNet = net;
+  $('accTitle').textContent = `@${a.name}`;
+  show('accView', true); show('accAdd', false);
+  const h = a.health || { level: 'unknown', text: '' };
+  $('accState').textContent = h.level === 'ok' ? '✓ Работает' : h.level === 'bad' ? '✗ Не работает' : h.level === 'warn' ? '! Скоро истечёт вход' : 'Ещё не проверялся';
+  $('accState').className = `acc-state ${h.level}`;
+  $('accInfo').textContent = `${NET_NAME[net]}${a.mode ? `, ${a.mode === 'direct' ? 'прямая публикация' : 'черновики'}` : ''}. ${h.text ? h.text.charAt(0).toUpperCase() + h.text.slice(1) + '.' : ''}`;
+  $('accReconnect').onclick = () => openAddAccount(net, a.name);
+  $('accRemove').onclick = () => ask({
+    title: `Убрать @${a.name}?`, go: 'Убрать', danger: true,
+    text: `Аккаунт пропадёт из автозалива ${NET_NAME[net]}, его токен удалится из секретов GitHub. Уже опубликованное и папки в очереди останутся. Вернуть можно кнопкой «+».`,
+    action: async () => { await bridge.accRemove({ name: a.name, platform: net }); $('accSheet').hidden = true; toast(`@${a.name} убран`); refresh(); },
+  });
+  $('accSheet').hidden = false;
+}
+function showLogin(r) {
+  accLogin = r;
+  accErr('');
+  if (r.platform === 'tiktok') {
+    $('accWho').textContent = `Вход удался: ${r.display_name || 'аккаунт TikTok'}.${r.missing && r.missing.length ? ` Внимание: не выдано разрешение ${r.missing.join(', ')}, включи его в приложении TikTok.` : ''}`;
+    show('accPickBox', false);
+  } else {
+    const list = r.list || [];
+    $('accWho').textContent = list.length > 1 ? `К этому входу привязано аккаунтов: ${list.length}. Выбери нужный.` : `Вход удался: @${(list[0] && list[0].username) || '?'}.`;
+    $('accPick').innerHTML = list.map((x) => `<option value="${esc(x.user_id)}">@${esc(x.username)}${x.page ? ` (страница ${esc(x.page)})` : ''}</option>`).join('');
+    show('accPickBox', list.length > 1);
+  }
+  $('accName').value = accFixed || r.suggested || '';
+  $('accName').disabled = !!accFixed;
+  show('accModeBox', r.platform === 'tiktok' && !accFixed);
+  for (const b of $('accMode').children) b.classList.toggle('on', b.dataset.v === accModeV);
+  $('accModeHint').textContent = accModeV === 'direct'
+    ? 'Сразу в профиль: только если приложение TikTok прошло аудит Direct Post. Без аудита TikTok покажет ролик только тебе.'
+    : 'Ролик падает в черновики TikTok, приходит уведомление, публикуешь в приложении. Работает без аудита.';
+  accStep('accStep2');
+  if (!accFixed) $('accName').focus();
+}
+async function accRun(btn, fn) {
+  const t = btn.textContent; btn.disabled = true; btn.textContent = 'Секунду…'; accErr('');
+  try { await fn(); } catch (e) { if (e.code !== 'CANCELLED') accErr(e.message); else accErr('Вход отменён.'); } finally { btn.disabled = false; btn.textContent = t; }
+}
+$('accBack').addEventListener('click', () => { $('accSheet').hidden = true; });
+$('accClose').addEventListener('click', () => { $('accSheet').hidden = true; refresh(); });
+$('accMore').addEventListener('click', () => openAddAccount(accNet));
+$('accRestart').addEventListener('click', () => { accStep('accStep1'); accErr(''); });
+$('accMode').addEventListener('click', (e) => { if (!e.target.dataset.v) return; accModeV = e.target.dataset.v; showLogin(accLogin); });
+$('kSave').addEventListener('click', () => accRun($('kSave'), async () => {
+  const patch = accNet === 'tiktok' ? { ttSecret: $('kTtSecret').value } : { igAppId: $('kIgId').value, ...($('kIgSecret').value ? { igSecret: $('kIgSecret').value } : {}) };
+  if (accNet === 'tiktok' && !patch.ttSecret) throw new Error('Вставь Client secret.');
+  if (accNet === 'instagram' && !patch.igAppId) throw new Error('Вставь ID приложения Instagram.');
+  cfg = await bridge.setKeys(patch);
+  renderKeys(); accErr('Ключ сохранён.', true); fillSettings();
+  if ($('accStep1').hidden && $('accStep2').hidden && $('accDone').hidden) accStep('accStep1');
+}));
+$('accLogin').addEventListener('click', () => accRun($('accLogin'), async () => showLogin(await bridge.loginStart({ platform: accNet }))));
+$('accBrowser').addEventListener('click', () => accRun($('accLogin'), async () => {
+  await bridge.loginStart({ platform: accNet, browser: true });
+  show('accPasteBox', true); $('accPasted').focus();
+  accErr('В браузере войди в аккаунт и разреши доступ, затем скопируй адрес из строки браузера и вставь сюда. Для следующего аккаунта сначала выйди из этого в браузере.', true);
+}));
+$('accPasteGo').addEventListener('click', () => accRun($('accPasteGo'), async () => showLogin(await bridge.loginPasted($('accPasted').value))));
+$('accTokenGo').addEventListener('click', () => accRun($('accTokenGo'), async () => showLogin(await bridge.accToken($('accTokenIn').value))));
+$('accSave').addEventListener('click', () => accRun($('accSave'), async () => {
+  if (!accLogin) throw new Error('Сначала войди в аккаунт.');
+  const r = await bridge.accSave({ id: accLogin.id, name: $('accName').value, mode: accModeV, userId: $('accPick').value });
+  const extra = r.extra && r.extra.length ? ` Заодно сохранены общие секреты: ${r.extra.join(', ')}.` : '';
+  $('accDoneText').textContent = `✓ @${r.name} ${r.replaced ? 'переподключён' : 'добавлен'}. Токен лежит в секрете ${r.secret} на GitHub.${extra} Рилсы для него пойдут с ближайшей публикации${net === 'tiktok' || accNet === 'tiktok' ? ' (у папок с подпапками по аккаунтам нужна подпапка с этим ником)' : ''}.`;
+  accStep('accDone'); show('accKeys', false);
+  refresh();
+}));
+
 function closeTop() {
+  if (!$('accSheet').hidden) { $('accSheet').hidden = true; return; }
   if (!$('ttSheet').hidden) return ttClose();
   if (!$('txSheet').hidden) return closeTexts();
   if (!$('askSheet').hidden && !$('askCancel').disabled) { $('askSheet').hidden = true; return; }
@@ -569,6 +685,9 @@ function fillSettings() {
   $('fPin').checked = cfg.alwaysOnTop; $('fAutostart').checked = cfg.autostart; $('fAutoUpload').checked = cfg.autoUpload;
   $('fRefresh').value = String(cfg.refreshMin); $('fTz').value = cfg.scheduleTz;
   $('btnPin').classList.toggle('on', !!cfg.alwaysOnTop);
+  $('keysState').textContent = `TikTok: ${cfg.hasTtSecret ? 'ключ сохранён' : 'ключа нет'} · Instagram: ${cfg.hasIgSecret ? 'ключ сохранён' : 'ключа нет'}. Нужны только для кнопки «+» у аккаунтов.`;
+  const original = String(cfg.repo || '').toLowerCase() === 'frizy229/autopostreels';
+  $('resetBox').hidden = original;
   $('about').textContent = `Reels Widget ${version}. Две очереди: Instagram и TikTok (и общая для обеих). Папка из одного длинного видео превращается в рилсы на день, автопостер на GitHub публикует их сам.`;
 }
 function openSettings() { fillSettings(); $('connResult').textContent = ''; $('settings').hidden = false; }
@@ -617,6 +736,17 @@ $('btnSave').addEventListener('click', async () => {
     refresh();
   } catch (e) { res.className = 'small bad'; res.textContent = `✗ ${e.message}`; }
 });
+$('btnKeysTt').addEventListener('click', () => openAddAccount('tiktok', '', true));
+$('btnKeysIg').addEventListener('click', () => openAddAccount('instagram', '', true));
+$('btnReset').addEventListener('click', () => ask({
+  title: `Очистить копию ${cfg.repo}?`, go: 'Очистить', danger: true,
+  text: 'Из этого репозитория уберутся все папки очередей, опубликованное, история публикаций и список аккаунтов. Настройки (расписание, тексты, ключ приложения TikTok) останутся. Потом добавь свои аккаунты кнопкой «+».',
+  action: async () => {
+    const n = await bridge.repoReset($('fResetName').value);
+    $('resetResult').className = 'small ok'; $('resetResult').textContent = `✓ Копия очищена (убрано файлов: ${n}). Теперь добавь свои аккаунты кнопкой «+» в разделах Instagram и TikTok.`;
+    $('fResetName').value = ''; refresh();
+  },
+}));
 $('btnCheck').addEventListener('click', async () => {
   try { await bridge.run({ action: 'check' }); toast('Проверка запущена: результат в «Журнале запусков» через минуту'); } catch (e) { toast(e.message, 6000); }
 });
