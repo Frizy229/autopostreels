@@ -1412,6 +1412,10 @@ def refresh_ig_token(token: str) -> tuple[str, int]:
         if not d:
             log("Не удалось узнать срок токена Facebook, не продлеваю (на всякий случай).")
             return "", 0
+        if str(d.get("app_id") or app_id) != str(app_id):
+            log("Токен выдан другим приложением Meta (например, через Graph API Explorer): продлить его ключами "
+                "FB_APP_ID/FB_APP_SECRET нельзя. Переподключи аккаунт в виджете: «+ аккаунт» → «Войти через Facebook».")
+            return "", 0
         if not int(d.get("expires_at") or 0) or d.get("type") == "SYSTEM_USER":
             log("Токен Facebook бессрочный, продлевать не нужно.")
             return "", 0

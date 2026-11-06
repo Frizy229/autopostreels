@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('api', {
   accRemove: (o) => call('acc:remove', o),
   repoReset: (name) => call('repo:reset', name),
   openUrl: (u) => call('open:url', u),
+  fbGuide: () => call('acc:fbGuide'),
   hide: () => call('win:hide'),
   quit: () => call('win:quit'),
   pin: (v) => call('win:pin', v),

@@ -68,6 +68,20 @@ assert.strictEqual(A.nameError('evelon185', [{ name: 'evelon185', platform: 'tik
   assert.strictEqual(cfgB.accounts[3].platform, undefined);
 }
 
+// ---- пошаговая настройка Facebook: ссылки прямые при известном ID, адрес возврата и разрешения копируются
+{
+  const g0 = A.facebookGuide({ redirect: 'https://x.io/cb/' });
+  const urls0 = g0.flatMap((s) => s.steps).map((x) => x.url).filter(Boolean);
+  assert.ok(urls0.every((u) => /^https:\/\//.test(u)));
+  assert.ok(!urls0.some((u) => /apps\/\d/.test(u))); // без ID ведём в список приложений
+  const g = A.facebookGuide({ appId: '42', redirect: 'https://x.io/cb/', repo: 'me/r' });
+  const steps = g.flatMap((s) => s.steps);
+  assert.ok(steps.some((x) => x.url === 'https://developers.facebook.com/apps/42/settings/basic/'));
+  assert.ok(steps.some((x) => x.copy === 'https://x.io/cb/'));
+  assert.ok(steps.some((x) => x.copy && x.copy.includes('instagram_content_publish')));
+  assert.ok(steps.some((x) => x.url === 'https://github.com/me/r/actions'));
+}
+
 // ---- config.json: добавить, переподключить, убрать
 const cfg = { accounts: [
   { name: 'dayzerorules', token_env: 'IG_TOKEN', user_id_env: 'IG_USER_ID' },
