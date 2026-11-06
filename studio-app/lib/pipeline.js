@@ -407,7 +407,8 @@ class Pipeline {
    * Возвращает {folder, videos, problems, rejected}.
    */
   async build(o) {
-    const s = this.settings();
+    // o.override: сборка раздела «Instagram» (свои аккаунты, очередь, раскладки) поверх общих настроек
+    const s = { ...this.settings(), ...(o.override || {}) };
     const emit = o.onEvent || (() => {});
     const outDir = o.outputDir || s.outputDir;
     if (!outDir) throw new Error('Не выбрана папка для готовых роликов (Настройки → Выход)');

@@ -548,8 +548,13 @@ async function pollHandoff() {
       handoff.progress(dir, job.id, frac, text);
       if (win) win.webContents.send('upload:progress', { frac, text });
     }, await accountNames(job.lane), { lane: job.lane });
-    handoff.finish(dir, job.id, { ok: true, dest });
-    tell(`Загружено из Reels Studio: ${dest}`, true);
+    let posted = false;
+    if (job.postNow) {
+      // «Выложить сразу»: запускаем публикацию первого ролика каждого выбранного аккаунта, остальные — по расписанию
+      try { await gh().dispatch({ action: 'post', only: handoff.postNowOnly(dest, job.accounts || []) }); posted = true; } catch (e) { tell(`Загружено, но запуск публикации не удался: ${e.message}`, false); }
+    }
+    handoff.finish(dir, job.id, { ok: true, dest, posted });
+    tell(`Загружено из Reels Studio: ${dest}${posted ? ' · публикация запущена' : ''}`, true);
     if (win) win.webContents.send('refresh');
   } catch (e) {
     handoff.finish(dir, job.id, { ok: false, error: e.message, code: e.code || '' });

@@ -19,12 +19,12 @@ function writeJson(file, obj) {
 const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 
 /** Studio: заявка на загрузку папки. Возвращает id. */
-function request(dir, { folder, lane = 'shared', name = '' }, now = Date.now()) {
+function request(dir, { folder, lane = 'shared', name = '', postNow = false, accounts = [] }, now = Date.now()) {
   if (!folder) throw new Error('Нет папки для отправки');
   if (!LANE_KEYS.includes(lane)) throw new Error(`Неизвестная очередь: ${lane}`);
   fs.mkdirSync(dir, { recursive: true });
   const id = `${now}-${Math.random().toString(36).slice(2, 8)}`;
-  writeJson(path.join(dir, `${id}.req.json`), { id, folder, lane, name, at: new Date(now).toISOString() });
+  writeJson(path.join(dir, `${id}.req.json`), { id, folder, lane, name, postNow: !!postNow, accounts: (accounts || []).map(String), at: new Date(now).toISOString() });
   return id;
 }
 
@@ -91,7 +91,16 @@ function readAccounts(dir, platform = '') {
   return { at: o.at, accounts: o.accounts.filter((a) => !platform || a.platform === platform) };
 }
 
+/**
+ * Что опубликовать сразу после загрузки: первый ролик каждого аккаунта (подпапки) — для --only автопостера.
+ * dest: «queue-instagram/007_x». Без аккаунтов — первый ролик папки.
+ */
+function postNowOnly(dest, accounts = []) {
+  const folder = String(dest).split('/').pop();
+  return (accounts.length ? accounts.map((a) => `${folder}/${a}/`) : [`${folder}/`]).join(',');
+}
+
 /** Очередь Studio (queue, queue-instagram, queue-tiktok) → очередь виджета. */
 const laneOfQueue = (q) => ({ queue: 'shared', 'queue-instagram': 'instagram', 'queue-tiktok': 'tiktok' }[q] || 'shared');
 
-module.exports = { LANE_KEYS, handoffDir, request, status, take, progress, finish, cleanup, writeAccounts, readAccounts, laneOfQueue };
+module.exports = { LANE_KEYS, handoffDir, request, status, take, progress, finish, cleanup, writeAccounts, readAccounts, laneOfQueue, postNowOnly };

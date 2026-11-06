@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('api', {
   handoffSend: call('handoff:send'),
   handoffStatus: call('handoff:status'),
   handoffAccounts: call('handoff:accounts'),
+  handoffIgAccounts: call('handoff:igAccounts'),
   openLog: call('open:log'),
   netInfo: call('net:info'),
   netTest: call('net:test'),
