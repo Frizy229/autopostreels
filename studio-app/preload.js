@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('api', {
   pickFile: call('dialog:file'),
   openPath: call('open:path'),
   openLog: call('open:log'),
+  netInfo: call('net:info'),
+  netTest: call('net:test'),
   showItem: call('open:show'),
   openUrl: call('open:url'),
   pathOf: (file) => webUtils.getPathForFile(file),

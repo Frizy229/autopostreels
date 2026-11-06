@@ -6,7 +6,7 @@ const { SUB_STYLES, TITLE_STYLES } = require('./subs');
 const { ENCODERS } = require('./render');
 const { MODELS } = require('./transcribe');
 const { DEFAULT_RULES } = require('./rules');
-const { BROWSERS, COOKIE_MODES, FILLER_QUERIES, parseQueryLine } = require('./sources');
+const { BROWSERS, COOKIE_MODES, FILLER_QUERIES, parseQueryLine, NET_MODES } = require('./sources');
 
 const DEFAULTS = {
   theme: 'dark', material: 'acrylic',
@@ -40,6 +40,8 @@ const DEFAULTS = {
   searchMinMin: 20,      // поиск лонгов: от N минут
   // вход в YouTube для yt-dlp: auto — при «докажи, что не бот» пробовать cookies браузеров
   cookies: { mode: 'auto', browser: 'firefox', file: '' },
+  // сеть для yt-dlp: system — прокси/VPN из Windows (если есть), manual — свой адрес, none — напрямую
+  net: { mode: 'system', proxy: '' },
 };
 
 const LANES = { queue: 'Общая очередь (все сети)', 'queue-instagram': 'Только Instagram', 'queue-tiktok': 'Только TikTok' };
@@ -91,6 +93,8 @@ function normalize(raw) {
   const ck = { ...DEFAULTS.cookies, ...((raw && raw.cookies && typeof raw.cookies === 'object') ? raw.cookies : {}) };
   s.cookies = { mode: pick(ck.mode, COOKIE_MODES, 'auto'), browser: pick(ck.browser, BROWSERS, 'firefox'), file: typeof ck.file === 'string' ? ck.file : '' };
   if (s.cookies.mode === 'file' && !s.cookies.file) s.cookies.mode = 'auto';
+  const nt = { ...DEFAULTS.net, ...((raw && raw.net && typeof raw.net === 'object') ? raw.net : {}) };
+  s.net = { mode: pick(nt.mode, NET_MODES, 'system'), proxy: typeof nt.proxy === 'string' ? nt.proxy.trim().slice(0, 200) : '' };
   if (!s.presets || typeof s.presets !== 'object') s.presets = {};
   return s;
 }

@@ -222,6 +222,49 @@ function fillerDownloadArgs(url, { out, ffmpeg, duration = 0, maxSec = 600 } = {
   return a;
 }
 
-module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf, ytResultsUrl,
+// ------------------------------------------------------------------ сеть: прокси и недоступный YouTube
+const NET_MODES = { system: 'Как в Windows (VPN, системный прокси)', manual: 'Свой прокси', none: 'Без прокси' };
+
+/** Ответ Electron resolveProxy («PROXY h:p; DIRECT», «SOCKS5 h:p») → адрес для yt-dlp --proxy или ''. */
+function proxyFromPac(pac) {
+  for (const part of String(pac || '').split(';')) {
+    const m = /^\s*(PROXY|HTTPS|HTTP|SOCKS5|SOCKS4|SOCKS)\s+([^\s;]+)\s*$/i.exec(part);
+    if (!m) continue;
+    const kind = m[1].toUpperCase();
+    const scheme = kind === 'SOCKS4' ? 'socks4' : kind.startsWith('SOCKS') ? 'socks5' : kind === 'HTTPS' ? 'https' : 'http';
+    return `${scheme}://${m[2]}`;
+  }
+  return '';
+}
+
+/** Свой прокси из поля настроек: «127.0.0.1:1080» → http://…; socks5/socks4/http/https оставляем как есть. '' — неверно. */
+function normProxy(s) {
+  const t = String(s || '').trim();
+  if (!t) return '';
+  if (/^(socks5h?|socks4a?|https?):\/\/[^\s/]+(:\d+)?\/?$/i.test(t)) return t.replace(/\/$/, '');
+  if (/^[\w.-]+:\d{2,5}$/.test(t)) return `http://${t}`;
+  return '';
+}
+
+/** Аргументы прокси для yt-dlp: net {mode, proxy}, sys — найденный системный прокси. */
+function proxyArgs(net, sys) {
+  const n = net || {};
+  if (n.mode === 'none') return ['--proxy', ''];
+  if (n.mode === 'manual') { const p = normProxy(n.proxy); return p ? ['--proxy', p] : []; }
+  return sys ? ['--proxy', sys] : [];
+}
+
+/** Нет связи с сайтом: DNS, таймаут, сброс соединения, прокси не отвечает. */
+const isNetworkError = (text) => /getaddrinfo failed|failed to resolve|name or service not known|temporary failure in name resolution|nodename nor servname|errno 11001|winerror 1006[01]|winerror 10054|connection (refused|reset|aborted)|timed out|network is unreachable|no route to host|unable to connect to proxy|proxyerror|ssl: (unexpected_eof|wrong_version)|eof occurred in violation/i.test(String(text || ''));
+
+function netHelp(target, viaProxy) {
+  const site = platformOf(target) === 'youtube' || /^ytsearch/i.test(String(target)) ? 'YouTube' : 'Сайт';
+  return `${site} недоступен в этой сети: программа не может подключиться к серверу.\n`
+    + (viaProxy ? 'Прокси из настроек не отвечает: проверь его адрес или включи VPN.\n' : 'Включи VPN или укажи прокси в Настройках → «Сеть», затем нажми «Проверить YouTube».\n')
+    + 'Записи Twitch и файлы с диска работают без этого.';
+}
+
+module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf,
+  NET_MODES, proxyFromPac, normProxy, proxyArgs, isNetworkError, netHelp, ytResultsUrl,
   FILLER_QUERIES, parseQueryLine, fillerTarget, filterFillers, fillerDownloadArgs,
   BROWSERS, AUTO_BROWSERS, COOKIE_MODES, needsAuth, cookieArgs, authPlan, isAuthError, isCookieError, authName, authHelp };

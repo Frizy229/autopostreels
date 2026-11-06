@@ -75,7 +75,9 @@ class Tools {
   run(cmd, args, opts = {}) {
     return new Promise((resolve, reject) => {
       if (!cmd) { reject(new Error('Программа не найдена')); return; }
-      const p = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true });
+      // PYTHONUTF8/PYTHONIOENCODING: yt-dlp (Python) пишет в UTF-8, а не в кодировке консоли Windows (cp1251/cp866)
+      const env = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', ...(opts.env || {}) };
+      const p = spawn(cmd, args, { cwd: opts.cwd, windowsHide: true, env });
       const out = [], err = [];
       let lineBuf = { stdout: '', stderr: '' };
       const lines = (stream, chunk) => {

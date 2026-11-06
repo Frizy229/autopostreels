@@ -11,7 +11,7 @@ const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
 const { layoutOutput, writeTexts, checkFolder, nextFolderNumber, slugify } = require('./output');
 const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe } = require('./render');
-const { listArgs, downloadArgs, parseList, parseProgress, statusOf, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
+const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
 const { checkMoment } = require('./rules');
 const { whisperArgs, wavArgs, parseWhisperJson, MODELS } = require('./transcribe');
 
@@ -22,6 +22,7 @@ class Pipeline {
   /** o: tools (Tools), dataDir (проекты и кэш), fontsDir, settings() → текущие настройки */
   constructor(o) {
     this.tools = o.tools; this.dataDir = o.dataDir; this.fontsDir = o.fontsDir; this.settings = o.settings;
+    this.systemProxy = o.systemProxy || (() => '');  // прокси Windows (из Electron), '' — напрямую
     this.projDir = path.join(this.dataDir, 'projects');
     this.cacheDir = path.join(this.dataDir, 'cache');
     fs.mkdirSync(this.projDir, { recursive: true });
@@ -73,14 +74,15 @@ class Pipeline {
       timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutSec * 1000);
       runOpts.signal = ctrl.signal;
     }
+    const net = proxyArgs(this.settings().net, this.systemProxy());
     const tried = [];
-    let authHit = false, last = null, empty = false, emptyRes = null;
+    let authHit = false, last = null, empty = false, emptyRes = null, netFail = false;
     try {
       for (const auth of plan) {
         let r;
         try {
           // eslint-disable-next-line no-await-in-loop
-          r = await this.tools.run(this.tools.ytdlp, [...cookieArgs(auth), ...args], { ...runOpts, allowFail: true });
+          r = await this.tools.run(this.tools.ytdlp, [...net, ...cookieArgs(auth), ...args], { ...runOpts, allowFail: true });
         } catch (e) {
           if (timedOut) throw Object.assign(new Error(`yt-dlp не ответил за ${timeoutSec} с. Проверь интернет или VPN и повтори; если не поможет, обнови yt-dlp в Настройках → Компоненты.`), { code: 'TIMEOUT' });
           throw e;
@@ -91,6 +93,8 @@ class Pipeline {
         const ok = accept ? accept(r, out) : (r.code === 0 || (okIfStdout && out));
         if (ok) { if (needsAuth(target)) this._auth = { key, auth }; return r; }
         last = r;
+        // нет связи (DNS, блокировка, прокси) — другие cookies не помогут
+        if (isNetworkError(r.stderr) && !isAuthError(r.stderr)) { netFail = true; break; }
         if (isAuthError(r.stderr)) { authHit = true; continue; }
         if (auth && isCookieError(r.stderr)) continue;
         // пустой ответ без ошибки: YouTube иногда отдаёт пустую выдачу без входа — пробуем дальше с cookies
@@ -100,11 +104,24 @@ class Pipeline {
       }
     } finally { if (timer) clearTimeout(timer); }
     if (empty && !authHit) last = emptyRes;
-    this.logYtdlp(args, last);
+    this.logYtdlp([...net, ...args], last);
+    if (netFail) throw Object.assign(new Error(netHelp(target, net.length && net[1])), { code: 'NET', res: last });
     if (authHit) throw Object.assign(new Error(authHelp(tried.filter(Boolean).length ? tried : [])), { code: 'AUTH', res: last });
     const tail = String((last && last.stderr) || '').trim().split(/\r?\n/).filter((l) => l && !/^\[(debug|info)\]/i.test(l)).slice(-3).join('\n');
     if (empty) throw Object.assign(new Error(`YouTube ничего не вернул.${tail ? `\n${tail}` : ''}\nПопробуй другой запрос, обнови yt-dlp (Настройки → Компоненты) или войди в YouTube (Настройки → «Вход в YouTube»).`), { code: 'EMPTY', res: last });
     throw Object.assign(new Error(`yt-dlp: код ${last.code}\n${tail}`), { res: last });
+  }
+
+  /** Проверка: открывается ли YouTube у yt-dlp с текущими настройками сети и входа. */
+  async testYoutube() {
+    const t0 = Date.now();
+    const target = ytResultsUrl('minecraft');
+    try {
+      const r = await this.ytdlp(listArgs(target, 1), target, { accept: (x, out) => !!out && out.includes('"entries"'), timeoutSec: 40 });
+      return { ok: true, ms: Date.now() - t0, proxy: proxyArgs(this.settings().net, this.systemProxy())[1] || '', count: r ? 1 : 0 };
+    } catch (e) {
+      return { ok: false, ms: Date.now() - t0, error: e.message, code: e.code || '' };
+    }
   }
 
   /** Последняя неудачная команда yt-dlp — в журнал (папка программы/logs/yt-dlp.txt), чтобы можно было прислать. */
