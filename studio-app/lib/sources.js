@@ -81,7 +81,9 @@ function filterLongs(list, { minDur = 0, sort = 'views' } = {}) {
 function downloadArgs(url, o = {}) {
   const a = ['--no-warnings', '--newline', '--no-playlist', '--progress', '-o', o.out || '%(id)s.%(ext)s'];
   if (o.ffmpeg) a.push('--ffmpeg-location', o.ffmpeg);
-  if (o.audioOnly) a.push('-f', 'bestaudio/best', '-x', '--audio-format', 'm4a');
+  // звук как есть, без перекодирования (раньше -x --audio-format m4a: долгая обработка 3-часового стрима без прогресса)
+  if (o.audioOnly) a.push('-f', 'ba[ext=m4a]/ba/b');
+  else if (o.videoOnly) a.push('-f', `bv*[height<=${o.maxHeight || 1080}][ext=mp4]/bv*[height<=${o.maxHeight || 1080}]/b[height<=${o.maxHeight || 1080}]`);
   else {
     const h = o.maxHeight || 1080;
     a.push('-f', `bv*[height<=${h}][ext=mp4]+ba[ext=m4a]/bv*[height<=${h}]+ba/b[height<=${h}]/b`, '--merge-output-format', 'mp4');
@@ -91,6 +93,18 @@ function downloadArgs(url, o = {}) {
   if (o.chat) a.push('--write-subs', '--sub-langs', 'live_chat,rechat', '--skip-download');
   a.push(url);
   return a;
+}
+
+/** Что yt-dlp делает сейчас (строки без процентов): для подписи под полосой. null — не интересно. */
+function statusOf(line) {
+  const l = String(line || '');
+  if (/^\[download\]\s+[\d.]+%/.test(l)) return null;
+  if (/^\[(ExtractAudio|FFmpegExtractAudio)\]/.test(l)) return 'Перевожу звук';
+  if (/^\[(Merger|VideoConvertor|FixupM3u8|FixupM4a|FixupDuplicateMoov|FixupTimestamp)\]/.test(l)) return 'Склеиваю файл';
+  if (/^\[download\] Destination/.test(l)) return 'Скачиваю';
+  if (/^\[(youtube|twitch|info)[^\]]*\]/i.test(l)) return 'Получаю данные видео';
+  if (/^WARNING:/i.test(l)) return l.replace(/^WARNING:\s*/i, 'yt-dlp: ').slice(0, 120);
+  return null;
 }
 
 /** Прогресс из строки yt-dlp: «[download]  42.3% of ...» → 0.423. */
@@ -152,5 +166,54 @@ function authHelp(tried) {
     + '\nЗаписи Twitch и файлы с диска работают без входа.';
 }
 
-module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry,
+// ------------------------------------------------------------------ фон: залипательные видео и мини-игры
+// Для нижней половины раскладки «стрим сверху, мини-игра снизу». Звук фона в ролик не идёт, поэтому качается только видео.
+
+const FILLER_QUERIES = [
+  'Чистка ковров = carpet cleaning satisfying',
+  'Ржавое как новое = rusty restoration satisfying',
+  'Грязное в чистое = dirty to clean satisfying',
+  'Мойка давлением = pressure washing satisfying',
+  'Слаймы = slime asmr satisfying',
+  'Кинетический песок = kinetic sand cutting asmr',
+  'Резка мыла = soap cutting asmr',
+  'Гидропресс = hydraulic press satisfying',
+  'Марбл ран = marble run satisfying',
+  'Мобильные мини-игры = satisfying mobile games gameplay',
+  'Subway Surfers = subway surfers gameplay no copyright',
+  'Minecraft паркур = minecraft parkour gameplay no copyright',
+];
+
+/** Строка запроса «Название = запрос» (или просто «запрос») → {t, q}. */
+function parseQueryLine(line) {
+  const s = String(line || '').trim();
+  if (!s) return null;
+  const i = s.indexOf('=');
+  if (i < 0) return { t: s, q: s };
+  const t = s.slice(0, i).trim(), q = s.slice(i + 1).trim();
+  return q ? { t: t || q, q } : null;
+}
+
+/** Поиск фона: ссылка как есть; иначе поиск YouTube, с cc — только видео под лицензией Creative Commons. */
+function fillerTarget(q, { cc = false, limit = 30 } = {}) {
+  const s = String(q || '').trim();
+  if (isUrl(s)) return s;
+  if (cc) return `https://www.youtube.com/results?search_query=${encodeURIComponent(s)}&sp=EgIwAQ%3D%3D`;
+  return `ytsearch${limit}:${s}`;
+}
+
+/** Из найденного — то, что годится в фон: от 20 с, без трансляций; сначала самые просматриваемые. */
+function filterFillers(list, { minDur = 20 } = {}) {
+  return list.filter((e) => e.url && (!e.duration || e.duration >= minDur)).sort((a, b) => b.views - a.views);
+}
+
+/** Скачать фон: только видео до 1080p; длинное — первые maxSec секунд (фон всё равно идёт по кругу). */
+function fillerDownloadArgs(url, { out, ffmpeg, duration = 0, maxSec = 600 } = {}) {
+  const a = downloadArgs(url, { videoOnly: true, out, ffmpeg });
+  if (duration > maxSec + 60) a.splice(a.length - 1, 0, '--download-sections', `*0-${maxSec}`);
+  return a;
+}
+
+module.exports = { VIDEO_EXT, platformOf, isUrl, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf,
+  FILLER_QUERIES, parseQueryLine, fillerTarget, filterFillers, fillerDownloadArgs,
   BROWSERS, AUTO_BROWSERS, COOKIE_MODES, needsAuth, cookieArgs, authPlan, isAuthError, isCookieError, authName, authHelp };

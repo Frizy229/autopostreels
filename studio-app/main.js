@@ -25,6 +25,8 @@ let win = null;
 function loadSettings() {
   try { settings = normalize(JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))); } catch { settings = normalize({}); }
   if (!settings.outputDir) settings.outputDir = path.join(app.getPath('documents'), 'Reels Studio');
+  // библиотека фона (мини-игры, залипательные видео): по умолчанию рядом с готовыми папками
+  if (!settings.fillerDir) settings.fillerDir = path.join(app.getPath('documents'), 'Reels Studio', 'Фон');
 }
 function saveSettings() {
   fs.mkdirSync(userData(), { recursive: true });
@@ -162,6 +164,10 @@ function registerIpc() {
   handle('project:remove', (id) => pipeline.remove(id));
   handle('project:addMoment', (id, s, e) => pipeline.addMoment(id, s, e));
   handle('project:frame', async (id, t) => `data:image/jpeg;base64,${(await pipeline.frame(id, t)).toString('base64')}`);
+  handle('filler:search', (q, o = {}) => pipeline.searchFillers(q, { cc: !!o.cc, limit: o.limit || 30 }));
+  handle('filler:list', () => pipeline.fillerLibrary());
+  handle('filler:add', (list) => startJob('filler', 'Фон: скачиваю', (p, signal) => pipeline.addFillers(Array.isArray(list) ? list.slice(0, 50) : [], p, signal)));
+  handle('filler:remove', (file) => pipeline.removeFiller(file));
   handle('project:analyze', (id) => startJob('analyze', 'Поиск моментов', (p, signal) => pipeline.analyze(id, p, signal).then(slim)));
   handle('project:check', (id) => startJob('check', 'Проверка правил', (p, signal) => pipeline.check(id, p, signal).then(slim)));
   handle('project:clip', async (id, mid) => {
@@ -206,6 +212,7 @@ async function shots(dir) {
     await js(`go(${JSON.stringify(p)})`);
     await wait(1200);
     if (p === 'projects' && process.env.STUDIO_FRAMER) { await js(`openFramer(S.project)`); await wait(1800); }
+    if (process.env[`STUDIO_JS_${p}`]) { await js(process.env[`STUDIO_JS_${p}`]); await wait(600); }  // подготовка демо-данных для снимка
     fs.writeFileSync(path.join(dir, `${p}.png`), (await win.webContents.capturePage()).toPNG());
     if (p === 'projects' && process.env.STUDIO_FRAMER) await js(`document.querySelector('#fx').click()`);
   }

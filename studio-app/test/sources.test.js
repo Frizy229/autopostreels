@@ -35,7 +35,7 @@ assert.ok(dl.includes('--download-sections') && dl.includes('*10-40') && dl.incl
 assert.ok(dl.join(' ').includes('--ffmpeg-location ff'));
 assert.ok(dl.join(' ').includes('height<=1080'));
 const au = S.downloadArgs('U', { audioOnly: true });
-assert.ok(au.includes('bestaudio/best') && !au.includes('--merge-output-format'));
+assert.ok(au.includes('ba[ext=m4a]/ba/b') && !au.includes('--merge-output-format') && !au.includes('-x'), 'звук без перекодирования');
 assert.ok(S.downloadArgs('U', { chat: true }).includes('--skip-download'));
 assert.strictEqual(S.parseProgress('[download]  42.5% of 10.00MiB at 1MiB/s'), 0.425);
 assert.strictEqual(S.parseProgress('[info] x'), null);
