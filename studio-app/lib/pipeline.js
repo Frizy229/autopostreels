@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { buildFilter, filterPath } = require('./layout');
+const { buildFilter, filterPath, camsOf, CAM_LAYOUTS } = require('./layout');
 const { buildAss } = require('./subs');
 const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
@@ -274,12 +274,25 @@ class Pipeline {
     const src = pr.source.kind === 'file' ? pr.source.path : await this.audioSource(pr, null, signal);
     const wav = this.cache(pr, `w_${m.id}.wav`);
     await this.tools.run(this.tools.ffmpeg, wavArgs(src, wav, m.start, m.end), { signal });
+    if (!fs.existsSync(wav) || fs.statSync(wav).size < 16000) {
+      throw new Error(`Не получилось вырезать звук отрезка ${fmtTime(m.start)}–${fmtTime(m.end)}: в исходнике нет звука в этом месте. Удали момент или скачай видео заново.`);
+    }
     const base = this.cache(pr, `w_${m.id}`);
-    const run = (gpu) => this.tools.run(this.tools.whisper, whisperArgs({ model, wav, outBase: base, lang: s.lang, gpu, threads: Math.max(2, require('os').cpus().length - 1) }), { signal });
-    try { await run(s.gpu); } catch (e) {
-      // нет CUDA-библиотек или видеокарта занята — распознаём на процессоре
-      if (!s.gpu || e.code === 'ABORT') throw e;
-      await run(false);
+    // whisper-cli на Windows не открывает файлы, если в пути русские буквы (например, имя пользователя Windows
+    // по-русски). Поэтому запускаем его из папки кэша и передаём только короткие латинские имена.
+    const cwd = path.dirname(wav);
+    const rel = (p) => path.relative(cwd, p) || p;
+    const args = (gpu) => whisperArgs({ model: rel(model), wav: path.basename(wav), outBase: path.basename(base), lang: s.lang, gpu, threads: Math.max(2, require('os').cpus().length - 1) });
+    const run = (gpu) => this.tools.run(this.tools.whisper, args(gpu), { signal, cwd });
+    try {
+      try { await run(s.gpu); } catch (e) {
+        // нет CUDA-библиотек или видеокарта занята — распознаём на процессоре
+        if (!s.gpu || e.code === 'ABORT') throw e;
+        await run(false);
+      }
+    } catch (e) {
+      if (e.code === 'ABORT') throw e;
+      throw Object.assign(new Error(whisperHelp(e)), { res: e.res });
     }
     const words = parseWhisperJson(fs.readFileSync(`${base}.json`, 'utf8'), m.start);
     fs.rmSync(wav, { force: true });
@@ -288,7 +301,7 @@ class Pipeline {
 
   // ------------------------------------------------------------ проверка правил
   /** Нужна ли рамка вебки при выбранных раскладках. */
-  needsCam() { return this.settings().formats.some((f) => f === 'stream' || f === 'camfull'); }
+  needsCam() { return this.settings().formats.some((f) => CAM_LAYOUTS.includes(f)); }
 
   /** Распознать речь выбранных моментов проекта и проверить правила. Результат в m.check. */
   async check(id, onProgress, signal) {
@@ -303,8 +316,8 @@ class Pipeline {
       if (!m) continue;
       if (words) m.words = words;
       // рамка сохранена без вебки («Без вебки») — ролики этого видео соберутся без неё, это не ошибка
-      const noCam = !!(pr.frame && !pr.frame.cam);
-      m.check = checkMoment(m, { words: m.words || null, layout: this.needsCam() && !noCam ? 'stream' : 'full', hasCam: !!(pr.frame && pr.frame.cam), rules: s.rules });
+      const noCam = !!(pr.frame && !camsOf(pr.frame).length);
+      m.check = checkMoment(m, { words: m.words || null, layout: this.needsCam() && !noCam ? 'stream' : 'full', hasCam: camsOf(pr.frame).length > 0, rules: s.rules });
       this.save(pr);
     }
     if (onProgress) onProgress(1, 'Готово');
@@ -449,7 +462,7 @@ class Pipeline {
         const fl = fillers[h % fillers.length];
         filler = { path: fl.path, offset: Math.max(0, (h % 997) / 997 * Math.max(0, fl.duration - dur - 1)).toFixed(2) };
       }
-      const base = { layout: v.layout || s.layout, srcW: pr.source.width, srcH: pr.source.height, cam: fr.cam || null, content: fr.content || null,
+      const base = { layout: v.layout || s.layout, srcW: pr.source.width, srcH: pr.source.height, cams: camsOf(fr), content: fr.content || null, fit: s.fit,
         split: fr.split || s.split, variant: v, hasAudio: pr.source.hasAudio !== false, filler: !!filler };
       const anchors = buildFilter(base).anchors;
       const assFile = this.cache(pr, `s_${i}_${m.id}.ass`);
@@ -479,6 +492,19 @@ class Pipeline {
   }
 }
 
+/** Понятный текст ошибки распознавания речи (whisper-cli) по его выводу. */
+function whisperHelp(e) {
+  const err = (e.res && e.res.stderr) || e.message || '';
+  const code = e.res ? e.res.code : null;
+  const why = /failed to read audio|failed to open audio|input file not found/i.test(err) ? 'программа распознавания не смогла открыть звук отрезка'
+    : /failed to (initialize whisper context|load model)|invalid model|failed to open .*\.bin/i.test(err) ? 'файл модели повреждён или скачан не до конца: удали его в Настройках и скачай заново'
+      : /failed to process audio/i.test(err) ? 'сбой при распознавании (часто нехватка видеопамяти: выбери модель поменьше или выключи видеокарту для распознавания)'
+        : code === 11 ? 'не удалось прочитать звук или записать результат'
+          : '';
+  const detail = String(err).split(/\r?\n/).map((l) => l.trim()).filter((l) => /error|failed|not found/i.test(l) && !/^whisper_print_timings/.test(l)).slice(-3).join('\n');
+  return `Распознавание речи не сработало${why ? `: ${why}` : ''}.${detail ? `\n${detail}` : `\n${String(e.message || '').split('\n')[0]}`}`;
+}
+
 const hash = (str) => { let h = 2166136261; for (const c of str) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
 function safeList(d) { try { return fs.readdirSync(d); } catch { return []; } }
 function downsample(arr, n) {
@@ -491,4 +517,4 @@ function downsample(arr, n) {
   return out;
 }
 
-module.exports = { Pipeline, downsample };
+module.exports = { Pipeline, downsample, whisperHelp };

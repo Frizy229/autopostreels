@@ -358,13 +358,14 @@ function projectMain(pr) {
   const job = [...S.jobs.values()].find((j) => !j.done && (j.kind === 'analyze' || j.kind === 'check'));
   const sel = pr.moments.filter((m) => m.selected).length;
   const maxScore = Math.max(1, ...pr.moments.map((m) => m.score || 0));
-  const needCam = s.formats.some((f) => f === 'stream' || f === 'camfull');
+  const needCam = s.formats.some((f) => S.cat.camLayouts.includes(f));
+  const nCams = H.camsOf(pr.frame).length;
   return `
     ${!pr.frame && needCam ? `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>Отметь, где вебка</b><small>Без рамки ролики «вебка сверху» не соберутся. Нажми «Рамка вебки» → «Найти лицо» → «Сохранить». Если вебки в видео нет — «Без вебки».</small></div></div>` : ''}
     <div class="card">
       <div class="row wrap">
         <div class="grow"><h3>${esc(pr.title)}</h3><p class="hint" style="margin:0">${esc(pr.streamer || pr.source.platform)} · ${fmtTime(pr.source.duration)} · ${pr.source.width}×${pr.source.height}${pr.chatCount ? ` · чат: ${pr.chatCount} сообщений` : ''}</p></div>
-        <button class="btn ${!pr.frame && needCam ? 'primary' : ''}" id="frameBtn">${ic('scan-face')}${pr.frame ? (pr.frame.cam ? 'Рамка вебки ✓' : 'Без вебки ✓') : 'Рамка вебки'}</button>
+        <button class="btn ${!pr.frame && needCam ? 'primary' : ''}" id="frameBtn">${ic('scan-face')}${pr.frame ? (nCams > 1 ? `Вебки: ${nCams} ✓` : nCams ? 'Рамка вебки ✓' : 'Без вебки ✓') : 'Рамка вебки'}</button>
         <button class="btn ${pr.analyzed ? '' : 'primary'}" id="anBtn" ${job ? 'disabled' : ''}>${ic('audio-lines')}${pr.analyzed ? 'Искать заново' : 'Найти моменты'}</button>
         <button class="btn" id="chkBtn" ${job || !sel ? 'disabled' : ''}>${ic('shield-check')}Проверить</button>
         <button class="btn ghost danger icon" id="delBtn" title="Убрать источник">${ic('trash-2')}</button>
@@ -482,15 +483,17 @@ async function playMoment(pr, id) {
 // ------------------------------------------------------------------ рамка вебки
 async function openFramer(pr) {
   const m = $('#modal');
-  const fr = { cam: null, content: { x: 0, y: 0, w: 1, h: 1 }, ...(pr.frame || {}) };
+  const init = pr.frame || (pr.streamer && S.settings.presets[pr.streamer]) || {};
+  const fr = { cams: H.camsOf(init).map((r) => ({ ...r })), content: { x: 0, y: 0, w: 1, h: 1, ...(init.content || {}) } };
   const t0 = (pr.moments.find((x) => x.selected) || { peak: (pr.source.duration || 60) * 0.3 }).peak;
   m.hidden = false;
   m.innerHTML = `<div class="dlg">
-    <div class="row"><div class="grow"><h2>Где вебка и где контент</h2><p class="hint">Зелёная рамка — лицо стримера (пойдёт наверх), пунктир — то, что он смотрит или играет (пойдёт вниз). Тяни за рамку, уголок меняет размер.</p></div>
+    <div class="row"><div class="grow"><h2>Где вебки и где контент</h2><p class="hint">Зелёные рамки — вебки (можно несколько, до 4), пунктир — то, что смотрят или во что играют. Тяни рамку мышью, уголок меняет размер, крестик удаляет вебку.</p></div>
       <button class="btn ghost icon" id="fx">${ic('x')}</button></div>
     <div class="framer" id="fr"><div class="empty" style="aspect-ratio:16/9">Загружаю кадр…</div></div>
     <div class="row wrap" style="margin-top:14px">
-      <button class="btn" id="fAuto">${ic('scan-face')}Найти лицо</button>
+      <button class="btn" id="fAuto">${ic('scan-face')}Найти лица</button>
+      <button class="btn" id="fAdd">${ic('plus')}Ещё вебка</button>
       <button class="btn" id="fOther">${ic('refresh-cw')}Другой кадр</button>
       <button class="btn ghost" id="fNoCam" title="В этом видео нет вебки: ролики соберутся без неё">Без вебки</button>
       <span class="grow"></span>
@@ -499,34 +502,36 @@ async function openFramer(pr) {
     </div></div>`;
   const close = () => { m.hidden = true; m.innerHTML = ''; };
   $('#fx').onclick = close;
-  let t = t0;
-  const load = async () => {
-    try {
-      const src = await call('frame', pr.id, t);
-      $('#fr').innerHTML = `<img id="fimg" src="${src}"><div class="rect content" data-k="content"><span class="lbl">контент</span><span class="h"></span></div><div class="rect cam" data-k="cam"><span class="lbl">вебка</span><span class="h"></span></div>`;
-      draw(); bindDrag();
-    } catch (e) { $('#fr').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-  };
+  let t = t0, src = null;
+  const rect = (k, i, label) => `<div class="rect ${k}" data-k="${k}" ${i != null ? `data-i="${i}"` : ''}><span class="lbl">${label}</span>${i != null ? `<button class="del" data-del="${i}" title="Убрать эту вебку">×</button>` : ''}<span class="h"></span></div>`;
   const draw = () => {
-    for (const k of ['cam', 'content']) {
-      const el = $(`.rect[data-k="${k}"]`);
-      if (!el) continue;
-      const r = fr[k];
-      el.hidden = !r;
-      if (r) Object.assign(el.style, { left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` });
-    }
+    if (!src) return;
+    $('#fr').innerHTML = `<img id="fimg" src="${src}">${rect('content', null, 'контент')}${fr.cams.map((_, i) => rect('cam', i, fr.cams.length > 1 ? `вебка ${i + 1}` : 'вебка')).join('')}`;
+    const place = (el, r) => Object.assign(el.style, { left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` });
+    place($('.rect.content'), fr.content);
+    $$('.rect.cam').forEach((el) => place(el, fr.cams[+el.dataset.i]));
+    $('#fAdd').disabled = fr.cams.length >= 4;
+    bindDrag();
   };
+  const load = async () => {
+    try { src = await call('frame', pr.id, t); draw(); } catch (e) { $('#fr').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  const get = (el) => (el.dataset.k === 'cam' ? fr.cams[+el.dataset.i] : fr.content);
+  const set = (el, r) => { if (el.dataset.k === 'cam') fr.cams[+el.dataset.i] = r; else fr.content = r; };
   const bindDrag = () => {
     const box = $('#fr');
+    $$('[data-del]', box).forEach((b) => { b.onpointerdown = (e) => e.stopPropagation(); b.onclick = () => { fr.cams.splice(+b.dataset.del, 1); draw(); }; });
     $$('.rect', box).forEach((el) => {
       el.onpointerdown = (e) => {
-        const k = el.dataset.k, resize = e.target.classList.contains('h');
-        const B = box.getBoundingClientRect(), start = { ...fr[k] }, x0 = e.clientX, y0 = e.clientY;
+        if (e.target.dataset.del != null) return;
+        const resize = e.target.classList.contains('h');
+        const B = box.getBoundingClientRect(), start = { ...get(el) }, x0 = e.clientX, y0 = e.clientY;
         el.setPointerCapture(e.pointerId);
         el.onpointermove = (ev) => {
           const dx = (ev.clientX - x0) / B.width, dy = (ev.clientY - y0) / B.height;
-          fr[k] = H.clampRect(resize ? { ...start, w: start.w + dx, h: start.h + dy } : { ...start, x: start.x + dx, y: start.y + dy });
-          draw();
+          const r = H.clampRect(resize ? { ...start, w: start.w + dx, h: start.h + dy } : { ...start, x: start.x + dx, y: start.y + dy });
+          set(el, r);
+          Object.assign(el.style, { left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` });
         };
         el.onpointerup = () => { el.onpointermove = null; };
         e.stopPropagation();
@@ -534,34 +539,35 @@ async function openFramer(pr) {
     });
   };
   $('#fOther').onclick = () => { t = Math.random() * (pr.source.duration || 60); load(); };
-  $('#fNoCam').onclick = () => { fr.cam = null; draw(); toast('Вебки нет — нажми «Сохранить», ролики соберутся без неё', 3500); };
+  $('#fAdd').onclick = () => { if (fr.cams.length < 4) { fr.cams.push(H.nextCamSlot(fr.cams)); draw(); } };
+  $('#fNoCam').onclick = () => { fr.cams = []; draw(); toast('Вебки нет — нажми «Сохранить», ролики соберутся без неё', 3500); };
   $('#fAuto').onclick = async () => {
     const img = $('#fimg');
     if (!img) return;
-    if (!('FaceDetector' in window)) { if (!fr.cam) fr.cam = { x: 0.68, y: 0.02, w: 0.3, h: 0.36 }; draw(); toast('Автопоиск лица недоступен на этой системе — поставил рамку в угол, поправь вручную'); return; }
+    if (!('FaceDetector' in window)) { if (!fr.cams.length) fr.cams.push(H.nextCamSlot([])); draw(); toast('Автопоиск лица недоступен на этой системе — поставил рамку в угол, поправь вручную'); return; }
     try {
-      const faces = await new window.FaceDetector({ fastMode: false, maxDetectedFaces: 5 }).detect(img);
-      const f = H.biggestFace(faces);
-      if (!f) { toast('Лицо не найдено, попробуй другой кадр'); return; }
-      fr.cam = H.faceToCam(f, img.naturalWidth, img.naturalHeight); draw();
+      const faces = await new window.FaceDetector({ fastMode: false, maxDetectedFaces: 8 }).detect(img);
+      const cams = H.facesToCams(faces, img.naturalWidth, img.naturalHeight);
+      if (!cams.length) { toast('Лицо не найдено, попробуй другой кадр'); return; }
+      fr.cams = cams; draw();
+      if (cams.length > 1) toast(`Нашёл ${cams.length} ${H.plural(cams.length, 'лицо', 'лица', 'лиц')}. Лишние (например, лица в игре) убери крестиком`, 5000);
     } catch (e) { fail(e); }
   };
   $('#fSave').onclick = async () => {
-    const frame = { cam: fr.cam, content: fr.content };
+    const frame = { cams: fr.cams, cam: fr.cams[0] || null, content: fr.content };
     try {
       S.project = await call('project', (await call('updateProject', pr.id, { frame })).id);
       if ($('#fPreset') && $('#fPreset').checked && pr.streamer) await saveSettings({ presets: { ...S.settings.presets, [pr.streamer]: frame } }, true);
-      close(); render(); toast('Рамка сохранена');
+      close(); render(); toast(fr.cams.length > 1 ? `Сохранено: ${fr.cams.length} вебки` : 'Рамка сохранена');
     } catch (e) { fail(e); }
   };
-  if (!pr.frame && pr.streamer && S.settings.presets[pr.streamer]) Object.assign(fr, S.settings.presets[pr.streamer]);
   load();
 }
 
 // ------------------------------------------------------------------ Монтаж
-function phone(key, split) {
+function phone(key, split, fit) {
   const colors = { cam: '#c8ff3d', video: 'rgba(255,255,255,.55)', stream: 'rgba(124,196,255,.7)', game: 'rgba(242,201,76,.7)', blur: 'rgba(255,255,255,.12)' };
-  return `<div class="phone">${H.layoutBands(key, split).map((b) => `<i style="height:${b.h * 100}%;background:${colors[b.kind]};opacity:.85;border-bottom:1px solid rgba(0,0,0,.4)"></i>`).join('')}</div>`;
+  return `<div class="phone">${H.layoutBands(key, split, fit).map((b) => `<i style="height:${b.h * 100}%;background:${colors[b.kind]};opacity:.85;border-bottom:1px solid rgba(0,0,0,.4)"></i>`).join('')}</div>`;
 }
 
 function pageEdit(el) {
@@ -569,11 +575,13 @@ function pageEdit(el) {
   const fmtOn = (k) => s.formats.indexOf(k);
   el.innerHTML = `
     <div class="card">
-      <h3>Раскладки</h3><p class="hint">Отметь несколько: канал 1 получит первую, канал 2 — вторую и так по кругу. Один и тот же момент у разных каналов выйдет в разных раскладках.</p>
+      <h3>Раскладки</h3><p class="hint">Отметь несколько: канал 1 получит первую, канал 2 — вторую и так по кругу. Один и тот же момент у разных каналов выйдет в разных раскладках. Если в рамке отмечено несколько вебок, они встают рядом (или друг под другом); «Две вебки» нужны две рамки, с одной она соберётся как «Реакция сверху».</p>
       <div class="layouts">${Object.entries(cat.layouts).map(([k, name]) => `
-        <button class="lay ${fmtOn(k) >= 0 ? 'on' : ''}" data-lay="${k}">${fmtOn(k) >= 0 ? `<span class="badge acc ord">${fmtOn(k) + 1}</span>` : ''}${phone(k, s.split)}<div class="cap">${esc(name)}</div></button>`).join('')}</div>
+        <button class="lay ${fmtOn(k) >= 0 ? 'on' : ''}" data-lay="${k}">${fmtOn(k) >= 0 ? `<span class="badge acc ord">${fmtOn(k) + 1}</span>` : ''}${phone(k, s.split, s.fit)}<div class="cap">${esc(name)}</div></button>`).join('')}</div>
       <div class="grid g2" style="margin-top:14px">
-        <div class="field"><span>Доля вебки сверху (раскладка «Реакция сверху»)</span><div class="range"><input type="range" id="split" min="0.25" max="0.55" step="0.01" value="${s.split}"><output>${Math.round(s.split * 100)}%</output></div></div>
+        <div class="field"><span>Видео (игра, ролик) в раскладках с вебкой</span>
+          <div class="seg" id="fitSeg">${Object.entries(cat.fits).map(([k, n]) => `<button class="${s.fit === k ? 'on' : ''}" data-fit="${k}">${esc(n)}</button>`).join('')}</div></div>
+        <div class="field"><span>Доля вебки (раскладки «Реакция сверху» и «Видео сверху, реакция снизу»)</span><div class="range"><input type="range" id="split" min="0.25" max="0.55" step="0.01" value="${s.split}"><output>${Math.round(s.split * 100)}%</output></div></div>
         <div class="field"><span>Папка с мини-играми (для «Стрим сверху, мини-игра снизу»)</span>
           <div class="row"><input class="input grow" id="filler" readonly value="${esc(s.fillerDir)}" placeholder="не выбрана — раскладка пропускается"><button class="btn" id="fillerPick">${ic('folder-open')}</button></div></div>
       </div>
@@ -619,6 +627,7 @@ function pageEdit(el) {
     if (!f.length) { toast('Нужен хотя бы один стиль'); return; }
     await saveSettings({ subStyles: f, subStyle: f[0] }, true); render();
   }; });
+  $$('[data-fit]').forEach((b) => { b.onclick = async () => { await saveSettings({ fit: b.dataset.fit }, true); render(); }; });
   $$('[data-ts]').forEach((b) => { b.onclick = async () => { await saveSettings({ titleStyle: b.dataset.ts }, true); render(); }; });
   const rng = (id, key, fmt) => { const i = $(`#${id}`); i.oninput = () => { i.nextElementSibling.textContent = fmt(+i.value); }; i.onchange = () => saveSettings({ [key]: +i.value }, true); };
   rng('split', 'split', (v) => `${Math.round(v * 100)}%`);
@@ -725,7 +734,7 @@ function pageBuild(el) {
     <div class="grid g2" style="margin-top:14px">
       <div class="card">
         <h3>Источники</h3><p class="hint">Из каких записей брать выбранные моменты.</p>
-        ${ready.length ? ready.map((p) => `<label class="switch"><div><b>${esc(p.title)}</b><small>${p.moments.filter((m) => m.selected).length} моментов${p.frame && p.frame.cam ? '' : ' · рамка вебки не задана'}</small></div><input type="checkbox" data-bp="${p.id}" ${buildSel.has(p.id) ? 'checked' : ''}></label>`).join('')
+        ${ready.length ? ready.map((p) => `<label class="switch"><div><b>${esc(p.title)}</b><small>${p.moments.filter((m) => m.selected).length} моментов${!p.frame ? ' · рамка вебки не задана' : H.camsOf(p.frame).length > 1 ? ` · вебок: ${H.camsOf(p.frame).length}` : ''}</small></div><input type="checkbox" data-bp="${p.id}" ${buildSel.has(p.id) ? 'checked' : ''}></label>`).join('')
     : `<div class="muted">Сначала найди моменты на вкладке «Моменты».</div>`}
       </div>
       <div class="card">

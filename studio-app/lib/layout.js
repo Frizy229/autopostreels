@@ -1,17 +1,30 @@
 'use strict';
 // Раскладка кадра 9:16. Все функции чистые: на входе размеры исходника и рамки (доли 0..1),
 // на выходе строка filter_complex для ffmpeg и точки, где ставить заголовок и субтитры.
+//
+// Почти все раскладки собираются одинаково: размытый фон на весь экран, сверху на него кладутся куски
+// исходника (вебки и контент). Кусок либо вписывается в своё место целиком (fit, без обрезки краёв),
+// либо заполняет его (cover, лишнее по краям обрезается).
 
 const OUT_W = 1080;
 const OUT_H = 1920;
+const MAX_CAMS = 4;
 
 const LAYOUTS = {
   stream: 'Реакция сверху, видео снизу',
+  below: 'Видео сверху, реакция снизу',
+  duo: 'Две вебки: сверху и снизу, видео посередине',
+  pip: 'Видео по центру, вебки окном над ним',
+  camonly: 'Только вебка крупно',
   filler: 'Стрим сверху, мини-игра снизу',
   full: 'Стрим по центру, размытый фон',
   camfull: 'Вебка крупно, видео в окне',
   crop: 'Обрезка 9:16',
 };
+// раскладки, которым нужна рамка вебки (без неё они собираются как «full»)
+const CAM_LAYOUTS = ['stream', 'below', 'duo', 'pip', 'camonly', 'camfull'];
+// как класть видео (контент) в раскладках с вебкой
+const FITS = { fit: 'Целиком, без обрезки', fill: 'Заполнить, края обрезаются' };
 
 const even = (n) => Math.max(2, Math.round(n / 2) * 2);
 const evenPos = (n) => Math.max(0, Math.floor(n / 2) * 2); // координата: может быть 0, вниз — чтобы не вылезти за край
@@ -43,36 +56,141 @@ function fitAspect(r, srcW, srcH, aspect) {
   return { x: r.x + (pw - w) / 2 / srcW, y: r.y + (ph - h) / 2 / srcH, w: w / srcW, h: h / srcH };
 }
 
+/** Все вебки рамки: новый формат {cams: [...]}, старый {cam}. Не больше MAX_CAMS. */
+function camsOf(frame) {
+  if (!frame) return [];
+  const list = Array.isArray(frame.cams) ? frame.cams : frame.cam ? [frame.cam] : [];
+  return list.filter((r) => r && r.w > 0 && r.h > 0).slice(0, MAX_CAMS);
+}
+
+/**
+ * Разложить n вебок по месту box (пиксели вывода) сеткой, у которой клетки ближе всего к пропорции вебок.
+ * Неполный последний ряд растягивается на всю ширину. Возвращает клетки {x, y, w, h}, чётные.
+ */
+function camGrid(n, box, aspect = 16 / 10) {
+  if (n <= 1) return [{ ...box }];
+  let best = null;
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const a = (box.w / cols) / (box.h / rows);
+    // лицо выше, чем шире: лучше обрезать вебку по бокам, чем срезать голову, поэтому клетка поуже
+    const score = Math.abs(Math.log(a / (aspect * 0.6))) + (rows * cols - n) * 0.15;
+    if (!best || score < best.score) best = { cols, rows, score };
+  }
+  const cells = [];
+  const rowH = box.h / best.rows;
+  for (let r = 0; r < best.rows; r++) {
+    const inRow = Math.min(best.cols, n - r * best.cols);
+    const y0 = evenPos(box.y + r * rowH), y1 = r === best.rows - 1 ? box.y + box.h : evenPos(box.y + (r + 1) * rowH);
+    for (let c = 0; c < inRow; c++) {
+      const x0 = evenPos(box.x + c * box.w / inRow), x1 = c === inRow - 1 ? box.x + box.w : evenPos(box.x + (c + 1) * box.w / inRow);
+      cells.push({ x: x0, y: y0, w: even(x1 - x0), h: even(y1 - y0) });
+    }
+  }
+  return cells;
+}
+
+/** Вписать кусок src (пиксели) в место box целиком. align: 'center' | 'top' | 'bottom'. */
+function fitInto(src, box, align = 'center') {
+  const k = Math.min(box.w / src.w, box.h / src.h);
+  const w = Math.min(box.w, even(src.w * k)), h = Math.min(box.h, even(src.h * k));
+  const x = box.x + evenPos((box.w - w) / 2);
+  const free = box.h - h;
+  const y = box.y + (align === 'top' ? 0 : align === 'bottom' ? free : evenPos(free / 2));
+  return { x, y, w, h };
+}
+
 const cropStr = (p) => `crop=${p.w}:${p.h}:${p.x}:${p.y}`;
 const cover = (w, h) => `scale=${w}:${h}:force_original_aspect_ratio=increase:flags=lanczos,crop=${w}:${h}`;
 
 /**
  * Собрать filter_complex.
- * opts: layout, srcW, srcH, cam, content (доли), split (доля высоты под вебку),
+ * opts: layout, srcW, srcH, cams ([рамки]; или cam — одна), content (доли), split (доля высоты под вебку),
+ *       fit ('fit' — видео целиком по ширине, 'fill' — заполнить место с обрезкой краёв),
  *       variant {mirror, zoom, sat, bright, speed}, ass (уже экранированный путь или null), fontsDir.
- * Возвращает { filter, vLabel, aLabel, anchors: {titleY, subsY, contentTop, contentBottom} }.
+ * Возвращает { filter, vLabel, aLabel, anchors: {titleY, subsY, contentTop, contentBottom}, layout, cams }.
  */
 function buildFilter(opts) {
   const { srcW, srcH } = opts;
-  const layout = LAYOUTS[opts.layout] ? opts.layout : 'stream';
+  let layout = LAYOUTS[opts.layout] ? opts.layout : 'stream';
   const v = { mirror: false, zoom: 1, sat: 1, bright: 0, speed: 1, ...(opts.variant || {}) };
   const content = zoomRect(opts.content || { x: 0, y: 0, w: 1, h: 1 }, v.zoom);
+  const camRects = (opts.cams ? camsOf({ cams: opts.cams }) : camsOf({ cam: opts.cam })).map((r) => rectPx(r, srcW, srcH));
+  const fill = opts.fit === 'fill';
+  const flip = v.mirror ? ',hflip' : '';
+  const con = rectPx(content, srcW, srcH);
+  const camAspect = camRects.length ? camRects.reduce((a, r) => a + r.w / r.h, 0) / camRects.length : 16 / 10;
   const parts = [];
   let anchors;
-  const flip = v.mirror ? ',hflip' : '';
 
-  if (layout === 'stream' && opts.cam) {
+  // нет вебки — раскладки с вебкой собираются как «full»; «две вебки» с одной — как «реакция сверху»
+  if (CAM_LAYOUTS.includes(layout) && !camRects.length) layout = 'full';
+  if (layout === 'duo' && camRects.length < 2) layout = 'stream';
+  if (layout === 'filler' && !opts.filler) layout = 'full';
+
+  // куски для наложения на размытый фон: {src, box, mode: 'fit'|'cover', align, flip}
+  const pieces = [];
+  const fitH = Math.min(OUT_H, even(OUT_W * con.h / con.w)); // высота видео, вписанного по ширине
+  const putContent = (box, align, forceFit) => {
+    const mode = fill && !forceFit ? 'cover' : 'fit';
+    const at = mode === 'cover' ? box : fitInto(con, box, align);
+    pieces.push({ src: con, box: at, mode, flip: true });
+    return at;
+  };
+  const putCams = (box, list = camRects, mode = 'cover') => {
+    const cells = camGrid(list.length, box, camAspect);
+    list.forEach((r, i) => pieces.push({ src: r, box: mode === 'cover' ? cells[i] : fitInto(r, cells[i]), mode }));
+  };
+
+  if (layout === 'stream') {
     const split = clamp(opts.split || 0.4, 0.2, 0.6);
     const topH = even(OUT_H * split);
-    const botH = OUT_H - topH;
-    const cam = rectPx(opts.cam, srcW, srcH);
-    const con = rectPx(content, srcW, srcH);
-    parts.push('[0:v]split=2[cs][ks]');
-    parts.push(`[cs]${cropStr(cam)},${cover(OUT_W, topH)}[cam]`);
-    parts.push(`[ks]${cropStr(con)},${cover(OUT_W, botH)}${flip}[con]`);
-    parts.push('[cam][con]vstack=inputs=2[stk]');
-    anchors = { titleY: topH, subsY: Math.round(topH + botH * 0.62), contentTop: topH, contentBottom: OUT_H };
-  } else if (layout === 'filler' && opts.filler) {
+    putCams({ x: 0, y: 0, w: OUT_W, h: topH });
+    const at = putContent({ x: 0, y: topH, w: OUT_W, h: OUT_H - topH }, 'top');
+    const below = OUT_H - (at.y + at.h);
+    anchors = { titleY: topH, subsY: below > 260 ? Math.round(at.y + at.h + below * 0.42) : Math.round(at.y + at.h * 0.62), contentTop: at.y, contentBottom: at.y + at.h };
+  } else if (layout === 'below') {
+    const split = clamp(opts.split || 0.4, 0.2, 0.6);
+    const botH = even(OUT_H * split);
+    const camTop = OUT_H - botH;
+    putCams({ x: 0, y: camTop, w: OUT_W, h: botH });
+    const at = putContent({ x: 0, y: 0, w: OUT_W, h: camTop }, 'bottom');
+    anchors = { titleY: at.y > 260 ? Math.max(170, Math.round(at.y / 2)) : 220, subsY: camTop, contentTop: at.y, contentBottom: at.y + at.h };
+  } else if (layout === 'duo') {
+    const midH = fill ? even(OUT_H * 0.4) : Math.min(even(OUT_H * 0.5), fitH);
+    const camH = even((OUT_H - midH) / 2);
+    putCams({ x: 0, y: 0, w: OUT_W, h: camH }, [camRects[0]]);
+    const at = putContent({ x: 0, y: camH, w: OUT_W, h: OUT_H - camH * 2 }, 'center');
+    putCams({ x: 0, y: OUT_H - camH, w: OUT_W, h: camH }, camRects.slice(1));
+    anchors = { titleY: camH, subsY: Math.round(at.y + at.h * 0.72), contentTop: at.y, contentBottom: at.y + at.h };
+  } else if (layout === 'pip') {
+    const at = putContent({ x: 0, y: 0, w: OUT_W, h: OUT_H }, 'center', true);
+    const top = Math.max(at.y, 420);
+    putCams({ x: 60, y: 150, w: OUT_W - 120, h: top - 150 - 24 }, camRects, 'fit');
+    anchors = { titleY: top, subsY: Math.min(OUT_H - 330, top + at.h + 150), contentTop: at.y, contentBottom: at.y + at.h };
+  } else if (layout === 'camonly') {
+    putCams({ x: 0, y: 0, w: OUT_W, h: OUT_H });
+    anchors = { titleY: 330, subsY: Math.round(OUT_H * 0.7), contentTop: 0, contentBottom: OUT_H };
+  } else if (layout === 'camfull') {
+    // вебки на весь экран, видео окном посередине (всегда целиком)
+    putCams({ x: 0, y: 0, w: OUT_W, h: OUT_H });
+    const winW = 960, winH = Math.min(even(OUT_H * 0.5), even(winW * con.h / con.w));
+    const y = evenPos(OUT_H * 0.56 - winH / 2);
+    const at = fitInto(con, { x: (OUT_W - winW) / 2, y, w: winW, h: winH });
+    pieces.push({ src: con, box: at, mode: 'fit', flip: true });
+    anchors = { titleY: Math.max(160, at.y - 90), subsY: Math.min(OUT_H - 300, at.y + at.h + 110), contentTop: at.y, contentBottom: at.y + at.h };
+  }
+
+  if (pieces.length) {
+    // размытый фон из контента + наложения
+    parts.push(`[0:v]split=${pieces.length + 1}[bs]${pieces.map((_, i) => `[p${i}]`).join('')}`);
+    parts.push(`[bs]${cropStr(con)},${cover(OUT_W, OUT_H)},boxblur=24:2,eq=brightness=-0.12:saturation=1.15[b0]`);
+    pieces.forEach((p, i) => {
+      const scale = p.mode === 'cover' ? cover(p.box.w, p.box.h) : `scale=${p.box.w}:${p.box.h}:flags=lanczos`;
+      parts.push(`[p${i}]${cropStr(p.src)},${scale},setsar=1${p.flip ? flip : ''}[q${i}]`);
+      parts.push(`[b${i}][q${i}]overlay=${p.box.x}:${p.box.y}${i === pieces.length - 1 ? '[stk]' : `[b${i + 1}]`}`);
+    });
+  } else if (layout === 'filler') {
     // сверху весь кадр стрима (как есть, с вебкой) на размытом фоне, снизу мини-игра из папки
     const topH = even(OUT_H * 0.5), botH = OUT_H - topH;
     const fgH = Math.min(topH, even(OUT_W * srcH / srcW));
@@ -85,21 +203,8 @@ function buildFilter(opts) {
     const fgTop = Math.round((topH - fgH) / 2);
     anchors = { titleY: Math.max(120, fgTop - 10), subsY: topH, contentTop: 0, contentBottom: topH };
     if (fgTop < 140) anchors.titleY = 160;
-  } else if (layout === 'camfull' && opts.cam) {
-    // вебка на весь экран, видео окном посередине
-    const cam = rectPx(opts.cam, srcW, srcH);
-    const con = rectPx(content, srcW, srcH);
-    const winW = 960, winH = even(winW * con.h / con.w);
-    const y = Math.round(OUT_H * 0.56 - winH / 2);
-    parts.push('[0:v]split=2[cs][ks]');
-    parts.push(`[cs]${cropStr(cam)},${cover(OUT_W, OUT_H)}[cam]`);
-    parts.push(`[ks]${cropStr(con)},scale=${winW}:${winH}:flags=lanczos,setsar=1${flip}[win]`);
-    parts.push(`[cam][win]overlay=(W-w)/2:${y}[stk]`);
-    anchors = { titleY: Math.max(160, y - 90), subsY: Math.min(OUT_H - 300, y + winH + 110), contentTop: y, contentBottom: y + winH };
-  } else if (layout !== 'crop') {
-    // full, а также stream/camfull без рамки вебки и filler без мини-игры
-    const con = rectPx(content, srcW, srcH);
-    const fgH = Math.min(OUT_H, even(OUT_W * con.h / con.w));
+  } else if (layout === 'full') {
+    const fgH = fitH;
     const top = Math.round((OUT_H - fgH) / 2);
     parts.push(`[0:v]${cropStr(con)}${flip},split=2[bs][fs]`);
     parts.push(`[bs]${cover(OUT_W, OUT_H)},boxblur=24:2,eq=brightness=-0.12:saturation=1.15[bg]`);
@@ -122,8 +227,7 @@ function buildFilter(opts) {
   parts.push(tail);
   let aLabel = opts.hasAudio === false ? null : '0:a?';
   if (aLabel && v.speed !== 1) { parts.push(`[0:a]atempo=${v.speed}[aout]`); aLabel = '[aout]'; }
-  const used = layout === 'stream' && !opts.cam ? 'full' : layout === 'camfull' && !opts.cam ? 'full' : layout === 'filler' && !opts.filler ? 'full' : layout;
-  return { filter: parts.join(';'), vLabel: '[vout]', aLabel, anchors, layout: used };
+  return { filter: parts.join(';'), vLabel: '[vout]', aLabel, anchors, layout, cams: camRects.length, pieces };
 }
 
 /**
@@ -135,4 +239,4 @@ function filterPath(p) {
   return `'${s}'`;
 }
 
-module.exports = { OUT_W, OUT_H, LAYOUTS, rectPx, zoomRect, fitAspect, buildFilter, filterPath, even };
+module.exports = { OUT_W, OUT_H, MAX_CAMS, LAYOUTS, CAM_LAYOUTS, FITS, rectPx, zoomRect, fitAspect, camsOf, camGrid, fitInto, buildFilter, filterPath, even };

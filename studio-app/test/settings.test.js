@@ -26,4 +26,7 @@ assert.match(s.texts.captionInstagram, /\{title\}/);
 assert.strictEqual(s.fps, 60);
 assert.strictEqual(S.normalize({ channels: [] }).channels.length, 1);
 assert.strictEqual(S.normalize({ channels: new Array(30).fill('x') }).channels.length, 20);
-console.log('настройки: 21 проверка');
+assert.strictEqual(S.normalize({}).fit, 'fit');
+assert.strictEqual(S.normalize({ fit: 'fill' }).fit, 'fill');
+assert.strictEqual(S.normalize({ fit: 'zzz' }).fit, 'fit');
+console.log('настройки: 24 проверки');
