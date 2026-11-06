@@ -330,7 +330,9 @@ class RefreshTests(Base):
         cfg = {"accounts": [{"name": "main", "token_env": "IG_TOKEN"}, {"name": "b", "token_env": "IG_TOKEN_B"},
                             {"name": "c", "token_env": "IG_TOKEN_C"}]}
         (self.root / "config.json").write_text(json.dumps(cfg))
-        env = {"IG_TOKEN": "EAAsys", "IG_TOKEN_B": "EAAuser", "IG_TOKEN_C": "EAAuser",
+        cfg["accounts"].append({"name": "d", "token_env": "IG_TOKEN_D"})
+        (self.root / "config.json").write_text(json.dumps(cfg))
+        env = {"IG_TOKEN": "EAAsys", "IG_TOKEN_B": "EAAuser", "IG_TOKEN_C": "EAAuser", "IG_TOKEN_D": "EAAother",
                "FB_APP_ID": "1", "FB_APP_SECRET": "s"}
         exchanged = []
 
@@ -338,7 +340,8 @@ class RefreshTests(Base):
             r = mock.Mock(ok=True, content=b"1")
             if url.endswith("debug_token"):
                 r.json.return_value = {"data": {"expires_at": 0 if params["input_token"] == "EAAsys" else 1893456000,
-                                                "type": "SYSTEM_USER" if params["input_token"] == "EAAsys" else "USER"}}
+                                                "type": "SYSTEM_USER" if params["input_token"] == "EAAsys" else "USER",
+                                                "app_id": "9" if params["input_token"] == "EAAother" else "1"}}
             else:
                 exchanged.append(params["fb_exchange_token"])
                 r.json.return_value = {"access_token": "EAAuser-new", "expires_in": 5184000}
@@ -347,7 +350,7 @@ class RefreshTests(Base):
         with mock.patch.dict("os.environ", env, clear=True), mock.patch.object(a.requests, "get", fake_get), \
                 mock.patch.object(a, "save_github_secret", return_value=True) as save:
             self.assertEqual(a.cmd_refresh(argparse.Namespace()), 0)
-        self.assertEqual(exchanged, ["EAAuser"])  # один обмен на общий токен, системный не трогаем
+        self.assertEqual(exchanged, ["EAAuser"])  # один обмен на общий токен; системный и чужого приложения не трогаем
         self.assertEqual([c.args for c in save.call_args_list], [("IG_TOKEN_B", "EAAuser-new"), ("IG_TOKEN_C", "EAAuser-new")])
 
 

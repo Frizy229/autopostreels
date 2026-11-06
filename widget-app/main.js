@@ -159,6 +159,7 @@ handle('data:refresh', async () => {
       health: accounts.accountHealth(a, i, secretNames, (state || {}).tokens, now),
     })).filter(Boolean),
     canSecrets: Array.isArray(secretNames), repoSetup: { ttClientKey: !!repoCfg.tiktok_client_key, redirect: repoCfg.tiktok_redirect_uri || '', igAppId: repoCfg.instagram_app_id || cfg.igAppId || '', fbAppId: repoCfg.facebook_app_id || cfg.fbAppId || '' },
+    fbGuide: fbGuideNow(),
     texts: repoCfg.texts || {}, paused: repoCfg.paused || [], hashtags: repoCfg.hashtags || '',
     window: { start: repoCfg.day_start || '10:00', end: repoCfg.day_end || '22:00', tz: repoCfg.timezone || cfg.scheduleTz },
   };
@@ -352,6 +353,9 @@ async function fbExchange(code) {
   const missing = ['instagram_basic', 'instagram_content_publish', 'pages_show_list'].filter((x) => granted.length && !granted.includes(x));
   return { token: b.j.access_token, days: Math.round((b.j.expires_in || 0) / 86400), missing };
 }
+
+const fbGuideNow = () => accounts.facebookGuide({ appId: fbAppId(), redirect: igRedirect() || 'https://frizy229.github.io/autopostreels/', repo: cfg.repo });
+handle('acc:fbGuide', () => fbGuideNow());
 
 function keepLogin(platform, secret, info) {
   dropOldLogins();

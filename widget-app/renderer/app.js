@@ -586,6 +586,20 @@ function renderKeys(force = false) {
   $('accLogin').disabled = ig ? !hasIgKeys() : needKeys();
   $('accLogin').className = `btn ${ig && hasFbKeys() ? '' : 'primary'}`;
 }
+// пошаговая настройка входа через Facebook: шаги со ссылками и кнопками «Скопировать» (тексты в lib/accounts.js)
+function renderFbGuide(open = false) {
+  const on = accNet === 'instagram';
+  show('fbGuide', on);
+  if (!on) return;
+  const g = (data && data.fbGuide) || [];
+  if (!g.length) { bridge.fbGuide().then((x) => { if (x && x.length) { if (data) data.fbGuide = x; renderFbGuide(open); } }).catch(() => {}); }
+  $('fbGuideBody').innerHTML = g.map((sec) => `<h5>${esc(sec.title)}</h5><ol>${sec.steps.map((st) => `<li>${esc(st.text)}`
+    + (st.url || st.copy ? `<div class="g-btns">${st.url ? `<button class="btn small" data-url="${esc(st.url)}">${esc(st.link || 'Открыть')} ↗</button>` : ''}`
+      + `${st.copy ? `<button class="btn small" data-copy="${esc(st.copy)}">${esc(st.copyLabel || 'Скопировать')}</button>` : ''}</div>` : '')
+    + (st.copy ? `<code>${esc(st.copy)}</code>` : '') + '</li>').join('')}</ol>`).join('');
+  $('fbGuide').open = open;
+  if (open) show('accKeys', true); // поля ключей нужны по ходу шагов
+}
 function openAddAccount(n = net, fixed = '', keysOnly = false) {
   accNet = n; accFixed = fixed; accLogin = null; accModeV = 'inbox';
   const nm = NET_NAME[accNet];
@@ -599,6 +613,7 @@ function openAddAccount(n = net, fixed = '', keysOnly = false) {
   show('accTokenBox', accNet === 'instagram'); show('accPasteBox', false); $('accPasted').value = ''; $('accTokenIn').value = '';
   if (!(data && data.canSecrets)) accErr('Токену GitHub не хватает права Secrets: Read and write. Добавь его на github.com/settings/tokens (токен виджета → Repository permissions → Secrets), иначе виджет не сможет сохранить вход.');
   renderKeys(keysOnly);
+  renderFbGuide(keysOnly || !hasFbKeys());
   $('accSheet').hidden = false;
 }
 function openAccount(name) {
@@ -665,6 +680,13 @@ async function accRun(btn, fn) {
   const t = btn.textContent; btn.disabled = true; btn.textContent = 'Секунду…'; accErr('');
   try { await fn(); } catch (e) { if (e.code !== 'CANCELLED') accErr(e.message); else accErr('Вход отменён.'); } finally { btn.disabled = false; btn.textContent = t; }
 }
+$('fbGuide').addEventListener('toggle', () => { if ($('fbGuide').open) show('accKeys', true); });
+$('fbGuide').addEventListener('click', async (e) => {
+  const u = e.target.closest('[data-url]');
+  if (u) { bridge.openUrl(u.dataset.url); return; }
+  const c = e.target.closest('[data-copy]');
+  if (c) { try { await navigator.clipboard.writeText(c.dataset.copy); toast('Скопировано'); } catch { toast('Не удалось скопировать: выдели текст под кнопкой'); } }
+});
 $('accBack').addEventListener('click', () => { $('accSheet').hidden = true; });
 $('accClose').addEventListener('click', () => { $('accSheet').hidden = true; refresh(); });
 $('accMore').addEventListener('click', () => openAddAccount(accNet));
@@ -676,9 +698,12 @@ $('kSave').addEventListener('click', () => accRun($('kSave'), async () => {
     fbAppId: $('kFbId').value, fbConfigId: $('kFbConfig').value, ...($('kFbSecret').value ? { fbSecret: $('kFbSecret').value } : {}),
   };
   if (accNet === 'tiktok' && !patch.ttSecret) throw new Error('Вставь Client secret.');
+  if (accNet === 'instagram' && patch.fbAppId && !patch.fbSecret && !cfg.hasFbSecret) throw new Error('Вставь ещё секрет приложения Meta (Основные настройки → Секрет приложения → Показать).');
+  if (accNet === 'instagram' && patch.igAppId && !patch.igSecret && !cfg.hasIgSecret && !patch.fbAppId) throw new Error('Вставь ещё секрет приложения Instagram.');
   if (accNet === 'instagram' && !patch.igAppId && !patch.fbAppId) throw new Error('Вставь ID приложения Meta (для входа через Facebook) или ID приложения Instagram.');
   cfg = await bridge.setKeys(patch);
   renderKeys(); accErr('Ключ сохранён.', true); fillSettings();
+  if (data) { data.fbGuide = await bridge.fbGuide(); renderFbGuide(true); }
   if ($('accStep1').hidden && $('accStep2').hidden && $('accDone').hidden) accStep('accStep1');
 }));
 const browserHint = (why = '') => {
