@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   loginPasted: (t) => call('acc:loginPasted', t),
   accToken: (t) => call('acc:token', t),
   accSave: (o) => call('acc:save', o),
+  accSaveMany: (o) => call('acc:saveMany', o),
   accRemove: (o) => call('acc:remove', o),
   repoReset: (name) => call('repo:reset', name),
   openUrl: (u) => call('open:url', u),

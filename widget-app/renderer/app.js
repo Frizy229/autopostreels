@@ -563,27 +563,39 @@ const show = (id, on) => { $(id).hidden = !on; };
 function accStep(step) {
   for (const id of ['accStep1', 'accStep2', 'accDone']) show(id, id === step);
 }
+const rs = () => (data && data.repoSetup) || {};
+const hasIgKeys = () => !!(cfg.hasIgSecret && (rs().igAppId || cfg.igAppId));
+const hasFbKeys = () => !!(cfg.hasFbSecret && (rs().fbAppId || cfg.fbAppId));
 function needKeys() {
-  return accNet === 'tiktok' ? !cfg.hasTtSecret : !(cfg.hasIgSecret && ((data && data.repoSetup && data.repoSetup.igAppId) || cfg.igAppId));
+  return accNet === 'tiktok' ? !cfg.hasTtSecret : !(hasIgKeys() || hasFbKeys());
 }
 function renderKeys(force = false) {
   show('accKeys', force || needKeys());
-  show('accKeysTt', accNet === 'tiktok'); show('accKeysIg', accNet === 'instagram');
-  $('kTtSecret').value = ''; $('kIgSecret').value = '';
-  $('kIgId').value = (data && data.repoSetup && data.repoSetup.igAppId) || cfg.igAppId || '';
-  $('kTtSecret').placeholder = cfg.hasTtSecret ? 'сохранён, оставь пустым чтобы не менять' : '';
-  $('kIgSecret').placeholder = cfg.hasIgSecret ? 'сохранён, оставь пустым чтобы не менять' : '';
-  $('accLogin').disabled = needKeys();
+  show('accKeysTt', accNet === 'tiktok'); show('accKeysIg', accNet === 'instagram'); show('accKeysFb', accNet === 'instagram');
+  $('kTtSecret').value = ''; $('kIgSecret').value = ''; $('kFbSecret').value = '';
+  $('kIgId').value = rs().igAppId || cfg.igAppId || '';
+  $('kFbId').value = rs().fbAppId || cfg.fbAppId || ''; $('kFbConfig').value = cfg.fbConfigId || '';
+  const keep = 'сохранён, оставь пустым чтобы не менять';
+  $('kTtSecret').placeholder = cfg.hasTtSecret ? keep : '';
+  $('kIgSecret').placeholder = cfg.hasIgSecret ? keep : '';
+  $('kFbSecret').placeholder = cfg.hasFbSecret ? keep : '';
+  // Instagram: вход через Facebook (все аккаунты сразу) главный, через Instagram запасной
+  const ig = accNet === 'instagram';
+  show('accLoginFb', ig);
+  $('accLoginFb').disabled = !hasFbKeys();
+  $('accLogin').disabled = ig ? !hasIgKeys() : needKeys();
+  $('accLogin').className = `btn ${ig && hasFbKeys() ? '' : 'primary'}`;
 }
 function openAddAccount(n = net, fixed = '', keysOnly = false) {
   accNet = n; accFixed = fixed; accLogin = null; accModeV = 'inbox';
   const nm = NET_NAME[accNet];
   $('accTitle').textContent = fixed ? `Переподключить @${fixed}` : keysOnly ? `Ключ приложения ${nm}` : `Добавить аккаунт ${nm}`;
   show('accView', false); show('accAdd', true); accStep(keysOnly ? '' : 'accStep1'); accErr('');
-  $('accLogin').textContent = `Войти в ${nm}`;
+  $('accLogin').textContent = accNet === 'instagram' ? 'Войти через Instagram' : `Войти в ${nm}`;
+  $('accLoginFb').textContent = 'Войти через Facebook';
   $('accIntro').textContent = accNet === 'tiktok'
     ? 'Нажми «Войти в TikTok», войди в нужный аккаунт и нажми «Разрешить». Каждый раз окно входа чистое, так что можно добавить подряд сколько угодно аккаунтов. Пока приложение TikTok в песочнице (Sandbox), войти можно только аккаунтом из списка Target users.'
-    : 'Нажми «Войти в Instagram», войди в нужный аккаунт (профессиональный: автор или бизнес) и разреши доступ. Пока приложение Meta в режиме разработки, аккаунт должен быть в «Ролях приложения» как тестировщик Instagram.';
+    : 'Проще всего через Facebook: войди один раз, и виджет сам найдёт все аккаунты Instagram, привязанные к твоим Страницам Facebook; отметь нужные и сохрани разом. Новый аккаунт Instagram сначала привяжи к Странице (см. инструкцию). Через Instagram можно добавить один аккаунт без Страницы, но он должен быть тестировщиком приложения.';
   show('accTokenBox', accNet === 'instagram'); show('accPasteBox', false); $('accPasted').value = ''; $('accTokenIn').value = '';
   if (!(data && data.canSecrets)) accErr('Токену GitHub не хватает права Secrets: Read and write. Добавь его на github.com/settings/tokens (токен виджета → Repository permissions → Secrets), иначе виджет не сможет сохранить вход.');
   renderKeys(keysOnly);
@@ -613,7 +625,26 @@ function showLogin(r) {
   if (r.platform === 'tiktok') {
     $('accWho').textContent = `Вход удался: ${r.display_name || 'аккаунт TikTok'}.${r.missing && r.missing.length ? ` Внимание: не выдано разрешение ${r.missing.join(', ')}, включи его в приложении TikTok.` : ''}`;
     show('accPickBox', false);
+    show('accMulti', false); show('accNameBox', true);
+  } else if (r.via === 'facebook') {
+    const list = r.list || [];
+    show('accPickBox', false);
+    $('accWho').textContent = list.length
+      ? `Вход удался. Найдено аккаунтов Instagram: ${list.length}${r.days ? `, вход действует ~${r.days} дн. и продлевается сам` : ''}. Отметь, какие подключить.${r.missing && r.missing.length ? ` Внимание: не выдано разрешение ${r.missing.join(', ')}, при входе разреши всё.` : ''}`
+      : 'Вход удался, но к твоим Страницам Facebook не привязан ни один профессиональный аккаунт Instagram. Привяжи аккаунт к Странице (Meta Business Suite → Настройки → Аккаунты Instagram) и войди ещё раз. Если Страницы в бизнес-портфолио, при входе отметь их все.';
+    $('accMulti').innerHTML = list.map((x, i) => {
+      const on = accFixed ? x.existing === accFixed : !x.existing;
+      return `<div class="am-row"><input type="checkbox" id="am${i}" data-i="${i}"${on ? ' checked' : ''}>`
+        + `<label for="am${i}">@${esc(x.username)}${x.page ? ` <span class="muted">(страница ${esc(x.page)})</span>` : ''}</label>`
+        + `<input type="text" data-n="${i}" value="${esc(x.name)}" spellcheck="false" autocomplete="off"${x.existing ? ' disabled' : ''} title="ник в автозаливе">`
+        + `<span class="am-note">${x.main ? 'основной аккаунт (секрет IG_TOKEN, обычно бессрочный токен): не отмечай без нужды' : x.existing ? `уже подключён как @${esc(x.existing)}: отметь, только чтобы обновить ему вход` : 'новый'}</span></div>`;
+    }).join('');
+    show('accMulti', list.length > 0); show('accNameBox', false); show('accModeBox', false);
+    $('accSave').textContent = 'Сохранить отмеченные';
+    accStep('accStep2');
+    return;
   } else {
+    show('accMulti', false); show('accNameBox', true);
     const list = r.list || [];
     $('accWho').textContent = list.length > 1 ? `К этому входу привязано аккаунтов: ${list.length}. Выбери нужный.` : `Вход удался: @${(list[0] && list[0].username) || '?'}.`;
     $('accPick').innerHTML = list.map((x) => `<option value="${esc(x.user_id)}">@${esc(x.username)}${x.page ? ` (страница ${esc(x.page)})` : ''}</option>`).join('');
@@ -626,6 +657,7 @@ function showLogin(r) {
   $('accModeHint').textContent = accModeV === 'direct'
     ? 'Сразу в профиль: только если приложение TikTok прошло аудит Direct Post. Без аудита TikTok покажет ролик только тебе.'
     : 'Ролик падает в черновики TikTok, приходит уведомление, публикуешь в приложении. Работает без аудита.';
+  $('accSave').textContent = 'Сохранить аккаунт';
   accStep('accStep2');
   if (!accFixed) $('accName').focus();
 }
@@ -639,9 +671,12 @@ $('accMore').addEventListener('click', () => openAddAccount(accNet));
 $('accRestart').addEventListener('click', () => { accStep('accStep1'); accErr(''); });
 $('accMode').addEventListener('click', (e) => { if (!e.target.dataset.v) return; accModeV = e.target.dataset.v; showLogin(accLogin); });
 $('kSave').addEventListener('click', () => accRun($('kSave'), async () => {
-  const patch = accNet === 'tiktok' ? { ttSecret: $('kTtSecret').value } : { igAppId: $('kIgId').value, ...($('kIgSecret').value ? { igSecret: $('kIgSecret').value } : {}) };
+  const patch = accNet === 'tiktok' ? { ttSecret: $('kTtSecret').value } : {
+    igAppId: $('kIgId').value, ...($('kIgSecret').value ? { igSecret: $('kIgSecret').value } : {}),
+    fbAppId: $('kFbId').value, fbConfigId: $('kFbConfig').value, ...($('kFbSecret').value ? { fbSecret: $('kFbSecret').value } : {}),
+  };
   if (accNet === 'tiktok' && !patch.ttSecret) throw new Error('Вставь Client secret.');
-  if (accNet === 'instagram' && !patch.igAppId) throw new Error('Вставь ID приложения Instagram.');
+  if (accNet === 'instagram' && !patch.igAppId && !patch.fbAppId) throw new Error('Вставь ID приложения Meta (для входа через Facebook) или ID приложения Instagram.');
   cfg = await bridge.setKeys(patch);
   renderKeys(); accErr('Ключ сохранён.', true); fillSettings();
   if ($('accStep1').hidden && $('accStep2').hidden && $('accDone').hidden) accStep('accStep1');
@@ -655,14 +690,34 @@ $('accLogin').addEventListener('click', () => accRun($('accLogin'), async () => 
   if (r && r.browser) return browserHint('Google не пускает во встроенное окно. ');
   showLogin(r);
 }));
+$('accLoginFb').addEventListener('click', () => accRun($('accLoginFb'), async () => {
+  const r = await bridge.loginStart({ platform: 'facebook' });
+  if (r && r.browser) return browserHint('Этот вход не пускает во встроенное окно. ');
+  showLogin(r);
+}));
 $('accBrowser').addEventListener('click', () => accRun($('accLogin'), async () => {
-  await bridge.loginStart({ platform: accNet, browser: true });
+  await bridge.loginStart({ platform: accNet === 'instagram' && hasFbKeys() ? 'facebook' : accNet, browser: true });
   browserHint();
 }));
 $('accPasteGo').addEventListener('click', () => accRun($('accPasteGo'), async () => showLogin(await bridge.loginPasted($('accPasted').value))));
 $('accTokenGo').addEventListener('click', () => accRun($('accTokenGo'), async () => showLogin(await bridge.accToken($('accTokenIn').value))));
 $('accSave').addEventListener('click', () => accRun($('accSave'), async () => {
   if (!accLogin) throw new Error('Сначала войди в аккаунт.');
+  if (accLogin.via === 'facebook') {
+    const list = accLogin.list || [];
+    const picks = [...$('accMulti').querySelectorAll('input[type=checkbox]:checked')].map((c) => {
+      const x = list[+c.dataset.i];
+      return { user_id: x.user_id, name: x.existing || $('accMulti').querySelector(`input[data-n="${c.dataset.i}"]`).value };
+    });
+    if (!picks.length) throw new Error('Отметь хотя бы один аккаунт.');
+    const m = await bridge.accSaveMany({ id: accLogin.id, picks });
+    const add = m.saved.filter((x) => !x.replaced).map((x) => '@' + x.name), upd = m.saved.filter((x) => x.replaced).map((x) => '@' + x.name);
+    const extra = m.extra && m.extra.length ? ` Заодно сохранены общие секреты: ${m.extra.join(', ')}.` : '';
+    $('accDoneText').textContent = `✓ ${add.length ? `Добавлены: ${add.join(', ')}.` : ''}${upd.length ? ` Обновлён вход: ${upd.join(', ')}.` : ''} Токены лежат в секретах GitHub.${extra} Рилсы для них пойдут с ближайшей публикации. Вход продлевается сам раз в неделю; если Meta откажет, точка аккаунта пожелтеет за месяц до конца, тогда просто войди через Facebook ещё раз.`.trim();
+    accStep('accDone'); show('accKeys', false);
+    refresh();
+    return;
+  }
   const r = await bridge.accSave({ id: accLogin.id, name: $('accName').value, mode: accModeV, userId: $('accPick').value });
   const extra = r.extra && r.extra.length ? ` Заодно сохранены общие секреты: ${r.extra.join(', ')}.` : '';
   $('accDoneText').textContent = `✓ @${r.name} ${r.replaced ? 'переподключён' : 'добавлен'}. Токен лежит в секрете ${r.secret} на GitHub.${extra} Рилсы для него пойдут с ближайшей публикации${net === 'tiktok' || accNet === 'tiktok' ? ' (у папок с подпапками по аккаунтам нужна подпапка с этим ником)' : ''}.`;
@@ -694,7 +749,7 @@ function fillSettings() {
   $('fPin').checked = cfg.alwaysOnTop; $('fAutostart').checked = cfg.autostart; $('fAutoUpload').checked = cfg.autoUpload;
   $('fRefresh').value = String(cfg.refreshMin); $('fTz').value = cfg.scheduleTz;
   $('btnPin').classList.toggle('on', !!cfg.alwaysOnTop);
-  $('keysState').textContent = `TikTok: ${cfg.hasTtSecret ? 'ключ сохранён' : 'ключа нет'} · Instagram: ${cfg.hasIgSecret ? 'ключ сохранён' : 'ключа нет'}. Нужны только для кнопки «+» у аккаунтов.`;
+  $('keysState').textContent = `TikTok: ${cfg.hasTtSecret ? 'ключ сохранён' : 'ключа нет'} · Instagram: ${cfg.hasFbSecret ? 'вход через Facebook настроен' : cfg.hasIgSecret ? 'ключ сохранён' : 'ключа нет'}. Нужны только для кнопки «+» у аккаунтов.`;
   const original = String(cfg.repo || '').toLowerCase() === 'frizy229/autopostreels';
   $('resetBox').hidden = original;
   $('about').textContent = `Reels Widget ${version}. Две очереди: Instagram и TikTok (и общая для обеих). Папка из одного длинного видео превращается в рилсы на день, автопостер на GitHub публикует их сам.`;

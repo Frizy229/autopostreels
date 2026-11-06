@@ -195,3 +195,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin-top: 8px; }
 #ttVideo { width: 100%; max-height: 280px; border-radius: 12px; background: #000; }
 .tt a { color: var(--accent); cursor: pointer; } .tt label:has(input:disabled) { opacity: .55; }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+/* вход через Facebook: список найденных аккаунтов Instagram с галочками */
+.acc-multi { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; }
+.acc-multi .am-row { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; }
+.acc-multi .am-row input[type=checkbox] { width: auto; margin: 0; }
+.acc-multi .am-row input[type=text] { grid-column: 2; }
+.acc-multi .am-note { grid-column: 2; font-size: 11px; opacity: .7; }

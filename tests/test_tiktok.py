@@ -326,6 +326,30 @@ class RefreshTests(Base):
         self.assertEqual(got, ["IGAAone", "IGAAtwo"])  # системный EAA без ключей приложения не трогаем, TikTok сам
         self.assertEqual([c.args for c in save.call_args_list], [("IG_TOKEN", "IGAAone-new"), ("IG_TOKEN_TWO", "IGAAtwo-new")])
 
+    def test_facebook_token_refreshed_once_for_all_its_accounts_and_system_user_kept(self):
+        cfg = {"accounts": [{"name": "main", "token_env": "IG_TOKEN"}, {"name": "b", "token_env": "IG_TOKEN_B"},
+                            {"name": "c", "token_env": "IG_TOKEN_C"}]}
+        (self.root / "config.json").write_text(json.dumps(cfg))
+        env = {"IG_TOKEN": "EAAsys", "IG_TOKEN_B": "EAAuser", "IG_TOKEN_C": "EAAuser",
+               "FB_APP_ID": "1", "FB_APP_SECRET": "s"}
+        exchanged = []
+
+        def fake_get(url, timeout, params):
+            r = mock.Mock(ok=True, content=b"1")
+            if url.endswith("debug_token"):
+                r.json.return_value = {"data": {"expires_at": 0 if params["input_token"] == "EAAsys" else 1893456000,
+                                                "type": "SYSTEM_USER" if params["input_token"] == "EAAsys" else "USER"}}
+            else:
+                exchanged.append(params["fb_exchange_token"])
+                r.json.return_value = {"access_token": "EAAuser-new", "expires_in": 5184000}
+            return r
+
+        with mock.patch.dict("os.environ", env, clear=True), mock.patch.object(a.requests, "get", fake_get), \
+                mock.patch.object(a, "save_github_secret", return_value=True) as save:
+            self.assertEqual(a.cmd_refresh(argparse.Namespace()), 0)
+        self.assertEqual(exchanged, ["EAAuser"])  # один обмен на общий токен, системный не трогаем
+        self.assertEqual([c.args for c in save.call_args_list], [("IG_TOKEN_B", "EAAuser-new"), ("IG_TOKEN_C", "EAAuser-new")])
+
 
 if __name__ == "__main__":
     unittest.main()

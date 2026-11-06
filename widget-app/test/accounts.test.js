@@ -25,6 +25,49 @@ assert.match(A.nameError('', []), /Впиши/);
 assert.match(A.nameError('dayzerorules', [{ name: 'dayzerorules' }], 'tiktok'), /занят/);
 assert.strictEqual(A.nameError('evelon185', [{ name: 'evelon185', platform: 'tiktok' }], 'tiktok'), '');
 
+// ---- вход через Facebook: ссылка, список найденных аккаунтов, проверка пачки
+{
+  const u = new URL(A.facebookAuthUrl({ appId: '123', redirectUri: 'https://x.io/cb/', state: 's1' }));
+  assert.strictEqual(u.host, 'www.facebook.com');
+  assert.match(u.searchParams.get('scope'), /instagram_content_publish/);
+  assert.match(u.searchParams.get('scope'), /pages_show_list/);
+  assert.strictEqual(u.searchParams.get('state'), 's1');
+  const c = new URL(A.facebookAuthUrl({ appId: '123', redirectUri: 'https://x.io/cb/', state: 's1', configId: '777' }));
+  assert.strictEqual(c.searchParams.get('config_id'), '777');
+  assert.strictEqual(c.searchParams.get('scope'), null);
+  // адрес возврата Facebook с хвостом #_=_
+  assert.deepStrictEqual(A.parseRedirect('https://x.io/cb/?code=AQB1&state=s1#_=_', 'https://x.io/cb/', 's1'), { code: 'AQB1' });
+
+  const accs = [
+    { name: 'dayzerorules', token_env: 'IG_TOKEN', user_id_env: 'IG_USER_ID' },
+    { name: 'rulezerosurvivel', token_env: 'IG_TOKEN_RULEZEROSURVIVEL', user_id: '111' },
+    { name: 'evelon185', platform: 'tiktok' },
+  ];
+  const ch = A.instagramChoices([
+    { user_id: '111', username: 'rulezerosurvivel', page: 'P1' },
+    { user_id: '222', username: 'DayZeroRules', page: 'P0' }, // старый аккаунт без user_id: узнаём по нику
+    { user_id: '333', username: 'new.acc', page: 'P3' },
+  ], accs);
+  assert.deepStrictEqual(ch.map((x) => [x.existing, x.name]), [['rulezerosurvivel', 'rulezerosurvivel'], ['dayzerorules', 'dayzerorules'], ['', 'new.acc']]);
+  assert.deepStrictEqual(ch.map((x) => x.main), [false, true, false]);
+
+  let b = A.planInstagramBatch([{ user_id: '333', name: 'new.acc' }, { user_id: '111', name: 'rulezerosurvivel' }], accs);
+  assert.deepStrictEqual(b, { entries: [{ name: 'new.acc', user_id: '333' }, { name: 'rulezerosurvivel', user_id: '111' }], errors: [] });
+  b = A.planInstagramBatch([{ user_id: '444', name: 'evelon185' }, { user_id: '555', name: '' }, { user_id: '6', name: 'a' }, { user_id: '7', name: 'A' }], accs);
+  assert.strictEqual(b.entries.length, 1);
+  assert.strictEqual(b.errors.length, 3);
+  assert.match(b.errors[0], /занят аккаунтом TikTok/);
+  assert.match(b.errors[2], /дважды/);
+
+  // пачка в config.json: новые получают свои секреты, старые остаются со своими
+  const cfgB = { accounts: JSON.parse(JSON.stringify(accs)) };
+  const envs = [{ name: 'new.acc', user_id: '333' }, { name: 'rulezerosurvivel', user_id: '111' }]
+    .map((e) => A.upsertAccount(cfgB, { ...e, platform: 'instagram' }).account.token_env);
+  assert.deepStrictEqual(envs, ['IG_TOKEN_NEW_ACC', 'IG_TOKEN_RULEZEROSURVIVEL']);
+  assert.strictEqual(cfgB.accounts.length, 4);
+  assert.strictEqual(cfgB.accounts[3].platform, undefined);
+}
+
 // ---- config.json: добавить, переподключить, убрать
 const cfg = { accounts: [
   { name: 'dayzerorules', token_env: 'IG_TOKEN', user_id_env: 'IG_USER_ID' },

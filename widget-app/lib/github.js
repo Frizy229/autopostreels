@@ -46,7 +46,11 @@ class GitHub {
       throw e;
     }
     if (res.status === 204) return {};
-    return raw ? res.text() : res.json();
+    if (raw) return res.text();
+    // 201 без тела (например, новый секрет Actions): пустой ответ = успех, а не сбой сети с повтором
+    if (typeof res.text !== 'function') return res.json();
+    const text = await res.text();
+    return text ? JSON.parse(text) : {};
   }
 
   async listDir(p) {

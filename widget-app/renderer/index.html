@@ -155,6 +155,12 @@
             <label>Client secret приложения TikTok<input id="kTtSecret" type="password" spellcheck="false" autocomplete="off"></label>
             <p class="hint">developers.tiktok.com → Manage apps → приложение (или его Sandbox) → Client secret. Хранится зашифрованным только на этом компьютере.</p>
           </div>
+          <div id="accKeysFb">
+            <label>ID приложения Meta (вход через Facebook)<input id="kFbId" spellcheck="false" autocomplete="off"></label>
+            <label>Секрет приложения Meta<input id="kFbSecret" type="password" spellcheck="false" autocomplete="off"></label>
+            <label>ID конфигурации входа (если есть)<input id="kFbConfig" spellcheck="false" autocomplete="off" placeholder="можно оставить пустым"></label>
+            <p class="hint">developers.facebook.com → приложение Auto → Настройки приложения → Основное → «ID приложения» и «Секрет приложения». Хранятся зашифрованными только на этом компьютере.</p>
+          </div>
           <div id="accKeysIg">
             <label>ID приложения Instagram<input id="kIgId" spellcheck="false" autocomplete="off"></label>
             <label>Секрет приложения Instagram<input id="kIgSecret" type="password" spellcheck="false" autocomplete="off"></label>
@@ -164,7 +170,7 @@
         </div>
         <div id="accStep1">
           <p id="accIntro" class="small"></p>
-          <div class="sheet-btns"><button id="accLogin" class="btn primary">Войти</button></div>
+          <div class="sheet-btns"><button id="accLoginFb" class="btn primary" hidden>Войти через Facebook</button><button id="accLogin" class="btn primary">Войти</button></div>
           <p class="small"><a id="accBrowser" class="lnk">Окно входа не открывается? Войти через браузер</a></p>
           <div id="accPasteBox" hidden>
             <label>Адрес страницы, куда вернул браузер после входа<input id="accPasted" spellcheck="false" placeholder="https://…?code=…"></label>
@@ -178,8 +184,9 @@
         </div>
         <div id="accStep2" hidden>
           <p id="accWho" class="small"></p>
+          <div id="accMulti" class="acc-multi" hidden></div>
           <label id="accPickBox" hidden>Аккаунт Instagram<select id="accPick"></select></label>
-          <label>Ник аккаунта (так будут называться его подпапки и блоки подписей)<input id="accName" spellcheck="false" autocomplete="off"></label>
+          <label id="accNameBox">Ник аккаунта (так будут называться его подпапки и блоки подписей)<input id="accName" spellcheck="false" autocomplete="off"></label>
           <div id="accModeBox">
             <label>Как публиковать</label>
             <div class="seg" id="accMode"><button data-v="inbox" class="on">В черновики</button><button data-v="direct">Сразу (после аудита)</button></div>

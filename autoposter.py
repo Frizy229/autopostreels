@@ -790,11 +790,23 @@ class Instagram:
             me["id"] = real or me.get("id")
             return me
         try:
-            return self._req("GET", f"{self.base}/{self.user_id}",
-                             params={"fields": "id,username,media_count"})
+            me = self._req("GET", f"{self.base}/{self.user_id}",
+                           params={"fields": "id,username,media_count"})
         except RuntimeError:
             self.diagnose_facebook()
             raise
+        self.refresh_expires = self.token_expires()
+        return me
+
+    def token_expires(self) -> str:
+        """До какого числа действует токен Facebook (для жёлтой точки в виджете). '' = бессрочный или неизвестно."""
+        try:
+            r = requests.get(f"https://graph.facebook.com/{self.version}/debug_token", timeout=30,
+                             params={"input_token": self.token, "access_token": self.token})
+            exp = int(((r.json() if r.content else {}).get("data") or {}).get("expires_at") or 0)
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            return ""
+        return dt.datetime.fromtimestamp(exp, dt.timezone.utc).date().isoformat() if exp else ""
 
     def diagnose_facebook(self) -> None:
         """Подсказка, чего не хватает токену Facebook Login."""
@@ -1385,6 +1397,18 @@ def refresh_ig_token(token: str) -> tuple[str, int]:
             log("Токен Facebook (системный пользователь или долгий токен). Без FB_APP_ID/FB_APP_SECRET не продлеваю.")
             return "", 0
         mask(app_secret)
+        # бессрочный токен (системный пользователь) не трогаем: обмен превратил бы его в 60-дневный
+        try:
+            d = requests.get("https://graph.facebook.com/debug_token", timeout=60, params={
+                "input_token": token, "access_token": f"{app_id}|{app_secret}"}).json().get("data") or {}
+        except (requests.RequestException, ValueError, AttributeError):
+            d = {}
+        if not d:
+            log("Не удалось узнать срок токена Facebook, не продлеваю (на всякий случай).")
+            return "", 0
+        if not int(d.get("expires_at") or 0) or d.get("type") == "SYSTEM_USER":
+            log("Токен Facebook бессрочный, продлевать не нужно.")
+            return "", 0
         r = requests.get("https://graph.facebook.com/oauth/access_token", timeout=60, params={
             "grant_type": "fb_exchange_token", "client_id": app_id,
             "client_secret": app_secret, "fb_exchange_token": token,
@@ -1404,14 +1428,18 @@ def cmd_refresh(args) -> int:
     """Продлить токены всех аккаунтов Instagram (токены Instagram Login живут 60 дней). TikTok продлевается сам."""
     cfg = load_config()
     accs = [a for a in configure_accounts(cfg) if a.get("platform", "instagram") == "instagram"]
-    code, seen = 0, set()
+    # один токен может лежать в нескольких секретах (вход через Facebook = все аккаунты одним входом):
+    # продлеваем его один раз и кладём новый во все эти секреты
+    groups: dict[str, list[tuple[str, str]]] = {}
     for acc in accs:
         token = secret(acc["token_env"])
-        if not token or acc["token_env"] in seen:
+        if not token or any(acc["token_env"] == env for g in groups.values() for env, _ in g):
             continue
-        seen.add(acc["token_env"])
         mask(token)
-        log(f"=== @{acc['name']} ({acc['token_env']})")
+        groups.setdefault(token, []).append((acc["token_env"], acc["name"]))
+    code = 0
+    for token, envs in groups.items():
+        log(f"=== {', '.join('@' + n + ' (' + e + ')' for e, n in envs)}")
         try:
             new, days = refresh_ig_token(token)
         except RuntimeError as e:
@@ -1421,9 +1449,12 @@ def cmd_refresh(args) -> int:
         if not new:
             continue
         log(f"Токен продлён, действует ещё ~{days} дн.")
-        if new != token and not save_github_secret(acc["token_env"], new):
-            log(f"Обновите секрет {acc['token_env']} вручную.")
-            code = 1
+        if new == token:
+            continue
+        for env, _ in envs:
+            if not save_github_secret(env, new):
+                log(f"Обновите секрет {env} вручную.")
+                code = 1
     return code
 
 

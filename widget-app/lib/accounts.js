@@ -4,6 +4,8 @@
 
 const TT_SCOPES = 'user.info.basic,video.upload';
 const IG_SCOPES = 'instagram_business_basic,instagram_business_content_publish,instagram_business_manage_comments,instagram_business_manage_insights';
+// вход через Facebook: один вход = все аккаунты Instagram, привязанные к Страницам этого человека
+const FB_SCOPES = 'instagram_basic,instagram_content_publish,instagram_manage_comments,instagram_manage_insights,pages_show_list,pages_read_engagement,business_management';
 const EXPIRES_WARN_DAYS = 30;
 
 /** Часть имени секрета из ника: в именах секретов GitHub только латиница, цифры и _ (как secret_suffix в autoposter.py). */
@@ -84,6 +86,46 @@ function instagramAuthUrl({ appId, redirectUri, state }) {
   return `https://www.instagram.com/oauth/authorize?${q}`;
 }
 
+/** Вход через Facebook. configId: конфигурация «Входа через Facebook для бизнеса» (если приложение требует её вместо scope). */
+function facebookAuthUrl({ appId, redirectUri, state, configId = '' }) {
+  const q = new URLSearchParams({ client_id: appId, redirect_uri: redirectUri, state, response_type: 'code' });
+  if (configId) q.set('config_id', configId); else { q.set('scope', FB_SCOPES); q.set('auth_type', 'rerequest'); }
+  return `https://www.facebook.com/v23.0/dialog/oauth?${q}`;
+}
+
+/**
+ * Пачка аккаунтов Instagram из одного входа через Facebook.
+ * list: найденные аккаунты [{ user_id, username, page }], accounts: config.json → accounts.
+ * Для каждого: уже подключён (existing = его ник в config.json) или новый (предложенный ник).
+ */
+function instagramChoices(list, accounts = []) {
+  const ig = (accounts || []).filter((a) => a && (a.platform || 'instagram').toLowerCase() === 'instagram');
+  return (list || []).map((x) => {
+    const same = ig.find((a) => String(a.user_id || '') === String(x.user_id))
+      || ig.find((a) => x.username && a.name.toLowerCase() === String(x.username).toLowerCase());
+    return { ...x, existing: same ? same.name : '', main: !!same && (same.token_env || 'IG_TOKEN') === 'IG_TOKEN', name: same ? same.name : cleanName(x.username || '') };
+  });
+}
+
+/**
+ * Проверить выбранные аккаунты перед сохранением. picks: [{ user_id, name }].
+ * Возвращает { entries: [{ name, user_id }], errors: ['@ник: что не так'] }.
+ */
+function planInstagramBatch(picks, accounts = []) {
+  const entries = [], errors = [], seen = new Set();
+  for (const p of picks || []) {
+    const name = cleanName(p.name);
+    const keep = (accounts || []).find((a) => a && (a.platform || 'instagram') === 'instagram' && String(a.user_id || '') === String(p.user_id));
+    const err = nameError(name, accounts, 'instagram', keep ? keep.name : '');
+    if (err) { errors.push(`@${name || p.user_id}: ${err}`); continue; }
+    if (!p.user_id) { errors.push(`@${name}: нет ID аккаунта Instagram`); continue; }
+    if (seen.has(name.toLowerCase())) { errors.push(`@${name}: этот ник выбран дважды`); continue; }
+    seen.add(name.toLowerCase());
+    entries.push({ name, user_id: String(p.user_id) });
+  }
+  return { entries, errors };
+}
+
 /** Тот же адрес возврата? Сравниваем без хвоста «/», параметров и #. */
 const bare = (u) => { try { const x = new URL(u); return `${x.origin}${x.pathname}`.replace(/\/+$/, ''); } catch { return ''; } };
 const isRedirect = (url, redirectUri) => !!bare(redirectUri) && bare(url) === bare(redirectUri);
@@ -140,6 +182,6 @@ function accountHealth(acc, index, secretNames, tokens, now = new Date()) {
 }
 
 module.exports = {
-  TT_SCOPES, IG_SCOPES, secretSuffix, secretNameFor, cleanName, suggestName, nameError, upsertAccount, removeAccount, tokenEnvOf,
+  TT_SCOPES, IG_SCOPES, FB_SCOPES, facebookAuthUrl, instagramChoices, planInstagramBatch, secretSuffix, secretNameFor, cleanName, suggestName, nameError, upsertAccount, removeAccount, tokenEnvOf,
   tiktokAuthUrl, instagramAuthUrl, isRedirect, parseRedirect, needsBrowser, accountHealth,
 };
