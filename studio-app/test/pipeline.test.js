@@ -49,10 +49,15 @@ if (process.platform === 'win32' || spawnSync('ffmpeg', ['-version']).status !==
   assert.ok(an.envelope.length > 10);
 
   // без рамки вебки раскладка stream не пройдёт проверку
-  await assert.rejects(pl.build({ projectIds: [pr.id], name: 'Тест' }), /Ни один момент не прошёл/);
+  await assert.rejects(pl.build({ projectIds: [pr.id], name: 'Тест' }), (e) => /Ни один момент не прошёл/.test(e.message) && e.rejected[0].projectId === pr.id);
   const chk = pl.get(pr.id).moments.find((m) => m.selected).check;
   assert.deepStrictEqual(chk.issues, ['не задана рамка вебки']);
   assert.ok(pl.get(pr.id).moments.find((m) => m.selected).words.length > 5, 'слова распознаны и сохранены');
+
+  // «Без вебки» (рамка сохранена без вебки) — проверка проходит, ролики соберутся без неё
+  pl.update(pr.id, { frame: { cam: null, content: { x: 0, y: 0, w: 1, h: 1 } } });
+  await pl.check(pr.id);
+  assert.ok(pl.get(pr.id).moments.filter((m) => m.selected).every((m) => m.check.ok), 'без вебки — не ошибка');
 
   pl.update(pr.id, { frame: { cam: { x: 0.65, y: 0, w: 0.35, h: 0.4 }, content: { x: 0, y: 0, w: 1, h: 1 } } });
   const sel = pl.get(pr.id).moments.filter((m) => m.selected).slice(0, 2);
@@ -79,5 +84,5 @@ if (process.platform === 'win32' || spawnSync('ffmpeg', ['-version']).status !==
   const res2 = await pl.build({ projectIds: [pr.id], name: 'ещё' });
   assert.strictEqual(path.basename(res2.folder), '002_esche');
   if (process.env.KEEP) console.log('папка:', res.folder); else fs.rmSync(tmp, { recursive: true, force: true });
-  console.log('конвейер: 24 проверки на настоящем ffmpeg');
+  console.log('конвейер: 25 проверок на настоящем ffmpeg');
 })().catch((e) => { console.error(e); process.exit(1); });

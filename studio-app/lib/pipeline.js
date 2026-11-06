@@ -302,7 +302,9 @@ class Pipeline {
       const m = pr.moments.find((x) => x.id === sel[i].id);
       if (!m) continue;
       if (words) m.words = words;
-      m.check = checkMoment(m, { words: m.words || null, layout: this.needsCam() ? 'stream' : 'full', hasCam: !!(pr.frame && pr.frame.cam), rules: s.rules });
+      // рамка сохранена без вебки («Без вебки») — ролики этого видео соберутся без неё, это не ошибка
+      const noCam = !!(pr.frame && !pr.frame.cam);
+      m.check = checkMoment(m, { words: m.words || null, layout: this.needsCam() && !noCam ? 'stream' : 'full', hasCam: !!(pr.frame && pr.frame.cam), rules: s.rules });
       this.save(pr);
     }
     if (onProgress) onProgress(1, 'Готово');
@@ -407,7 +409,7 @@ class Pipeline {
     for (const pr of projects.values()) {
       for (const m of pr.moments) {
         if (!m.selected) continue;
-        if (m.check && !m.check.ok) { rejected.push({ project: pr.title, at: fmtTime(m.start), issues: m.check.issues }); continue; }
+        if (m.check && !m.check.ok) { rejected.push({ project: pr.title, projectId: pr.id, at: fmtTime(m.start), issues: m.check.issues }); continue; }
         moments.push({ ...m, projectId: pr.id });
       }
     }

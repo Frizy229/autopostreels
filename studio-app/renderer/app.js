@@ -358,11 +358,13 @@ function projectMain(pr) {
   const job = [...S.jobs.values()].find((j) => !j.done && (j.kind === 'analyze' || j.kind === 'check'));
   const sel = pr.moments.filter((m) => m.selected).length;
   const maxScore = Math.max(1, ...pr.moments.map((m) => m.score || 0));
+  const needCam = s.formats.some((f) => f === 'stream' || f === 'camfull');
   return `
+    ${!pr.frame && needCam ? `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>Отметь, где вебка</b><small>Без рамки ролики «вебка сверху» не соберутся. Нажми «Рамка вебки» → «Найти лицо» → «Сохранить». Если вебки в видео нет — «Без вебки».</small></div></div>` : ''}
     <div class="card">
       <div class="row wrap">
         <div class="grow"><h3>${esc(pr.title)}</h3><p class="hint" style="margin:0">${esc(pr.streamer || pr.source.platform)} · ${fmtTime(pr.source.duration)} · ${pr.source.width}×${pr.source.height}${pr.chatCount ? ` · чат: ${pr.chatCount} сообщений` : ''}</p></div>
-        <button class="btn" id="frameBtn">${ic('scan-face')}${pr.frame && pr.frame.cam ? 'Рамка вебки ✓' : 'Рамка вебки'}</button>
+        <button class="btn ${!pr.frame && needCam ? 'primary' : ''}" id="frameBtn">${ic('scan-face')}${pr.frame ? (pr.frame.cam ? 'Рамка вебки ✓' : 'Без вебки ✓') : 'Рамка вебки'}</button>
         <button class="btn ${pr.analyzed ? '' : 'primary'}" id="anBtn" ${job ? 'disabled' : ''}>${ic('audio-lines')}${pr.analyzed ? 'Искать заново' : 'Найти моменты'}</button>
         <button class="btn" id="chkBtn" ${job || !sel ? 'disabled' : ''}>${ic('shield-check')}Проверить</button>
         <button class="btn ghost danger icon" id="delBtn" title="Убрать источник">${ic('trash-2')}</button>
@@ -490,7 +492,7 @@ async function openFramer(pr) {
     <div class="row wrap" style="margin-top:14px">
       <button class="btn" id="fAuto">${ic('scan-face')}Найти лицо</button>
       <button class="btn" id="fOther">${ic('refresh-cw')}Другой кадр</button>
-      <button class="btn ghost" id="fNoCam">Без вебки</button>
+      <button class="btn ghost" id="fNoCam" title="В этом видео нет вебки: ролики соберутся без неё">Без вебки</button>
       <span class="grow"></span>
       ${pr.streamer ? `<label class="row muted" style="font-size:12.5px"><input type="checkbox" id="fPreset" checked> запомнить для «${esc(pr.streamer)}»</label>` : ''}
       <button class="btn primary" id="fSave">${ic('check')}Сохранить</button>
@@ -532,7 +534,7 @@ async function openFramer(pr) {
     });
   };
   $('#fOther').onclick = () => { t = Math.random() * (pr.source.duration || 60); load(); };
-  $('#fNoCam').onclick = () => { fr.cam = null; draw(); };
+  $('#fNoCam').onclick = () => { fr.cam = null; draw(); toast('Вебки нет — нажми «Сохранить», ролики соберутся без неё', 3500); };
   $('#fAuto').onclick = async () => {
     const img = $('#fimg');
     if (!img) return;
@@ -769,10 +771,22 @@ function renderBuildProgress() {
     ${b.done ? '' : `<div class="row" style="margin:8px 0"><small class="grow muted">${esc(b.text || '')}</small><span class="num muted">${Math.round((b.progress || 0) * 100)}%</span></div><div class="bar"><i style="width:${(b.progress || 0) * 100}%"></i></div>`}
     ${b.error ? `<p class="err">${esc(b.error)}</p>` : ''}
     ${res ? `<p class="hint">${res.videos} роликов в <b>${esc(res.folder)}</b>. ${res.problems.length ? `<span class="err">Проблемы: ${esc(res.problems.join('; '))}</span>` : 'Проверка формата автозалива пройдена.'}${res.encoderFallback ? ' <span class="warnc">Видеокарта не взялась, ролики собраны на процессоре (Настройки → Видео → Проверить).</span>' : ''}</p>` : ''}
+    ${noFrameBlock((res && res.rejected) || b.rejected || [])}
     ${((res && res.rejected) || b.rejected || []).length ? `<p class="hint warnc">Не прошли правила: ${((res && res.rejected) || b.rejected).map((r) => `${esc(r.at)} (${esc(r.issues.join(', '))})`).join('; ')}</p>` : ''}
     <div class="log">${b.files.map((f) => `<div class="ln"><span class="okc">${ic('circle-check', 'sm')}</span><span>${esc(f.split(/[\\/]/).slice(-2).join(' / '))}</span><button class="btn sm ghost" data-show="${esc(f)}">показать</button></div>`).join('')}</div>`;
   if ($('#openOut')) $('#openOut').onclick = () => call('openPath', res.folder);
+  $$('[data-frame]').forEach((x) => { x.onclick = async () => { await openProject(x.dataset.frame); if (S.project) openFramer(S.project); }; });
   $$('[data-show]').forEach((x) => { x.onclick = () => call('showItem', x.dataset.show); });
+}
+
+/** Видео без рамки вебки из отклонённых моментов → кнопки, которые сразу открывают рамку. */
+function noFrameBlock(rejected) {
+  const seen = new Map();
+  for (const r of rejected) if (r.projectId && r.issues.some((x) => /рамка вебки/.test(x))) seen.set(r.projectId, r.project);
+  if (!seen.size) return '';
+  return `<div class="card notice" style="margin:10px 0"><span class="warnc">${ic('scan-face')}</span><div class="grow"><b>Не отмечена вебка</b>
+    <small>Открой рамку, нажми «Найти лицо» и «Сохранить» (или «Без вебки», если её нет), потом снова «Собрать».</small>
+    <div class="row wrap" style="margin-top:8px">${[...seen].map(([id, t]) => `<button class="btn sm primary" data-frame="${esc(id)}">${ic('scan-face', 'sm')}Задать рамку: ${esc(String(t).slice(0, 40))}</button>`).join('')}</div></div></div>`;
 }
 
 function treePreview() {
