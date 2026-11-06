@@ -10,7 +10,7 @@ const { buildAss } = require('./subs');
 const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
 const { layoutOutput, writeTexts, checkFolder, nextFolderNumber, slugify } = require('./output');
-const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe } = require('./render');
+const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe, videoKbps, MAX_FILE_MB } = require('./render');
 const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
 const { checkMoment } = require('./rules');
 const { whisperArgs, wavArgs, parseWhisperJson, MODELS } = require('./transcribe');
@@ -472,7 +472,8 @@ class Pipeline {
         style: v.subStyle || s.subStyle, title: f.title, titleStyle: s.titleStyle, titleDur: s.titleDur, anchors, maxWords: s.maxWords,
       }));
       const filter = buildFilter({ ...base, ass: filterPath(assFile), fontsDir: filterPath(this.fontsDir) });
-      const render = (encoder) => this.tools.run(this.tools.ffmpeg, renderArgs({ input: media.input, start, end, filter, filler, output: f.video, encoder, quality: s.quality, fps: s.fps, loudnorm: s.loudnorm, maxDur: dur.toFixed(3) }), {
+      let kbps = videoKbps(dur);
+      const render = (encoder) => this.tools.run(this.tools.ffmpeg, renderArgs({ input: media.input, start, end, filter, filler, output: f.video, encoder, quality: s.quality, fps: s.fps, loudnorm: s.loudnorm, maxDur: dur.toFixed(3), maxKbps: kbps }), {
         signal: o.signal, onStdout: (b) => { const p = parseRenderProgress(b.toString('utf8'), dur); if (p != null) ev('Монтаж', 0.25 + p * 0.7); },
       });
       const enc = encoderFallback ? 'cpu' : s.encoder;
@@ -481,6 +482,12 @@ class Pipeline {
         if (enc === 'cpu' || e.code === 'ABORT') throw e;
         encoderFallback = true;
         emit({ stage: 'Видеокарта не кодирует, перехожу на процессор', i, total, label, progress: 0.25, warning: e.message });
+        await render('cpu');
+      }
+      // всё равно тяжелее лимита (кодек видеокарты не всегда держит потолок) — пережимаем на процессоре пониже
+      for (let k = 0; k < 2 && fs.statSync(f.video).size > MAX_FILE_MB * 1048576 * 1.08; k++) {
+        kbps = Math.max(1500, Math.round(kbps * 0.7));
+        emit({ stage: 'Файл тяжелее 90 МБ, пережимаю', i, total, label, progress: 0.9 });
         await render('cpu');
       }
       const coverAt = Math.min(Math.max(0.5, dur - 0.5), Math.max(0.5, ((m.peak || m.start) - m.start) / speed));
