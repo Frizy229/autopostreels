@@ -260,3 +260,7 @@ select.input option { background: #1a1d24; }
 .err-box > .ic { color: var(--err); }
 .err-box .btn .ic { width: 14px; height: 14px; margin: 0; color: inherit; }
 .err-box .err-text { white-space: pre-line; color: var(--muted); max-width: 640px; margin: 4px auto 0; font-size: 12.5px; line-height: 1.5; text-align: center; user-select: text; }
+
+.card.notice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-color: rgba(242, 201, 76, .35); }
+.card.notice b { display: block; font-size: 13.5px; }
+.card.notice small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
