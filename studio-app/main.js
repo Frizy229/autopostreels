@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net, session } = require('electron');
 const { normalize, LANES } = require('./lib/settings');
-const { LAYOUTS } = require('./lib/layout');
+const { LAYOUTS, FITS, CAM_LAYOUTS } = require('./lib/layout');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
 const { BROWSERS, COOKIE_MODES, NET_MODES, proxyFromPac } = require('./lib/sources');
 const { Tools, download, whisperAssets, exe, errorTail, exitHint } = require('./lib/tools');
@@ -86,7 +86,7 @@ const handle = (name, fn) => ipcMain.handle(name, async (_e, ...args) => {
 
 function registerIpc() {
   handle('app:info', () => ({ version: app.getVersion(), appearance: appearance(), userData: userData(),
-    catalog: { layouts: LAYOUTS, subStyles: SUB_STYLES, titleStyles: TITLE_STYLES, lanes: LANES, browsers: BROWSERS, cookieModes: COOKIE_MODES, netModes: NET_MODES } }));
+    catalog: { layouts: LAYOUTS, fits: FITS, camLayouts: CAM_LAYOUTS, subStyles: SUB_STYLES, titleStyles: TITLE_STYLES, lanes: LANES, browsers: BROWSERS, cookieModes: COOKIE_MODES, netModes: NET_MODES } }));
   handle('net:info', async () => ({ system: await refreshSysProxy() }));
   handle('net:test', async () => { await refreshSysProxy(); return pipeline.testYoutube(); });
   handle('settings:get', () => settings);

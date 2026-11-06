@@ -1,4 +1,5 @@
 'use strict';
+const { CAM_LAYOUTS } = require('./layout');
 // Правила конкурса нарезок: обязательные хэштег и ссылка на Twitch в описании и названии,
 // стример должен говорить в отрезке (а не молча смотреть), у раскладок с вебкой должна быть рамка вебки.
 // Проверить, что именно он «главное лицо», программа не может — это последняя галочка человека.
@@ -60,7 +61,7 @@ function checkMoment(m, { words, layout, hasCam, rules } = {}) {
     const st = speechStats(words, m.start, m.end);
     if (st.ratio < r.minSpeech || st.words < r.minWords) issues.push(`мало речи (${Math.round(st.ratio * 100)}%, ${st.words} слов): похоже, молча смотрит`);
   } else warn.push('речь не проверена (нет модели распознавания)');
-  if (r.requireCam && ['stream', 'camfull'].includes(layout) && !hasCam) issues.push('не задана рамка вебки');
+  if (r.requireCam && CAM_LAYOUTS.includes(layout) && !hasCam) issues.push('не задана рамка вебки');
   if (r.requireOk && !m.ok) issues.push('не отмечен как «проверено»');
   return { ok: issues.length === 0, issues, warn };
 }

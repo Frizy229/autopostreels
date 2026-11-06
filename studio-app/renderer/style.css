@@ -264,3 +264,6 @@ select.input option { background: #1a1d24; }
 .card.notice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-color: rgba(242, 201, 76, .35); }
 .card.notice b { display: block; font-size: 13.5px; }
 .card.notice small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+.rect .del { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border: 0; border-radius: 6px; background: rgba(0, 0, 0, .75); color: #fff; font-size: 15px; line-height: 20px; cursor: pointer; padding: 0; }
+.rect .del:hover { background: #e5484d; }

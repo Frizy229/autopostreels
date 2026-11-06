@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { buildFilter, filterPath } = require('./layout');
+const { buildFilter, filterPath, camsOf, CAM_LAYOUTS } = require('./layout');
 const { buildAss } = require('./subs');
 const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
@@ -288,7 +288,7 @@ class Pipeline {
 
   // ------------------------------------------------------------ проверка правил
   /** Нужна ли рамка вебки при выбранных раскладках. */
-  needsCam() { return this.settings().formats.some((f) => f === 'stream' || f === 'camfull'); }
+  needsCam() { return this.settings().formats.some((f) => CAM_LAYOUTS.includes(f)); }
 
   /** Распознать речь выбранных моментов проекта и проверить правила. Результат в m.check. */
   async check(id, onProgress, signal) {
@@ -303,8 +303,8 @@ class Pipeline {
       if (!m) continue;
       if (words) m.words = words;
       // рамка сохранена без вебки («Без вебки») — ролики этого видео соберутся без неё, это не ошибка
-      const noCam = !!(pr.frame && !pr.frame.cam);
-      m.check = checkMoment(m, { words: m.words || null, layout: this.needsCam() && !noCam ? 'stream' : 'full', hasCam: !!(pr.frame && pr.frame.cam), rules: s.rules });
+      const noCam = !!(pr.frame && !camsOf(pr.frame).length);
+      m.check = checkMoment(m, { words: m.words || null, layout: this.needsCam() && !noCam ? 'stream' : 'full', hasCam: camsOf(pr.frame).length > 0, rules: s.rules });
       this.save(pr);
     }
     if (onProgress) onProgress(1, 'Готово');
@@ -449,7 +449,7 @@ class Pipeline {
         const fl = fillers[h % fillers.length];
         filler = { path: fl.path, offset: Math.max(0, (h % 997) / 997 * Math.max(0, fl.duration - dur - 1)).toFixed(2) };
       }
-      const base = { layout: v.layout || s.layout, srcW: pr.source.width, srcH: pr.source.height, cam: fr.cam || null, content: fr.content || null,
+      const base = { layout: v.layout || s.layout, srcW: pr.source.width, srcH: pr.source.height, cams: camsOf(fr), content: fr.content || null, fit: s.fit,
         split: fr.split || s.split, variant: v, hasAudio: pr.source.hasAudio !== false, filler: !!filler };
       const anchors = buildFilter(base).anchors;
       const assFile = this.cache(pr, `s_${i}_${m.id}.ass`);

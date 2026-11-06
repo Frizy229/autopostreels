@@ -1,7 +1,7 @@
 'use strict';
 // Настройки приложения: значения по умолчанию и приведение к допустимым значениям.
 
-const { LAYOUTS } = require('./layout');
+const { LAYOUTS, FITS } = require('./layout');
 const { SUB_STYLES, TITLE_STYLES } = require('./subs');
 const { ENCODERS } = require('./render');
 const { MODELS } = require('./transcribe');
@@ -15,6 +15,7 @@ const DEFAULTS = {
   perChannel: 7,
   minLen: 20, maxLen: 60,
   layout: 'stream', split: 0.4,
+  fit: 'fit',            // видео в раскладках с вебкой: fit — целиком по ширине (без обрезки), fill — заполнить с обрезкой краёв
   // раскладки и стили субтитров по кругу: канал 1 — первая, канал 2 — вторая...
   formats: ['stream', 'filler', 'full', 'camfull'],
   subStyles: ['stream', 'neon', 'ice', 'sunset', 'pink', 'yellow'],
@@ -80,6 +81,7 @@ function normalize(raw) {
   s.titleDur = num(s.titleDur, 0, 60, 0);
   s.fps = pick(String(s.fps), { 30: 1, 60: 1 }, '30') | 0;
   s.layout = pick(s.layout, LAYOUTS, DEFAULTS.layout);
+  s.fit = pick(s.fit, FITS, 'fit');
   s.subStyle = pick(s.subStyle, SUB_STYLES, DEFAULTS.subStyle);
   s.titleStyle = pick(s.titleStyle, TITLE_STYLES, DEFAULTS.titleStyle);
   s.encoder = pick(s.encoder, ENCODERS, 'cpu');

@@ -28,7 +28,7 @@ assert.match(H.subCss({ font: 'Montserrat Black', italic: true, color: '#fff', b
 assert.match(H.subCss({ font: 'Rubik Black', color: '#fff', box: '#000', upper: false }), /background:rgba/);
 assert.deepStrictEqual(H.layoutBands('stream', 0.4).map((b) => b.kind), ['cam', 'video']);
 assert.deepStrictEqual(H.layoutBands('filler').map((b) => b.kind), ['stream', 'game']);
-for (const k of ['stream', 'filler', 'full', 'camfull', 'crop']) assert.ok(Math.abs(H.layoutBands(k).reduce((a, b) => a + b.h, 0) - 1) < 1e-9, `полосы ${k} = 100%`);
+for (const k of Object.keys(require('../lib/layout').LAYOUTS)) assert.ok(Math.abs(H.layoutBands(k).reduce((a, b) => a + b.h, 0) - 1) < 1e-9, `полосы ${k} = 100%`);
 
 const rules = { hashtag: '#evelone', twitch: 'evelone2004' };
 assert.strictEqual(H.captionPreview('{title} {hashtags}', { title: 'Т', hashtags: '#fyp' }, rules), 'Т #fyp twitch: evelone2004 #evelone');
@@ -48,4 +48,15 @@ for (const x of [...app.matchAll(/icon: '([\w-]+)'/g)]) icons.add(x[1]);
 for (const i of icons) assert.ok(fs.existsSync(path.join(__dirname, '..', 'renderer', 'icons', `${i}.svg`)), `иконка ${i}`);
 // окно не объявляет глобальное имя api (его занимает preload) — из-за этого окно было пустым
 assert.doesNotMatch(app, /^(async )?function api\b|^(const|let|var) api\b/m);
-console.log(`окно: 30 проверок, ${icons.size} иконок`);
+
+// несколько вебок
+assert.deepStrictEqual(H.camsOf({ cam: { x: 0, y: 0, w: 0.3, h: 0.3 } }).length, 1, 'старая рамка {cam}');
+assert.deepStrictEqual(H.camsOf({ cams: [], cam: null }), []);
+assert.deepStrictEqual(H.camsOf(null), []);
+const fc = H.facesToCams([{ x: 100, y: 400, width: 80, height: 80 }, { x: 1100, y: 40, width: 100, height: 100 }, { x: 1105, y: 45, width: 90, height: 90 }], 1280, 720);
+assert.strictEqual(fc.length, 2, 'перекрывающиеся лица — одна вебка');
+assert.ok(fc[0].x < fc[1].x, 'слева направо');
+const slot2 = H.nextCamSlot([H.nextCamSlot([])]);
+assert.ok(slot2.x < 0.3, 'вторая вебка не поверх первой');
+for (const k of Object.keys(require('../lib/layout').LAYOUTS)) assert.ok(H.layoutBands(k).length >= 1);
+console.log(`окно: 37 проверок, ${icons.size} иконок`);

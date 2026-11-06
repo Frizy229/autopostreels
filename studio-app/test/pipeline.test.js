@@ -83,6 +83,17 @@ if (process.platform === 'win32' || spawnSync('ffmpeg', ['-version']).status !==
   // вторая сборка — следующий номер папки
   const res2 = await pl.build({ projectIds: [pr.id], name: 'ещё' });
   assert.strictEqual(path.basename(res2.folder), '002_esche');
+
+  // две вебки и новые раскладки: ролики собираются настоящим ffmpeg, 1080x1920
+  pl.update(pr.id, { frame: { cams: [{ x: 0.65, y: 0, w: 0.35, h: 0.4 }, { x: 0, y: 0.6, w: 0.3, h: 0.4 }], content: { x: 0, y: 0, w: 1, h: 1 } } });
+  settings = normalize({ ...settings, channels: ['a', 'b', 'c', 'd'], perChannel: 1, formats: ['duo', 'pip', 'camonly', 'below'] });
+  const ev3 = [];
+  const res3 = await pl.build({ projectIds: [pr.id], name: 'две вебки', onEvent: (e) => ev3.push(e) });
+  assert.deepStrictEqual(res3.problems, []);
+  const done3 = ev3.filter((e) => e.stage === 'Готово');
+  assert.strictEqual(done3.length, 4);
+  assert.ok(done3.every((e) => ['duo', 'pip', 'camonly', 'below'].includes(e.layout)) && new Set(done3.map((e) => e.layout)).size >= 3, `раскладки: ${done3.map((e) => e.layout)}`);
+  for (const e of done3) assert.match(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', e.file], { encoding: 'utf8' }).stdout, /1080,1920/);
   if (process.env.KEEP) console.log('папка:', res.folder); else fs.rmSync(tmp, { recursive: true, force: true });
-  console.log('конвейер: 25 проверок на настоящем ffmpeg');
+  console.log('конвейер: 28 проверок на настоящем ffmpeg');
 })().catch((e) => { console.error(e); process.exit(1); });
