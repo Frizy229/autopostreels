@@ -26,7 +26,7 @@ if (process.platform === 'win32' || spawnSync('ffmpeg', ['-version']).status !==
   // поддельный whisper: слова каждые 0.4 с
   const bin = path.join(tmp, 'bin');
   const fake = path.join(tmp, 'whisper.js');
-  fs.writeFileSync(fake, `#!${process.execPath}\nconst a=process.argv;const of=a[a.indexOf('-of')+1];const t=[];for(let i=0;i<40;i++)t.push({offsets:{from:i*400,to:i*400+350},text:' слово'+i});require('fs').writeFileSync(of+'.json',JSON.stringify({transcription:t}));`);
+  fs.writeFileSync(fake, `#!${process.execPath}\nconst a=process.argv;const of=a[a.indexOf('-of')+1];const f=a[a.indexOf('-f')+1];if(/[\\/]/.test(f)||/[\\/]/.test(of)||!require('fs').existsSync(f)){console.error('error: failed to read audio file');process.exit(11);}const t=[];for(let i=0;i<40;i++)t.push({offsets:{from:i*400,to:i*400+350},text:' слово'+i});require('fs').writeFileSync(of+'.json',JSON.stringify({transcription:t}));`);
   fs.chmodSync(fake, 0o755);
   class T extends Tools { get whisper() { return fake; } }
   const tools = new T(bin);
@@ -94,6 +94,12 @@ if (process.platform === 'win32' || spawnSync('ffmpeg', ['-version']).status !==
   assert.strictEqual(done3.length, 4);
   assert.ok(done3.every((e) => ['duo', 'pip', 'camonly', 'below'].includes(e.layout)) && new Set(done3.map((e) => e.layout)).size >= 3, `раскладки: ${done3.map((e) => e.layout)}`);
   for (const e of done3) assert.match(spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', e.file], { encoding: 'utf8' }).stdout, /1080,1920/);
+  // понятная ошибка whisper
+  const { whisperHelp } = require('../lib/pipeline');
+  const wh = whisperHelp({ message: 'whisper-cli.exe: код 11', res: { code: 11, stderr: "read_audio_data: failed to read audio data\nerror: failed to read audio file 'w_1.wav'\nwhisper_print_timings: total time = 1315.98 ms\nerror: 1 input file(s) failed" } });
+  assert.match(wh, /не смогла открыть звук/);
+  assert.doesNotMatch(wh, /print_timings/);
+  assert.match(whisperHelp({ message: 'x', res: { code: 10, stderr: 'whisper-cli: failed to process audio' } }), /видеопамяти/);
   if (process.env.KEEP) console.log('папка:', res.folder); else fs.rmSync(tmp, { recursive: true, force: true });
-  console.log('конвейер: 28 проверок на настоящем ffmpeg');
+  console.log('конвейер: 31 проверка на настоящем ffmpeg');
 })().catch((e) => { console.error(e); process.exit(1); });

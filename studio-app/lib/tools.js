@@ -100,7 +100,10 @@ class Tools {
         const res = { code, stdout: opts.onStdout ? null : Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8') };
         if (opts.signal && opts.signal.aborted) { reject(Object.assign(new Error('Отменено'), { code: 'ABORT' })); return; }
         if (code !== 0 && !opts.allowFail) {
-          const tail = res.stderr.trim().split(/\r?\n/).slice(-6).join('\n');
+          const lines = res.stderr.trim().split(/\r?\n/);
+          // строки с ошибкой важнее служебного хвоста (у whisper в конце идут тайминги)
+          const key = lines.filter((l) => /error|failed|not found|ошибк/i.test(l) && !/print_timings/.test(l)).slice(-3);
+          const tail = (key.length ? key : lines.slice(-6)).join('\n');
           reject(Object.assign(new Error(`${path.basename(cmd)}: код ${code}\n${tail}`), { res }));
           return;
         }
