@@ -106,6 +106,13 @@ function parseRedirect(url, redirectUri, state) {
   return code ? { code } : { error: 'В адресе нет кода входа.' };
 }
 
+/** Вход через Google или Apple: они блокируют встроенные окна программ, нужен обычный браузер. */
+function needsBrowser(url) {
+  let h = '';
+  try { h = new URL(String(url)).hostname.toLowerCase(); } catch { return false; }
+  return h === 'accounts.google.com' || h.endsWith('.accounts.google.com') || h === 'appleid.apple.com';
+}
+
 // ---------------------------------------------------------------- состояние аккаунтов
 const dayDiff = (a, b) => Math.round((Date.parse(a) - Date.parse(b)) / 86400000);
 
@@ -134,5 +141,5 @@ function accountHealth(acc, index, secretNames, tokens, now = new Date()) {
 
 module.exports = {
   TT_SCOPES, IG_SCOPES, secretSuffix, secretNameFor, cleanName, suggestName, nameError, upsertAccount, removeAccount, tokenEnvOf,
-  tiktokAuthUrl, instagramAuthUrl, isRedirect, parseRedirect, accountHealth,
+  tiktokAuthUrl, instagramAuthUrl, isRedirect, parseRedirect, needsBrowser, accountHealth,
 };

@@ -239,7 +239,16 @@ function oauthWindow(url, redirectUri, state) {
       webPreferences: { partition: part, contextIsolation: true, nodeIntegration: false, sandbox: true } });
     loginWin = w;
     let done = false;
+    // Google и Apple не пускают во встроенные окна программ («браузер небезопасен»): такой вход только в обычном браузере
+    const blocked = (u) => {
+      if (done || !accounts.needsBrowser(u)) return false;
+      done = true;
+      setImmediate(() => { if (!w.isDestroyed()) w.close(); });
+      reject(Object.assign(new Error('Этот способ входа работает только в обычном браузере.'), { code: 'NEED_BROWSER' }));
+      return true;
+    };
     const finish = (u) => {
+      if (blocked(u)) return true;
       if (done) return false;
       const r = accounts.parseRedirect(u, redirectUri, state);
       if (!r) return false;
@@ -250,10 +259,11 @@ function oauthWindow(url, redirectUri, state) {
     };
     const ses = w.webContents.session;
     ses.setUserAgent(CHROME_UA);
-    ses.webRequest.onBeforeRequest((d, cb) => cb({ cancel: finish(d.url) }));
+    // только переходы страницы: скрипты и фреймы Google на странице TikTok не считаются входом через Google
+    ses.webRequest.onBeforeRequest((d, cb) => cb({ cancel: d.resourceType === 'mainFrame' ? finish(d.url) : !!accounts.parseRedirect(d.url, redirectUri, state) && finish(d.url) }));
     w.webContents.on('will-redirect', (e, u) => { if (finish(u)) e.preventDefault(); });
     w.webContents.on('will-navigate', (e, u) => { if (finish(u)) e.preventDefault(); });
-    w.webContents.setWindowOpenHandler(({ url: u }) => { w.loadURL(u); return { action: 'deny' }; });
+    w.webContents.setWindowOpenHandler(({ url: u }) => { if (!finish(u)) w.loadURL(u); return { action: 'deny' }; });
     w.on('closed', () => { if (loginWin === w) loginWin = null; if (!done) { done = true; reject(Object.assign(new Error('Окно входа закрыто.'), { code: 'CANCELLED' })); } });
     w.loadURL(url, { userAgent: CHROME_UA });
   });
@@ -354,7 +364,12 @@ handle('acc:loginStart', async ({ platform, browser = false } = {}) => {
   const prep = platform === 'tiktok' ? ttPrep() : igPrep();
   pendingAuth = { platform, ...prep };
   if (browser) { shell.openExternal(prep.url); return { browser: true }; }
-  const code = await oauthWindow(prep.url, prep.redirect, prep.state);
+  let code;
+  try { code = await oauthWindow(prep.url, prep.redirect, prep.state); } catch (e) {
+    if (e.code !== 'NEED_BROWSER') throw e;
+    shell.openExternal(prep.url); // та же ссылка входа в обычном браузере, адрес после входа вставят в виджет
+    return { browser: true, reason: 'google' };
+  }
   return finishLogin(platform, code, prep.redirect);
 });
 handle('acc:loginPasted', async (text) => {

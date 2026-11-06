@@ -644,11 +644,18 @@ $('kSave').addEventListener('click', () => accRun($('kSave'), async () => {
   renderKeys(); accErr('Ключ сохранён.', true); fillSettings();
   if ($('accStep1').hidden && $('accStep2').hidden && $('accDone').hidden) accStep('accStep1');
 }));
-$('accLogin').addEventListener('click', () => accRun($('accLogin'), async () => showLogin(await bridge.loginStart({ platform: accNet }))));
+const browserHint = (why = '') => {
+  show('accPasteBox', true); $('accPasted').value = ''; $('accPasted').focus();
+  accErr(`${why}Вход открыт в браузере: войди в аккаунт и разреши доступ. Браузер откроет страницу frizy229.github.io/…?code=…: скопируй весь адрес из адресной строки и сразу вставь сюда (код живёт несколько минут). Для следующего аккаунта сначала выйди из этого в браузере.`, true);
+};
+$('accLogin').addEventListener('click', () => accRun($('accLogin'), async () => {
+  const r = await bridge.loginStart({ platform: accNet });
+  if (r && r.browser) return browserHint('Google не пускает во встроенное окно. ');
+  showLogin(r);
+}));
 $('accBrowser').addEventListener('click', () => accRun($('accLogin'), async () => {
   await bridge.loginStart({ platform: accNet, browser: true });
-  show('accPasteBox', true); $('accPasted').focus();
-  accErr('В браузере войди в аккаунт и разреши доступ, затем скопируй адрес из строки браузера и вставь сюда. Для следующего аккаунта сначала выйди из этого в браузере.', true);
+  browserHint();
 }));
 $('accPasteGo').addEventListener('click', () => accRun($('accPasteGo'), async () => showLogin(await bridge.loginPasted($('accPasted').value))));
 $('accTokenGo').addEventListener('click', () => accRun($('accTokenGo'), async () => showLogin(await bridge.accToken($('accTokenIn').value))));
