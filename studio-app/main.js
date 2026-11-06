@@ -3,7 +3,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net, session } = require('electron');
-const { normalize, LANES } = require('./lib/settings');
+const { normalize, LANES, igOverride } = require('./lib/settings');
 const { LAYOUTS, FITS, CAM_LAYOUTS } = require('./lib/layout');
 const handoff = require('./lib/handoff');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
@@ -188,8 +188,8 @@ function registerIpc() {
   });
 
   // сборка
-  handle('build:start', (o) => startJob('build', 'Сборка', (progress, signal) => pipeline.build({
-    ...o, signal, onEvent: (e) => progress((e.i + (e.progress || 0)) / Math.max(1, e.total), `${e.stage}: ${e.label}`, { file: e.file, stage: e.stage, i: e.i, total: e.total }),
+  handle('build:start', (o) => startJob('build', o.mode === 'instagram' ? 'Сборка Instagram' : 'Сборка', (progress, signal) => pipeline.build({
+    ...o, override: o.mode === 'instagram' ? igOverride(settings) : null, signal, onEvent: (e) => progress((e.i + (e.progress || 0)) / Math.max(1, e.total), `${e.stage}: ${e.label}`, { file: e.file, stage: e.stage, i: e.i, total: e.total }),
   })));
   handle('job:cancel', (id) => { const c = jobs.get(id); if (c) c.abort(); return !!c; });
 
@@ -210,7 +210,10 @@ function registerIpc() {
   });
   // автопостер: папку грузит виджет (Reels Widget) — через общую папку %APPDATA%\Reels Handoff
   const hoDir = () => handoff.handoffDir(app.getPath('appData'));
-  handle('handoff:send', (folder) => handoff.request(hoDir(), { folder, lane: handoff.laneOfQueue(settings.lane), name: path.basename(folder) }));
+  // очередь берём по папке, в которую легла сборка (queue / queue-instagram / queue-tiktok)
+  handle('handoff:send', (folder, opts = {}) => handoff.request(hoDir(), { folder, lane: handoff.laneOfQueue(path.basename(path.dirname(folder))), name: path.basename(folder),
+    postNow: !!opts.postNow, accounts: Array.isArray(opts.accounts) ? opts.accounts : [] }));
+  handle('handoff:igAccounts', () => handoff.readAccounts(hoDir(), 'instagram'));
   handle('handoff:status', (id) => handoff.status(hoDir(), id));
   handle('handoff:accounts', () => handoff.readAccounts(hoDir(), handoff.laneOfQueue(settings.lane) === 'shared' ? '' : handoff.laneOfQueue(settings.lane)));
   handle('open:path', (p) => shell.openPath(p));

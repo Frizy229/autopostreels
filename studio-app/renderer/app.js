@@ -37,6 +37,7 @@ const PAGES = {
   edit: { t: 'Монтаж', sub: 'раскладки, субтитры, заголовки', icon: 'layout-template' },
   channels: { t: 'Каналы и тексты', sub: 'сколько каналов, подписи, правила', icon: 'users' },
   build: { t: 'Сборка', sub: 'папка для автозалива', icon: 'package' },
+  instagram: { t: 'Instagram', sub: 'рилсы под выбранные аккаунты и сразу в постинг', icon: 'camera' },
   settings: { t: 'Настройки', sub: 'компоненты, видеокарта, вид', icon: 'settings' },
 };
 
@@ -65,7 +66,7 @@ function render() {
   $('#topActions').innerHTML = '';
   const page = $('#page');
   page.className = 'page' + (S.page === 'projects' ? ' split' : '');
-  ({ search: pageSearch, fillers: pageFillers, projects: pageProjects, edit: pageEdit, channels: pageChannels, build: pageBuild, settings: pageSettings })[S.page](page);
+  ({ search: pageSearch, fillers: pageFillers, projects: pageProjects, edit: pageEdit, channels: pageChannels, build: pageBuild, instagram: pageInstagram, settings: pageSettings })[S.page](page);
 }
 
 // ------------------------------------------------------------------ задачи
@@ -74,7 +75,7 @@ function jobUpdate(j) {
   const cur = { ...prev, ...j };
   S.jobs.set(j.id, cur);
   renderDock();
-  if (cur.kind === 'build') { S.build = cur; if (S.page === 'build') { if (j.done && j.error) render(); else renderBuildProgress(); } }
+  if (cur.kind === 'build') { S.build = cur; if (S.page === 'build' || S.page === 'instagram') { if (j.done && j.error) render(); else renderBuildProgress(); } }
   if (j.done) {
     if (j.error) { if (!j.aborted) toast(`${cur.label}: ${j.error}`, 6000); }
     else if (cur.kind === 'analyze' || cur.kind === 'check') {
@@ -87,8 +88,8 @@ function jobUpdate(j) {
     }
     else if (cur.kind === 'build') {
       toast('Папка готова');
-      if (S.settings.autoSend && j.result && j.result.folder && !(j.result.problems || []).length) sendToAutoposter(cur);
-      if (S.page === 'build') render();
+      if ((cur.mode === 'instagram' || S.settings.autoSend) && j.result && j.result.folder && !(j.result.problems || []).length) sendToAutoposter(cur);
+      if (S.page === 'build' || S.page === 'instagram') render();
     }
     setTimeout(() => { S.jobs.delete(j.id); renderDock(); }, j.error ? 9000 : 3500);
   }
@@ -786,6 +787,7 @@ function renderBuildProgress() {
   const el = $('#bprog');
   if (!el) return;
   const b = S.build;
+  if (!b && S.page === 'instagram') { el.innerHTML = `<h3>Что получится</h3><p class="hint">Папка queue-instagram/NNN_имя/ с подпапкой на каждый отмеченный аккаунт (ролики, описания, обложки). Её сразу заберёт виджет и загрузит в очередь Instagram.</p>`; return; }
   if (!b) { el.innerHTML = `<h3>Что получится</h3><div class="tree">${esc(treePreview())}</div>`; return; }
   b.files = b.files || [];
   if (b.file && !b.files.includes(b.file)) b.files.push(b.file);
@@ -807,17 +809,94 @@ function renderBuildProgress() {
   $$('[data-show]').forEach((x) => { x.onclick = () => call('showItem', x.dataset.show); });
 }
 
+// ------------------------------------------------------------------ Instagram
+function pageInstagram(el) {
+  const s = S.settings, ig = s.ig;
+  const known = S.igAcc || [];
+  const names = [...new Set([...known.map((a) => a.name), ...ig.accounts])];
+  const ready = S.projects.filter((p) => p.analyzed);
+  if (!buildSel) buildSel = new Set(ready.map((p) => p.id));
+  const selCount = ready.filter((p) => buildSel.has(p.id)).reduce((n, p) => n + p.moments.filter((m) => m.selected).length, 0);
+  const need = ig.accounts.length * ig.perChannel;
+  const running = S.build && !S.build.done;
+  const fmts = ig.formats.length ? ig.formats : s.formats;
+  el.innerHTML = `
+    <div class="grid g2">
+      <div class="card">
+        <div class="row"><div class="grow"><h3>Аккаунты Instagram</h3><p class="hint" style="margin:0">Список берётся из автопостера (виджет Reels Widget). У каждого отмеченного аккаунта свои ролики.</p></div>
+          <button class="btn sm" id="igLoad">${ic('refresh-cw', 'sm')}Обновить</button></div>
+        <div class="stack" style="margin-top:10px">${names.length ? names.map((n) => `
+          <label class="switch"><div><b>@${esc(n)}</b>${known.length && !known.some((a) => a.name === n) ? '<small class="warnc">нет в автопостере: виджет не примет папку</small>' : ''}</div><input type="checkbox" data-iga="${esc(n)}" ${ig.accounts.includes(n) ? 'checked' : ''}></label>`).join('')
+    : `<div class="muted">Аккаунтов пока нет. Запусти Reels Widget (он должен быть подключён к GitHub) и нажми «Обновить».</div>`}</div>
+        ${names.length > 1 ? `<div class="row" style="margin-top:8px"><button class="btn sm ghost" id="igAll">Отметить все</button><button class="btn sm ghost" id="igNone">Снять все</button></div>` : ''}
+      </div>
+      <div class="card">
+        <h3>Ролики</h3>
+        <div class="row" style="margin-top:6px"><span class="grow muted">Роликов на аккаунт</span>
+          <div class="stepper"><button id="igpMinus">${ic('minus', 'sm')}</button><output class="num">${ig.perChannel}</output><button id="igpPlus">${ic('plus', 'sm')}</button></div></div>
+        <div class="field" style="margin-top:12px"><span>Раскладки для Instagram ${ig.formats.length ? '' : '(не выбраны — как в «Монтаже»)'}</span>
+          <div class="row wrap">${Object.entries(S.cat.layouts).map(([k, n]) => `<button class="chip ${ig.formats.includes(k) ? 'on' : ''}" data-igf="${k}">${esc(n)}</button>`).join('')}</div></div>
+        <div class="field" style="margin-top:12px"><span>Публикация</span>
+          <div class="seg"><button class="${ig.postNow ? '' : 'on'}" data-ignow="0">По расписанию</button><button class="${ig.postNow ? 'on' : ''}" data-ignow="1">Первый ролик сразу</button></div>
+          <small class="muted">${ig.postNow ? 'Сразу после загрузки выйдет по одному ролику на каждый аккаунт, остальные — по расписанию автопостера.' : 'Ролики выйдут по расписанию автопостера (окно дня из его настроек).'}</small></div>
+      </div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <h3>Подпись и закреп</h3><p class="hint">{title} — заголовок момента, {hashtags} — хэштеги из «Каналы и тексты». «twitch: evelone2004» и #evelone добавятся сами.</p>
+        <div class="field"><span>Подпись Instagram</span><textarea class="input" id="igCap" rows="4">${esc(s.texts.captionInstagram)}</textarea></div>
+        <div class="field" style="margin-top:8px"><span>Комментарий в закреп</span><input class="input" id="igCom" value="${esc(s.texts.comment)}" placeholder="Например: полный стрим — twitch.tv/evelone2004"></div>
+      </div>
+      <div class="card">
+        <h3>Собрать</h3>
+        <p class="hint">Моменты: ${selCount} выбрано на вкладке «Моменты» (источники — как на «Сборке»). Раскладки по кругу: ${esc(fmts.map((f) => (S.cat.layouts[f] || f).split(',')[0]).join(' · '))}.</p>
+        <div class="row"><button class="btn primary grow" id="igGo" ${!selCount || !ig.accounts.length || running ? 'disabled' : ''}>${ic('send')}Собрать ${need} ${H.plural(need, 'ролик', 'ролика', 'роликов')} и отправить</button>
+          ${running ? `<button class="btn" id="stop">${ic('circle-stop')}Стоп</button>` : ''}</div>
+        ${!ig.accounts.length ? '<small class="warnc">Отметь хотя бы один аккаунт.</small>' : ''}
+      </div>
+    </div>
+    <div class="card" id="bprog" style="margin-top:14px"></div>`;
+  const saveIg = async (patch) => { await saveSettings({ ig: { ...S.settings.ig, ...patch } }, true); render(); };
+  $('#igLoad').onclick = async () => {
+    try {
+      const r = await call('handoffIgAccounts');
+      if (!r) { toast('Виджет ещё не передал аккаунты: запусти Reels Widget и подожди минуту', 6000); return; }
+      S.igAcc = r.accounts; render();
+      toast(r.accounts.length ? `Аккаунтов Instagram: ${r.accounts.length}` : 'В автопостере нет аккаунтов Instagram', 4000);
+    } catch (e) { fail(e); }
+  };
+  $$('[data-iga]').forEach((i) => { i.onchange = () => saveIg({ accounts: i.checked ? [...ig.accounts, i.dataset.iga] : ig.accounts.filter((x) => x !== i.dataset.iga) }); });
+  if ($('#igAll')) $('#igAll').onclick = () => saveIg({ accounts: names });
+  if ($('#igNone')) $('#igNone').onclick = () => saveIg({ accounts: [] });
+  $('#igpMinus').onclick = () => saveIg({ perChannel: Math.max(1, ig.perChannel - 1) });
+  $('#igpPlus').onclick = () => saveIg({ perChannel: Math.min(20, ig.perChannel + 1) });
+  $$('[data-igf]').forEach((b) => { b.onclick = () => { const k = b.dataset.igf; saveIg({ formats: ig.formats.includes(k) ? ig.formats.filter((x) => x !== k) : [...ig.formats, k] }); }; });
+  $$('[data-ignow]').forEach((b) => { b.onclick = () => saveIg({ postNow: b.dataset.ignow === '1' }); });
+  $('#igCap').onchange = (e) => saveSettings({ texts: { ...S.settings.texts, captionInstagram: e.target.value } }, true);
+  $('#igCom').onchange = (e) => saveSettings({ texts: { ...S.settings.texts, comment: e.target.value } }, true);
+  $('#igGo').onclick = async () => {
+    try {
+      const id = await call('build', { mode: 'instagram', projectIds: ready.filter((p) => buildSel.has(p.id)).map((p) => p.id) });
+      S.build = { id, kind: 'build', mode: 'instagram', label: 'Сборка Instagram', progress: 0, files: [] };
+      S.jobs.set(id, S.build); render();
+    } catch (e) { fail(e); }
+  };
+  if ($('#stop')) $('#stop').onclick = () => call('cancel', S.build.id);
+  if (!S.igAcc) call('handoffIgAccounts').then((r) => { S.igAcc = r ? r.accounts : []; if (S.page === 'instagram' && r && r.accounts.length) render(); }).catch(() => { S.igAcc = []; });
+  renderBuildProgress();
+}
+
 /** Отдать готовую папку виджету автопостера и следить, как он её грузит. */
 async function sendToAutoposter(b) {
   try {
-    const id = await call('handoffSend', b.result.folder);
+    const id = await call('handoffSend', b.result.folder, b.mode === 'instagram' ? { postNow: S.settings.ig.postNow, accounts: S.settings.ig.accounts } : {});
     b.ap = { id, state: 'waiting', since: Date.now() };
-    if (S.page === 'build') renderBuildProgress();
+    if (S.page === 'build' || S.page === 'instagram') renderBuildProgress();
     const tick = async () => {
       const st = await call('handoffStatus', id).catch(() => null);
       if (!st) return;
       b.ap = { ...b.ap, ...st };
-      if (S.build === b && S.page === 'build') renderBuildProgress();
+      if (S.build === b && (S.page === 'build' || S.page === 'instagram')) renderBuildProgress();
       if (st.state === 'done') { toast(st.ok ? `В автопостере: ${st.dest}` : `Автопостер не принял папку: ${st.error}`, st.ok ? 5000 : 12000); return; }
       setTimeout(tick, 2000);
     };
@@ -830,7 +909,7 @@ function apBlock(ap) {
   const slow = ap.state === 'waiting' && Date.now() - ap.since > 20000;
   const text = ap.state === 'waiting' ? (slow ? 'Виджет не отвечает. Запусти Reels Widget (значок в трее): он заберёт папку сам, как только откроется.' : 'Передаю папку виджету автопостера…')
     : ap.state === 'working' ? `Виджет загружает: ${ap.text || '…'}`
-      : ap.state === 'done' && ap.ok ? `В очереди автопостера: ${ap.dest}. Дальше ролики выйдут по расписанию.`
+      : ap.state === 'done' && ap.ok ? `В очереди автопостера: ${ap.dest}. ${ap.posted ? 'Первые ролики уже публикуются (2–5 минут), остальные выйдут по расписанию.' : 'Дальше ролики выйдут по расписанию.'}`
         : ap.state === 'done' ? `Виджет не загрузил папку: ${ap.error}${/не совпадает ни с одним аккаунтом/.test(ap.error || '') ? ' Нажми «Каналы и тексты» → «Взять аккаунты из автопостера» и собери заново.' : ''}`
           : 'Заявка потерялась, отправь ещё раз.';
   const cls = ap.state === 'done' ? (ap.ok ? 'okc' : 'err') : slow ? 'warnc' : 'muted';

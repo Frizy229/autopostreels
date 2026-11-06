@@ -27,7 +27,9 @@ const DEFAULTS = {
   lang: 'ru', whisperModel: 'large-v3-turbo', gpu: true,
   encoder: 'nvenc', quality: 'best', loudnorm: true, fps: 30,
   outputDir: '', lane: 'queue',
-  autoSend: true,        // после сборки сразу отдать папку виджету автопостера (он загрузит её в очередь)
+  autoSend: true,
+  // раздел «Instagram»: свои аккаунты (из автопостера), роликов на аккаунт, раскладки ([] — как в «Монтаже»), выложить сразу
+  ig: { accounts: [], perChannel: 3, formats: [], postNow: false },        // после сборки сразу отдать папку виджету автопостера (он загрузит её в очередь)
   texts: {
     captionInstagram: '{title}\n\ntwitch: evelone2004\n{hashtags}',
     captionTiktok: '{title} twitch: evelone2004 {hashtags}',
@@ -100,7 +102,20 @@ function normalize(raw) {
   const nt = { ...DEFAULTS.net, ...((raw && raw.net && typeof raw.net === 'object') ? raw.net : {}) };
   s.net = { mode: pick(nt.mode, NET_MODES, 'system'), proxy: typeof nt.proxy === 'string' ? nt.proxy.trim().slice(0, 200) : '' };
   if (!s.presets || typeof s.presets !== 'object') s.presets = {};
+  const ig = { ...DEFAULTS.ig, ...((raw && raw.ig && typeof raw.ig === 'object') ? raw.ig : {}) };
+  s.ig = {
+    accounts: [...new Set((Array.isArray(ig.accounts) ? ig.accounts : []).map((a) => String(a || '').trim().replace(/^@+/, '')).filter(Boolean))].slice(0, MAX_CHANNELS),
+    perChannel: Math.round(num(ig.perChannel, 1, 20, DEFAULTS.ig.perChannel)),
+    formats: [...new Set((Array.isArray(ig.formats) ? ig.formats : []).filter((f) => LAYOUTS[f]))],
+    postNow: !!ig.postNow,
+  };
   return s;
 }
 
-module.exports = { DEFAULTS, LANES, MAX_CHANNELS, normalize };
+/** Сборка раздела «Instagram»: каналы = выбранные аккаунты, очередь Instagram. Поверх обычных настроек. */
+function igOverride(s) {
+  if (!s.ig.accounts.length) throw new Error('Выбери аккаунты Instagram (раздел «Instagram»)');
+  return { channels: s.ig.accounts.map((name) => ({ name })), perChannel: s.ig.perChannel, lane: 'queue-instagram', ...(s.ig.formats.length ? { formats: s.ig.formats } : {}) };
+}
+
+module.exports = { DEFAULTS, LANES, MAX_CHANNELS, normalize, igOverride };

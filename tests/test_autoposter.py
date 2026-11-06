@@ -467,6 +467,18 @@ class PostSubfolderTests(PostBase):
         caps = sorted((e[1], e[2]) for e in FakeIG.log if e[0] == "container")
         self.assertEqual(caps, [("tok1", "C-one"), ("tok2", "C-two")])
 
+    def test_only_several_first_reel_per_account(self):
+        # «Выложить сразу» из Reels Studio: первый ролик каждого выбранного аккаунта
+        self.assertEqual(self.run_post(at(10, 5), only="001_b/one/,001_b/two/"), 0)
+        st = self.state_now()
+        self.assertEqual(list(st["posted"]), ["001_b/one/1.mp4"])
+        self.assertEqual(list(st["posted_acc"]["two"]), ["001_b/two/1.mp4"])
+
+    def test_only_unknown_part_is_skipped(self):
+        self.assertEqual(self.run_post(at(10, 5), only="nope,001_b/two/"), 0)
+        self.assertEqual(list(self.state_now()["posted_acc"]["two"]), ["001_b/two/1.mp4"])
+        self.assertEqual(self.run_post(at(10, 6), only="nope"), 1)
+
     def test_batch_finishes_after_all(self):
         for hour in (10, 22):
             self.run_post(at(hour, 5))

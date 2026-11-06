@@ -1111,19 +1111,25 @@ def cmd_post(args) -> int:
         group_loose_files(cfg, now, ln)
         sweep_finished(cfg, state, ln)
     if args.only:
-        # разовая публикация выбранного рилса прямо сейчас, расписание не трогаем
-        for ln in lanes(cfg):
-            for f in queue_folders(cfg, ln):
-                due = [i for i in folder_items(f, state, ln) if i["id"] == args.only][:1] \
-                    or [i for i in folder_items(f, state, ln) if args.only in i["id"]][:1]
-                if due:
+        # разовая публикация прямо сейчас, расписание не трогаем. Можно несколько через запятую
+        # (Reels Studio: «первый ролик на каждый выбранный аккаунт» = «007_x/acc1/,007_x/acc2/»)
+        for want in [w.strip() for w in str(args.only).split(",") if w.strip()]:
+            found: list[dict] = []
+            for ln in lanes(cfg):
+                for f in queue_folders(cfg, ln):
+                    items = [i for i in folder_items(f, state, ln) if i not in due]
+                    found = [i for i in items if i["id"] == want][:1] or [i for i in items if want in i["id"]][:1]
+                    if found:
+                        break
+                if found:
                     break
-            if due:
-                break
+            if found:
+                due += found
+            else:
+                log(f"Рилс «{want}» не найден в очереди (или уже опубликован).")
         if not due:
-            log(f"Рилс «{args.only}» не найден в очереди (или уже опубликован).")
             return 1
-        log(f"Публикую сейчас: {due[0]['id']}")
+        log("Публикую сейчас: " + ", ".join(i["id"] for i in due))
     else:
         for ln in lanes(cfg):
             due += schedule(cfg, state, now, ln)[1]

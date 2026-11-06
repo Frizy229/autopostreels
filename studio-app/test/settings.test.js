@@ -30,4 +30,12 @@ assert.strictEqual(S.normalize({}).autoSend, true);
 assert.strictEqual(S.normalize({}).fit, 'fit');
 assert.strictEqual(S.normalize({ fit: 'fill' }).fit, 'fill');
 assert.strictEqual(S.normalize({ fit: 'zzz' }).fit, 'fit');
-console.log('настройки: 25 проверок');
+// раздел Instagram
+const ig = S.normalize({ ig: { accounts: ['@one', 'two', 'two', ''], perChannel: 99, formats: ['pip', 'zzz'], postNow: 1 } }).ig;
+assert.deepStrictEqual(ig, { accounts: ['one', 'two'], perChannel: 20, formats: ['pip'], postNow: true });
+assert.deepStrictEqual(S.normalize({}).ig, { accounts: [], perChannel: 3, formats: [], postNow: false });
+const ov = S.igOverride(S.normalize({ ig: { accounts: ['one', 'two'], perChannel: 2 } }));
+assert.deepStrictEqual(ov, { channels: [{ name: 'one' }, { name: 'two' }], perChannel: 2, lane: 'queue-instagram' });
+assert.deepStrictEqual(S.igOverride(S.normalize({ ig: { accounts: ['a'], formats: ['duo'] } })).formats, ['duo']);
+assert.throws(() => S.igOverride(S.normalize({})), /Выбери аккаунты/);
+console.log('настройки: 30 проверок');

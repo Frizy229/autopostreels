@@ -44,10 +44,20 @@ assert.strictEqual(H.readAccounts(dir, 'tiktok').accounts.length, 20);
 assert.strictEqual(H.readAccounts(dir, 'instagram').accounts[0].name, 'acc0');
 assert.deepStrictEqual(['queue', 'queue-instagram', 'queue-tiktok', '?'].map(H.laneOfQueue), ['shared', 'instagram', 'tiktok', 'shared']);
 
+
+// «Выложить сразу»: заявка несёт аккаунты, виджет собирает --only для автопостера
+const idn = H.request(dir, { folder: 'C:/out/009_ig', lane: 'instagram', postNow: true, accounts: ['one', 'two'] });
+const jn = H.take(dir);
+assert.strictEqual(jn.id, idn);
+assert.deepStrictEqual([jn.postNow, jn.accounts], [true, ['one', 'two']]);
+assert.strictEqual(H.postNowOnly('queue-instagram/012_ig', jn.accounts), '012_ig/one/,012_ig/two/');
+assert.strictEqual(H.postNowOnly('queue-instagram/012_ig'), '012_ig/');
+assert.strictEqual(H.request(dir, { folder: 'x' }) && H.take(dir).postNow, false, 'по умолчанию по расписанию');
+
 // старые ответы убираются
 const old = path.join(dir, `${ids[0]}.done.json`);
 fs.utimesSync(old, new Date(0), new Date(0));
 assert.strictEqual(H.cleanup(dir), 1);
 assert.ok(!fs.existsSync(old));
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log('передача в автопостер: 27 проверок');
+console.log('передача в автопостер: 33 проверки');
