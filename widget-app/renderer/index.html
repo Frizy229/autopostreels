@@ -139,6 +139,63 @@
     </div>
   </div>
 
+  <!-- аккаунт: добавить (вход в соцсеть → токен в секрет GitHub → config.json), посмотреть, переподключить, убрать -->
+  <div id="accSheet" class="settings" hidden>
+    <div class="set-head drag"><button id="accBack" class="ibtn no-drag" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><b id="accTitle">Аккаунт</b></div>
+    <div class="set-body">
+      <div id="accView" hidden>
+        <p id="accState" class="acc-state"></p>
+        <p id="accInfo" class="small muted"></p>
+        <div class="sheet-btns"><button id="accReconnect" class="btn primary">Переподключить</button><button id="accRemove" class="btn danger">Убрать</button></div>
+      </div>
+      <div id="accAdd">
+        <div id="accKeys" hidden>
+          <h4>Ключ приложения (один раз)</h4>
+          <div id="accKeysTt">
+            <label>Client secret приложения TikTok<input id="kTtSecret" type="password" spellcheck="false" autocomplete="off"></label>
+            <p class="hint">developers.tiktok.com → Manage apps → приложение (или его Sandbox) → Client secret. Хранится зашифрованным только на этом компьютере.</p>
+          </div>
+          <div id="accKeysIg">
+            <label>ID приложения Instagram<input id="kIgId" spellcheck="false" autocomplete="off"></label>
+            <label>Секрет приложения Instagram<input id="kIgSecret" type="password" spellcheck="false" autocomplete="off"></label>
+            <p class="hint">developers.facebook.com → приложение → Instagram → «Настройка API со входом через Instagram» → ID и секрет приложения Instagram. Хранятся зашифрованными только на этом компьютере.</p>
+          </div>
+          <button id="kSave" class="btn small">Сохранить ключ</button>
+        </div>
+        <div id="accStep1">
+          <p id="accIntro" class="small"></p>
+          <div class="sheet-btns"><button id="accLogin" class="btn primary">Войти</button></div>
+          <p class="small"><a id="accBrowser" class="lnk">Окно входа не открывается? Войти через браузер</a></p>
+          <div id="accPasteBox" hidden>
+            <label>Адрес страницы, куда вернул браузер после входа<input id="accPasted" spellcheck="false" placeholder="https://…?code=…"></label>
+            <div class="sheet-btns"><button id="accPasteGo" class="btn small">Готово</button></div>
+          </div>
+          <details id="accTokenBox" class="texts-box" hidden>
+            <summary>Есть готовый токен Instagram?</summary>
+            <label>Токен (IGAA… или EAA…)<input id="accTokenIn" type="password" spellcheck="false" autocomplete="off"></label>
+            <div class="sheet-btns"><button id="accTokenGo" class="btn small">Проверить токен</button></div>
+          </details>
+        </div>
+        <div id="accStep2" hidden>
+          <p id="accWho" class="small"></p>
+          <label id="accPickBox" hidden>Аккаунт Instagram<select id="accPick"></select></label>
+          <label>Ник аккаунта (так будут называться его подпапки и блоки подписей)<input id="accName" spellcheck="false" autocomplete="off"></label>
+          <div id="accModeBox">
+            <label>Как публиковать</label>
+            <div class="seg" id="accMode"><button data-v="inbox" class="on">В черновики</button><button data-v="direct">Сразу (после аудита)</button></div>
+            <p id="accModeHint" class="hint"></p>
+          </div>
+          <div class="sheet-btns"><button id="accSave" class="btn primary">Сохранить аккаунт</button><button id="accRestart" class="btn">Войти заново</button></div>
+        </div>
+        <div id="accDone" hidden>
+          <p id="accDoneText" class="small ok"></p>
+          <div class="sheet-btns"><button id="accMore" class="btn primary">Добавить ещё</button><button id="accClose" class="btn">Готово</button></div>
+        </div>
+        <p id="accErr" class="small"></p>
+      </div>
+    </div>
+  </div>
+
   <div id="settings" class="settings" hidden>
     <div class="set-head drag"><button id="setBack" class="ibtn no-drag" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><b>Настройки</b></div>
     <div class="set-body">
@@ -148,13 +205,25 @@
       <label>Токен GitHub
         <div class="row"><input id="fToken" type="password" spellcheck="false" autocomplete="off"><button id="btnPaste" class="btn small">Вставить</button><button id="btnEye" class="btn small">Показать</button></div>
       </label>
-      <p class="muted small">Fine-grained токен только на этот репозиторий: Contents — Read and write (обязательно), Actions — Read and write (для кнопок «Запустить» и «Опубликовать сейчас»). Хранится зашифрованным (DPAPI Windows).</p>
+      <p class="muted small">Fine-grained токен только на этот репозиторий: Contents — Read and write (обязательно), Actions — Read and write (для кнопок «Запустить» и «Опубликовать сейчас»), Secrets — Read and write (для кнопки «+» у аккаунтов). Хранится зашифрованным (DPAPI Windows).</p>
       <div class="row"><button id="btnSave" class="btn primary grow">Сохранить и проверить</button><button id="btnForget" class="btn danger small">Забыть токен</button></div>
       <p id="connResult" class="small"></p>
 
       <h4>Автопостер</h4>
       <div class="row wrap"><button class="btn small" id="btnCheck">Проверить токены соцсетей</button><button class="btn small" data-link="actions">Журнал запусков</button></div>
       <p class="muted small">Проверка запускается на GitHub, результат виден в журнале запусков через минуту.</p>
+
+      <h4>Ключи приложений соцсетей</h4>
+      <p class="muted small" id="keysState"></p>
+      <div class="row wrap"><button class="btn small" id="btnKeysTt">Ключ TikTok</button><button class="btn small" id="btnKeysIg">Ключи Instagram</button></div>
+
+      <div id="resetBox">
+        <h4>Своя копия автопостера</h4>
+        <p class="muted small">Для копии репозитория у другого человека: убрать из неё очереди, историю и аккаунты Alex, чтобы начать со своими. Токены Alex в копию не попадают никогда: секреты GitHub не копируются.</p>
+        <label>Для подтверждения впиши имя репозитория<input id="fResetName" spellcheck="false" autocomplete="off"></label>
+        <div class="row wrap"><button class="btn small danger" id="btnReset">Очистить копию</button></div>
+        <p id="resetResult" class="small"></p>
+      </div>
 
       <h4>Вид</h4>
       <div class="seg" id="segTheme"><button data-v="system">Системная</button><button data-v="dark">Тёмная</button><button data-v="light">Светлая</button></div>
