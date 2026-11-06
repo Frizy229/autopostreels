@@ -19,6 +19,8 @@ for (const ch of channels) assert.ok(main.includes(`handle('${ch}'`), `main.js �
 
 // обе вкладки на месте, по умолчанию Instagram
 assert.ok(/data-net="instagram"/.test(html) && /data-net="tiktok"/.test(html));
+// модуль lib/accounts в main.js ничем не перекрыт (иначе «accounts.accountHealth is not a function» при обновлении)
+assert.strictEqual([...main.matchAll(/\b(?:const|let|var)\s+accounts\b/g)].length, 1, 'в main.js переменная accounts перекрывает модуль lib/accounts');
 // синтаксис скриптов
 new Function(app); // eslint-disable-line no-new-func
 console.log('ui tests ok');

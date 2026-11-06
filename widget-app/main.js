@@ -142,12 +142,12 @@ handle('data:refresh', async () => {
   const [queues, state, stats, rc, creators, runs, secretNames] = await Promise.all([g.queues(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json'), g.readJson('tiktok_creator.json'), g.postRuns().catch(() => null), g.secretNames().catch(() => null)]);
   repoCfg = rc || {};
   const accList = (repoCfg.accounts || []).filter((a) => a && a.name);
-  const accounts = accList.map((a) => a.name);
+  const accNames = accList.map((a) => a.name);
   const platforms = Object.fromEntries(accList.map((a) => [a.name, (a.platform || 'instagram').toLowerCase()]));
   const now = new Date();
   const nets = {};
-  for (const net of NETS) nets[net] = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts, platforms, net });
-  const all = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts, platforms });
+  for (const net of NETS) nets[net] = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts: accNames, platforms, net });
+  const all = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts: accNames, platforms });
   const tt = { pending: tiktok.pendingConfirm(queues, state, accList), creators: creators || {} };
   return {
     nets, nextNum: all.nextNum, tt, at: now.toISOString(), health: runs ? runHealth(runs, now) : null,
