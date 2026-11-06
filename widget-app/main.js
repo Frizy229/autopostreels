@@ -16,6 +16,8 @@ const DEFAULTS = {
   bounds: null, tokenEnc: '', tokenPlain: '',
   // ключи приложений соцсетей (нужны только для входа при добавлении аккаунта), хранятся зашифрованными
   ttSecretEnc: '', igSecretEnc: '', igAppId: '',
+  // приложение Meta для входа через Facebook (ID и секрет из «Настройки → Основное», конфигурация входа необязательна)
+  fbAppId: '', fbSecretEnc: '', fbConfigId: '',
 };
 const win11 = process.platform === 'win32' && parseInt(os.release().split('.')[2] || '0', 10) >= 22621;
 
@@ -31,8 +33,8 @@ function saveCfg() {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
   fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2));
 }
-const PRIVATE = ['bounds', 'tokenEnc', 'tokenPlain', 'ttSecretEnc', 'igSecretEnc'];
-const publicCfg = () => { const rest = { ...cfg }; for (const k of PRIVATE) delete rest[k]; rest.hasTtSecret = !!cfg.ttSecretEnc; rest.hasIgSecret = !!cfg.igSecretEnc; return rest; };
+const PRIVATE = ['bounds', 'tokenEnc', 'tokenPlain', 'ttSecretEnc', 'igSecretEnc', 'fbSecretEnc'];
+const publicCfg = () => { const rest = { ...cfg }; for (const k of PRIVATE) delete rest[k]; rest.hasTtSecret = !!cfg.ttSecretEnc; rest.hasIgSecret = !!cfg.igSecretEnc; rest.hasFbSecret = !!cfg.fbSecretEnc; return rest; };
 
 function getToken() {
   try {
@@ -156,7 +158,7 @@ handle('data:refresh', async () => {
       name: a.name, platform: platforms[a.name], mode: a.platform === 'tiktok' ? (a.mode || 'inbox') : '',
       health: accounts.accountHealth(a, i, secretNames, (state || {}).tokens, now),
     })).filter(Boolean),
-    canSecrets: Array.isArray(secretNames), repoSetup: { ttClientKey: !!repoCfg.tiktok_client_key, redirect: repoCfg.tiktok_redirect_uri || '', igAppId: repoCfg.instagram_app_id || cfg.igAppId || '' },
+    canSecrets: Array.isArray(secretNames), repoSetup: { ttClientKey: !!repoCfg.tiktok_client_key, redirect: repoCfg.tiktok_redirect_uri || '', igAppId: repoCfg.instagram_app_id || cfg.igAppId || '', fbAppId: repoCfg.facebook_app_id || cfg.fbAppId || '' },
     texts: repoCfg.texts || {}, paused: repoCfg.paused || [], hashtags: repoCfg.hashtags || '',
     window: { start: repoCfg.day_start || '10:00', end: repoCfg.day_end || '22:00', tz: repoCfg.timezone || cfg.scheduleTz },
   };
@@ -327,6 +329,30 @@ async function igExchange(code) {
   return b.j.access_token;
 }
 
+// Instagram через Facebook: один вход = все аккаунты Instagram со Страниц этого человека, токен EAA на 60 дней
+// (его продлевает workflow «Продление токена», если в секретах есть FB_APP_ID и FB_APP_SECRET; виджет кладёт их сам)
+const fbSecret = () => decValue(cfg.fbSecretEnc);
+const fbAppId = () => String(repoCfg.facebook_app_id || cfg.fbAppId || '');
+const fbConfigId = () => String(repoCfg.facebook_config_id || cfg.fbConfigId || '');
+function fbPrep() {
+  if (!fbAppId() || !fbSecret()) throw Object.assign(new Error('Сначала впиши ID и секрет приложения Meta (для входа через Facebook).'), { code: 'NO_FB_SECRET' });
+  if (!igRedirect()) throw new Error('В config.json репозитория нет адреса возврата (tiktok_redirect_uri или instagram_redirect_uri).');
+  const state = crypto.randomBytes(12).toString('hex');
+  return { redirect: igRedirect(), state, url: accounts.facebookAuthUrl({ appId: fbAppId(), redirectUri: igRedirect(), state, configId: fbConfigId() }) };
+}
+const fbErr = (r) => (r.j && r.j.error && r.j.error.message) || r.status;
+async function fbExchange(code) {
+  const v = 'https://graph.facebook.com/v23.0/oauth/access_token';
+  const a = await getJson(`${v}?${new URLSearchParams({ client_id: fbAppId(), client_secret: fbSecret(), redirect_uri: igRedirect(), code })}`);
+  if (!a.ok || !a.j.access_token) throw new Error(`Facebook не принял вход: ${fbErr(a)}. Код одноразовый, войди ещё раз.`);
+  const b = await getJson(`${v}?${new URLSearchParams({ grant_type: 'fb_exchange_token', client_id: fbAppId(), client_secret: fbSecret(), fb_exchange_token: a.j.access_token })}`);
+  if (!b.ok || !b.j.access_token) throw new Error(`Facebook не выдал долгий токен: ${fbErr(b)}`);
+  const p = await getJson(`https://graph.facebook.com/v23.0/me/permissions?access_token=${encodeURIComponent(b.j.access_token)}`);
+  const granted = ((p.j && p.j.data) || []).filter((x) => x.status === 'granted').map((x) => x.permission);
+  const missing = ['instagram_basic', 'instagram_content_publish', 'pages_show_list'].filter((x) => granted.length && !granted.includes(x));
+  return { token: b.j.access_token, days: Math.round((b.j.expires_in || 0) / 86400), missing };
+}
+
 function keepLogin(platform, secret, info) {
   dropOldLogins();
   const id = crypto.randomBytes(8).toString('hex');
@@ -334,10 +360,13 @@ function keepLogin(platform, secret, info) {
   return { id, ...info };
 }
 
-handle('keys:set', ({ ttSecret: t, igSecret: i, igAppId: a } = {}) => {
+handle('keys:set', ({ ttSecret: t, igSecret: i, igAppId: a, fbSecret: fs2, fbAppId: fa, fbConfigId: fc } = {}) => {
   if (t !== undefined) cfg.ttSecretEnc = encValue(String(t).trim());
   if (i !== undefined) cfg.igSecretEnc = encValue(String(i).trim());
   if (a !== undefined) cfg.igAppId = String(a).trim().replace(/\D/g, '');
+  if (fs2 !== undefined) cfg.fbSecretEnc = encValue(String(fs2).trim());
+  if (fa !== undefined) cfg.fbAppId = String(fa).trim().replace(/\D/g, '');
+  if (fc !== undefined) cfg.fbConfigId = String(fc).trim().replace(/\D/g, '');
   saveCfg();
   return publicCfg();
 });
@@ -356,13 +385,19 @@ async function finishLogin(platform, code, redirect) {
     const { secret: rt, info } = await ttExchange(code, redirect);
     return keepLogin('tiktok', rt, info);
   }
+  if (platform === 'facebook') {
+    const { token, days, missing } = await fbExchange(code);
+    const list = await igAccountsByToken(token);
+    return keepLogin('instagram', token, { platform: 'instagram', via: 'facebook', days, missing,
+      list: accounts.instagramChoices(list, (repoCfg && repoCfg.accounts) || []), suggested: (list[0] && list[0].username) || '' });
+  }
   const token = await igExchange(code);
   const list = await igAccountsByToken(token);
   return keepLogin('instagram', token, { platform: 'instagram', list, suggested: (list[0] && list[0].username) || '' });
 }
 handle('acc:loginStart', async ({ platform, browser = false } = {}) => {
   if (!repoCfg || !Object.keys(repoCfg).length) repoCfg = await gh().readJson('config.json');
-  const prep = platform === 'tiktok' ? ttPrep() : igPrep();
+  const prep = platform === 'tiktok' ? ttPrep() : platform === 'facebook' ? fbPrep() : igPrep();
   pendingAuth = { platform, ...prep };
   if (browser) { shell.openExternal(prep.url); return { browser: true }; }
   let code;
@@ -388,7 +423,8 @@ handle('acc:token', async (token) => {
   if (t.length < 30) throw new Error('Это не похоже на токен: вставь его целиком.');
   const list = await igAccountsByToken(t);
   if (!list.length) throw new Error('Токен рабочий, но к нему не привязан ни один аккаунт Instagram.');
-  return keepLogin('instagram', t, { platform: 'instagram', list, suggested: list[0].username || '' });
+  return keepLogin('instagram', t, { platform: 'instagram', via: /^EAA/.test(t) ? 'facebook' : 'instagram', suggested: list[0].username || '',
+    list: accounts.instagramChoices(list, (repoCfg && repoCfg.accounts) || []) });
 });
 // сохранить: токен в секрет GitHub, аккаунт в config.json, недостающие общие секреты (ключ TikTok, GH_PAT) тоже
 handle('acc:save', async ({ id, name, mode, userId } = {}) => {
@@ -423,6 +459,43 @@ handle('acc:save', async ({ id, name, mode, userId } = {}) => {
   repoCfg = c;
   logins.delete(id);
   return { name: account.name, secret: account.token_env, replaced, extra };
+});
+// Instagram пачкой (вход через Facebook): один токен на все выбранные аккаунты, у каждого свой секрет, один коммит config.json
+handle('acc:saveMany', async ({ id, picks } = {}) => {
+  const l = logins.get(id);
+  if (!l || l.platform !== 'instagram') throw new Error('Вход устарел: войди ещё раз.');
+  const g = gh();
+  const rc = await g.readJson('config.json');
+  const known = new Set((l.info.list || []).map((x) => String(x.user_id)));
+  const chosen = (picks || []).filter((p) => known.has(String(p.user_id)));
+  if (!chosen.length) throw new Error('Отметь хотя бы один аккаунт.');
+  const { entries, errors } = accounts.planInstagramBatch(chosen, rc.accounts || []);
+  if (errors.length) throw new Error(errors.join(' '));
+  const names = await g.secretNames();
+  if (names === null) throw g.secretsError({ status: 403 });
+  const at = new Date().toISOString().slice(0, 16) + 'Z';
+  const probe = JSON.parse(JSON.stringify(rc));
+  const saved = [];
+  for (const e of entries) {
+    const { account, replaced } = accounts.upsertAccount(probe, { ...e, platform: 'instagram', connected: at });
+    await g.setSecret(account.token_env, l.secret);
+    saved.push({ name: account.name, secret: account.token_env, replaced });
+  }
+  const extra = [];
+  if (!names.includes('GH_PAT')) { await g.setSecret('GH_PAT', getToken()); extra.push('GH_PAT'); }
+  // для автопродления токенов Facebook (workflow «Продление токена»)
+  if (l.info.via === 'facebook' && fbAppId() && fbSecret()) {
+    if (!names.includes('FB_APP_ID')) { await g.setSecret('FB_APP_ID', fbAppId()); extra.push('FB_APP_ID'); }
+    if (!names.includes('FB_APP_SECRET')) { await g.setSecret('FB_APP_SECRET', fbSecret()); extra.push('FB_APP_SECRET'); }
+  }
+  const added = saved.filter((x) => !x.replaced).map((x) => '@' + x.name), again = saved.filter((x) => x.replaced).map((x) => '@' + x.name);
+  const c = await g.updateConfig((x) => {
+    for (const e of entries) accounts.upsertAccount(x, { ...e, platform: 'instagram', connected: at });
+    if (l.info.via === 'facebook' && fbAppId() && !x.facebook_app_id) x.facebook_app_id = fbAppId();
+  }, `Instagram через Facebook: ${[added.length ? `добавлены ${added.join(', ')}` : '', again.length ? `обновлён вход ${again.join(', ')}` : ''].filter(Boolean).join('; ')} (виджет)`);
+  repoCfg = c;
+  logins.delete(id);
+  return { saved, extra, days: l.info.days || 0 };
 });
 handle('acc:remove', async ({ name, platform } = {}) => {
   const g = gh();
