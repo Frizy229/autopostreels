@@ -70,6 +70,11 @@ assert.deepStrictEqual(A.parseRedirect(`${RU}?code=ig123#_`, RU, ''), { code: 'i
 assert.match(A.parseRedirect(`${RU}?code=abc&state=other`, RU, 's1').error, /другого входа/);
 assert.match(A.parseRedirect(`${RU}?error=access_denied&state=s1`, RU, 's1').error, /отменён/);
 
+assert.strictEqual(A.needsBrowser('https://accounts.google.com/o/oauth2/v2/auth?x=1'), true);
+assert.strictEqual(A.needsBrowser('https://appleid.apple.com/auth/authorize'), true);
+assert.strictEqual(A.needsBrowser('https://www.tiktok.com/v2/auth/authorize/'), false);
+assert.strictEqual(A.needsBrowser('https://evil.com/?u=accounts.google.com'), false);
+
 // ---- состояние аккаунта
 const now = new Date('2026-11-06T09:00:00Z');
 const tt = { name: 'tt', platform: 'tiktok' };
