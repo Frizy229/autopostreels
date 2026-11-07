@@ -485,6 +485,50 @@ class Pipeline {
     return list;
   }
 
+  /**
+   * Страховка перед отправкой в автопостер: видео папки тяжелее limitMb (GitHub не примет файл больше ~95 МБ)
+   * пережимаются по битрейту под лимит. Нужно для папок, собранных старой версией, и для папок, добавленных вручную.
+   * Возвращает {shrunk: [имя...], failed: [текст...]}.
+   */
+  async shrinkLarge(folder, { limitMb = 90, onProgress, signal } = {}) {
+    const found = [];
+    const walk = (d) => {
+      for (const n of safeList(d)) {
+        const p = path.join(d, n);
+        let st; try { st = fs.statSync(p); } catch { continue; }
+        if (st.isDirectory()) walk(p);
+        else if (/\.(mp4|mov)$/i.test(n) && st.size > limitMb * 1048576) found.push(p);
+      }
+    };
+    walk(folder);
+    const shrunk = [], failed = [];
+    for (const [i, f] of found.entries()) {
+      const name = path.relative(folder, f);
+      if (onProgress) onProgress(i / found.length, `Сжимаю ${name}`);
+      try {
+        const info = await this.probe(f);
+        let kbps = Math.round(videoKbps(info.duration || 60, limitMb - 8) * 0.9);
+        const tmp = `${f}.shrink.mp4`;
+        let ok = false;
+        for (let k = 0; k < 3 && !ok; k++) {
+          // eslint-disable-next-line no-await-in-loop
+          await this.tools.run(this.tools.ffmpeg, ['-hide_banner', '-y', '-nostdin', '-i', f, '-c:v', 'libx264', '-preset', 'veryfast', '-b:v', `${kbps}k`,
+            '-maxrate', `${kbps}k`, '-bufsize', `${kbps * 2}k`, '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-movflags', '+faststart', tmp], { signal });
+          ok = fs.statSync(tmp).size <= limitMb * 1048576;
+          if (!ok) kbps = Math.max(800, Math.round(kbps * 0.7));
+        }
+        if (!ok) { fs.rmSync(tmp, { force: true }); throw new Error('всё равно тяжелее лимита'); }
+        fs.renameSync(tmp, f);
+        shrunk.push(name);
+      } catch (e) {
+        if (e.code === 'ABORT') throw e;
+        failed.push(`${name}: ${String(e.message).split('\n')[0]}`);
+      }
+    }
+    if (onProgress) onProgress(1, 'Готово');
+    return { shrunk, failed };
+  }
+
   // ------------------------------------------------------------ монтаж
   /**
    * Собрать папку дня. o: projectIds, name (имя папки), outputDir, onEvent({stage, i, total, label, progress, file}), signal.

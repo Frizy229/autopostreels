@@ -237,8 +237,13 @@ function registerIpc() {
   // автопостер: папку грузит виджет (Reels Widget) — через общую папку %APPDATA%\Reels Handoff
   const hoDir = () => handoff.handoffDir(app.getPath('appData'));
   // очередь берём по папке, в которую легла сборка (queue / queue-instagram / queue-tiktok)
-  handle('handoff:send', (folder, opts = {}) => handoff.request(hoDir(), { folder, lane: handoff.laneOfQueue(path.basename(path.dirname(folder))), name: path.basename(folder),
-    postNow: !!opts.postNow, accounts: Array.isArray(opts.accounts) ? opts.accounts : [] }));
+  handle('handoff:send', async (folder, opts = {}) => {
+    // GitHub не принимает файлы больше ~95 МБ: тяжёлые ролики (старая версия, ручная папка) сжимаем перед отправкой
+    const sh = await pipeline.shrinkLarge(folder);
+    if (sh.failed.length) throw new Error(`Не удалось сжать до лимита GitHub (95 МБ):\n${sh.failed.slice(0, 3).join('\n')}`);
+    return handoff.request(hoDir(), { folder, lane: handoff.laneOfQueue(path.basename(path.dirname(folder))), name: path.basename(folder),
+      postNow: !!opts.postNow, accounts: Array.isArray(opts.accounts) ? opts.accounts : [] });
+  });
   handle('handoff:igAccounts', () => handoff.readAccounts(hoDir(), 'instagram'));
   handle('handoff:status', (id) => handoff.status(hoDir(), id));
   handle('handoff:accounts', () => handoff.readAccounts(hoDir(), handoff.laneOfQueue(settings.lane) === 'shared' ? '' : handoff.laneOfQueue(settings.lane)));

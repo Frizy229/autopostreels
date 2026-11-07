@@ -1054,6 +1054,8 @@ function pageInstagram(el) {
 /** Отдать готовую папку виджету автопостера и следить, как он её грузит. */
 async function sendToAutoposter(b) {
   try {
+    b.ap = { state: 'prep', since: Date.now() };
+    if (S.page === 'build' || S.page === 'instagram') renderBuildProgress();
     const id = await call('handoffSend', b.result.folder, b.mode === 'instagram' ? { postNow: S.settings.ig.postNow, accounts: S.settings.ig.accounts } : {});
     b.ap = { id, state: 'waiting', since: Date.now() };
     if (S.page === 'build' || S.page === 'instagram') renderBuildProgress();
@@ -1066,13 +1068,13 @@ async function sendToAutoposter(b) {
       setTimeout(tick, 2000);
     };
     setTimeout(tick, 1500);
-  } catch (e) { fail(e); }
+  } catch (e) { b.ap = null; if (S.page === 'build' || S.page === 'instagram') renderBuildProgress(); fail(e); }
 }
 
 function apBlock(ap) {
   if (!ap) return '';
   const slow = ap.state === 'waiting' && Date.now() - ap.since > 20000;
-  const text = ap.state === 'waiting' ? (slow ? 'Виджет не отвечает. Запусти Reels Widget (значок в трее): он заберёт папку сам, как только откроется.' : 'Передаю папку виджету автопостера…')
+  const text = ap.state === 'prep' ? 'Проверяю размер роликов: тяжелее 90 МБ GitHub не примет, такие сожму перед отправкой…' : ap.state === 'waiting' ? (slow ? 'Виджет не отвечает. Запусти Reels Widget (значок в трее): он заберёт папку сам, как только откроется.' : 'Передаю папку виджету автопостера…')
     : ap.state === 'working' ? `Виджет загружает: ${ap.text || '…'}`
       : ap.state === 'done' && ap.ok ? `В очереди автопостера: ${ap.dest}. ${ap.posted ? 'Первые ролики уже публикуются (2–5 минут), остальные выйдут по расписанию.' : 'Дальше ролики выйдут по расписанию.'}`
         : ap.state === 'done' ? `Виджет не загрузил папку: ${ap.error}${/не совпадает ни с одним аккаунтом/.test(ap.error || '') ? ' Нажми «Каналы и тексты» → «Взять аккаунты из автопостера» и собери заново.' : ''}`
