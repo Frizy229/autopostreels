@@ -100,7 +100,8 @@
   "last_started": "2026-11-04",
   "failures": {
     "002_Night-Shift/short-5-3-10-am.mp4": 1,
-    "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1
+    "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1,
+    "instagram:003_Night-Shift/dayzerorules/short-5-3-10-am.mp4": 1
   },
   "active": null,
   "plans": {
@@ -208,6 +209,11 @@
         "media_id": "17906796354599825",
         "permalink": "https://www.instagram.com/reel/Dfb0MOdIOKh/",
         "at": "2026-11-07T09:04:02+00:00"
+      },
+      "instagram:003_Night-Shift/rulezerosurvivel/short-5-two-bells-head.mp4": {
+        "media_id": "18119600534043205",
+        "permalink": "https://www.instagram.com/reel/DfcB7ovIyfo/",
+        "at": "2026-11-07T11:04:04+00:00"
       }
     },
     "survivelzerorule": {
@@ -285,6 +291,11 @@
         "media_id": "18181007365434046",
         "permalink": "https://www.instagram.com/reel/Dfb0XZ3iMKR/",
         "at": "2026-11-07T09:05:31+00:00"
+      },
+      "instagram:003_Night-Shift/survivelzerorule/short-5-count-the-cars.mp4": {
+        "media_id": "18212113798317799",
+        "permalink": "https://www.instagram.com/reel/DfcCAEsCOR2/",
+        "at": "2026-11-07T11:04:40+00:00"
       }
     },
     "evelon185": {
