@@ -122,6 +122,18 @@ ok(/недействителен/.test(IG.igError({ error: { code: 190, message:
   ok(half.results.length === 1 && /Twitch ничего не отдал/.test(half.errors.twitch), 'Twitch не ответил — YouTube всё равно показан');
   await assert.rejects(pl.searchAll('казино', { source: 'twitch' }), /Twitch ничего не отдал/); n++;
 
+  twitchDown = false;
+  // слов запроса нет в названиях — не пусто, а последние записи и лучшие клипы с пометкой
+  const loose = await pl.searchAll('casino inst', { source: 'twitch' });
+  ok(loose.results.length > 0 && loose.results.every((e) => e.loose), 'по-английски не нашлось — показаны последние, с пометкой');
+  ok(loose.results.some((e) => e.kind === 'clip') && loose.results.some((e) => e.kind !== 'clip'));
+  ok((await pl.searchAll('казино', { source: 'twitch' })).results.every((e) => !e.loose), 'нашлось по словам — без пометки');
+  // «Показать ещё» на YouTube: следующие 40
+  eq(S.listArgs('эвелон', 40, 41).slice(4, 8), ['--playlist-start', '41', '--playlist-end', '80']);
+  calls.length = 0;
+  await pl.search('эвелон', 40, 41);
+  ok(/youtube\.com\/results/.test(calls[0]));
+
   // Instagram: не настроен — во «Всех» просто пропускается, отдельно — понятная ошибка
   twitchDown = false; urls.length = 0;
   await pl.searchAll('казино', { source: 'all' });

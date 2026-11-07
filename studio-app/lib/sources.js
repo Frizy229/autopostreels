@@ -52,11 +52,12 @@ function ytResultsUrl(q, sp) {
   return `https://www.youtube.com/results?search_query=${encodeURIComponent(String(q || '').trim())}${sp ? `&sp=${encodeURIComponent(sp)}` : ''}`;
 }
 
-/** Список видео (поиск, канал, плейлист) без скачивания. */
-function listArgs(q, limit = 20) {
+/** Список видео (поиск, канал, плейлист) без скачивания. start — с какого по счёту (для «Показать ещё»). */
+function listArgs(q, limit = 20, start = 1) {
   const target = searchTarget(q, limit);
   const a = ['--flat-playlist', '-J', '--no-warnings', '--ignore-errors'];
-  if (isUrl(target)) a.push('--playlist-end', String(limit));
+  if (isUrl(target) && start > 1) a.push('--playlist-start', String(start));
+  if (isUrl(target)) a.push('--playlist-end', String(start - 1 + limit));
   a.push(target);
   return a;
 }
