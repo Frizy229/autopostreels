@@ -9,6 +9,7 @@ const { LAYOUTS, FITS, CAM_LAYOUTS } = require('./lib/layout');
 const handoff = require('./lib/handoff');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
 const { BROWSERS, COOKIE_MODES, NET_MODES, proxyFromPac } = require('./lib/sources');
+const { LLM_MODELS, llamaAssets } = require('./lib/llm');
 const { Tools, download, whisperAssets, exe, errorTail, exitHint } = require('./lib/tools');
 const { Pipeline } = require('./lib/pipeline');
 const { MODELS, modelUrl } = require('./lib/transcribe');
@@ -103,10 +104,10 @@ function registerIpc() {
 
   // инструменты
   handle('tools:status', () => {
-    const st = tools.status((MODELS[settings.whisperModel] || MODELS.small).file);
-    return { ...st, models: MODELS, encoders: Object.fromEntries(Object.entries(ENCODERS).map(([k, v]) => [k, v.name])) };
+    const st = tools.status((MODELS[settings.whisperModel] || MODELS.small).file, (LLM_MODELS[settings.llmModel] || LLM_MODELS['7b']).file);
+    return { ...st, models: MODELS, llmModels: LLM_MODELS, encoders: Object.fromEntries(Object.entries(ENCODERS).map(([k, v]) => [k, v.name])) };
   });
-  handle('tools:install', (what) => startJob('install', { ytdlp: 'yt-dlp', whisper: 'Распознавание речи', model: 'Модель речи' }[what] || what, async (progress, signal) => {
+  handle('tools:install', (what) => startJob('install', { ytdlp: 'yt-dlp', whisper: 'Распознавание речи', model: 'Модель речи', llama: 'Нейросеть (программа)', llm: 'Нейросеть (модель)' }[what] || what, async (progress, signal) => {
     if (what === 'ytdlp') {
       const url = process.platform === 'win32' ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
         : process.platform === 'darwin' ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos'
@@ -144,6 +145,35 @@ function registerIpc() {
       const m = MODELS[settings.whisperModel] || MODELS.small;
       return download(net.fetch, modelUrl(settings.whisperModel), tools.modelPath(m.file), (p, got, total) =>
         progress(p, `Скачиваю модель ${settings.whisperModel}: ${mb(got)} из ${mb(total)}`), signal);
+    }
+    if (what === 'llama') {
+      if (process.platform !== 'win32') throw new Error('Готовая сборка есть только для Windows; на другой системе поставь llama-server сам.');
+      const AdmZip = require('adm-zip');
+      const dir = path.join(tools.binDir, 'llama');
+      const zip = path.join(tools.binDir, 'llama.zip');
+      const options = await llamaAssets(net.fetch, settings.gpu);
+      const fails = [];
+      for (const [k, a] of options.entries()) {
+        const share = 1 / options.length;
+        fs.rmSync(dir, { recursive: true, force: true });
+        for (const [i, f] of [a, ...a.extra].entries()) {
+          await download(net.fetch, f.url, zip, (p) => progress((k + (i + p) / (1 + a.extra.length) * 0.9) * share, `Скачиваю ${f.name}`), signal);
+          new AdmZip(zip).extractAllTo(dir, true);
+          fs.rmSync(zip, { force: true });
+        }
+        if (!tools.llamaServer) { fails.push(`${a.name}: в архиве нет llama-server.exe`); continue; }
+        const r = await tools.run(tools.llamaServer, ['--version'], { allowFail: true, signal, cwd: path.dirname(tools.llamaServer) })
+          .catch((e) => { if (e.code === 'ABORT') throw e; return { code: -1, stderr: e.message }; });
+        const said = `${r.stdout ? r.stdout.toString('utf8') : ''}\n${r.stderr || ''}`;
+        if (r.code === 0 || /version|usage/i.test(said)) return `${a.name}${a.kind === 'cuda' ? ' (видеокарта)' : ' (процессор)'}`;
+        fails.push(`${a.name} (код ${r.code}): ${exitHint(r.code) || errorTail(said) || 'без сообщения'}`);
+      }
+      throw new Error(`llama.cpp не запустился:\n${fails.join('\n')}`);
+    }
+    if (what === 'llm') {
+      const m = LLM_MODELS[settings.llmModel] || LLM_MODELS['7b'];
+      return download(net.fetch, m.url, tools.llmPath(m.file), (p, got, total) =>
+        progress(p, `Скачиваю нейросеть ${settings.llmModel}: ${mb(got)} из ${mb(total)}`), signal);
     }
     throw new Error('Неизвестный компонент');
   }));

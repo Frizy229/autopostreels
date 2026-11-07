@@ -1126,6 +1126,12 @@ function pageSettings(el) {
         <div class="switch"><div><b>Модель речи</b><small>${esc(s.whisperModel)}: ${esc((t.models[s.whisperModel] || {}).size)}, ${esc((t.models[s.whisperModel] || {}).note)}</small></div>
           <div class="row"><select class="input" id="model" style="width:170px;height:30px">${Object.keys(t.models).map((k) => `<option>${k}</option>`).join('')}</select>${state(!!t.model)}
           <button class="btn sm" data-inst="model">${ic('download', 'sm')}</button></div></div>
+        <div class="switch"><div><b>Нейросеть: программа</b><small>llama.cpp, читает текст моментов и ищет смешное${s.gpu ? ' на видеокарте' : ''}</small></div>
+          <div class="row">${state(!!t.llama)}<button class="btn sm" data-inst="llama">${ic('download', 'sm')}${t.llama ? 'Переставить' : 'Скачать'}</button></div></div>
+        <div class="switch"><div><b>Нейросеть: модель</b><small>${esc(s.llmModel)}: ${esc((t.llmModels[s.llmModel] || {}).size)}, ${esc((t.llmModels[s.llmModel] || {}).note)}</small></div>
+          <div class="row"><select class="input" id="llmModel" style="width:170px;height:30px">${Object.keys(t.llmModels).map((k) => `<option>${k}</option>`).join('')}</select>${state(!!t.llmModel)}
+          <button class="btn sm" data-inst="llm">${ic('download', 'sm')}</button></div></div>
+        <label class="switch"><div><b>Нейросеть оценивает смешное</b><small>после отбора читает текст каждого момента и ставит 0–10. Нужны программа и модель выше, поиск дольше на пару минут</small></div><input type="checkbox" id="llm" ${s.llm !== false ? 'checked' : ''}></label>
         <label class="switch"><div><b>Умный отбор моментов</b><small>смотрит картинку и слушает речь: убирает чёрный экран, музыку без слов, ищет смех. Поиск дольше на несколько минут</small></div><input type="checkbox" id="smartPick" ${s.smartPick !== false ? 'checked' : ''}></label>
         <label class="switch"><div><b>Видеокарта для речи</b><small>RTX 3070: да</small></div><input type="checkbox" id="gpu" ${s.gpu ? 'checked' : ''}></label>
       </div>
@@ -1185,6 +1191,9 @@ function pageSettings(el) {
   $('#model').value = s.whisperModel; $('#enc').value = s.encoder; $('#q').value = s.quality; $('#fps').value = String(s.fps); $('#mat').value = s.material;
   $$('[data-inst]').forEach((b) => { b.onclick = async () => { try { const id = await call('install', b.dataset.inst); S.jobs.set(id, { id, kind: 'install', label: b.dataset.inst, progress: 0 }); renderDock(); } catch (e) { fail(e); } }; });
   $('#model').onchange = async (e) => { await saveSettings({ whisperModel: e.target.value }, true); refreshTools(); };
+  $('#llm').onchange = (e) => saveSettings({ llm: e.target.checked }, true);
+  $('#llmModel').value = s.llmModel;
+  $('#llmModel').onchange = async (e) => { await saveSettings({ llmModel: e.target.value }, true); refreshTools(); };
   $('#smartPick').onchange = (e) => saveSettings({ smartPick: e.target.checked }, true);
   $('#gpu').onchange = (e) => saveSettings({ gpu: e.target.checked }, true);
   $('#enc').onchange = (e) => saveSettings({ encoder: e.target.value }, true);
