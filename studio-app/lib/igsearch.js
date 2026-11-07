@@ -22,7 +22,9 @@ function igError(j, status) {
   const m = e.message || `HTTP ${status}`;
   if (e.code === 190) return 'Токен Instagram недействителен или истёк: вставь новый в Настройках → «Поиск в Instagram».';
   if (e.code === 10 || e.code === 200 || /permission|public content/i.test(m)) {
-    return `Meta не даёт искать по хэштегам: ${m}\nВ приложении Meta (developers.facebook.com → твоё приложение → Права) нужен доступ «Instagram Public Content Access» и право instagram_basic у токена.`;
+    return `Meta не даёт искать по хэштегам: функция «Instagram Public Content Access» у твоего приложения не одобрена (нужна проверка Meta, это долго и не всегда проходит).\n`
+      + 'Что можно уже сейчас: 1) ищи по аккаунту: напиши @ник или вставь ссылку на профиль (работает для публичных бизнес- и авторских аккаунтов, ревью не нужно); '
+      + '2) вставь ссылки на нужные рилсы в поле «Добавить по ссылке» вверху.';
   }
   if (e.code === 24 || /30 unique hashtags|hashtag.*limit/i.test(m)) return 'Лимит Meta: не больше 30 разных хэштегов за 7 дней на аккаунт. Ищи по уже использованным хэштегам или подожди.';
   if (e.code === 4 || e.code === 17 || e.code === 32) return 'Meta временно ограничила запросы: подожди несколько минут.';
@@ -57,6 +59,47 @@ function normMedia(m, tag) {
   };
 }
 
+/** Аккаунты из запроса: «@ник», «instagram.com/ник» (без /reel/ и /p/). До 3. */
+function accountsOf(q) {
+  const out = [];
+  const s = String(q || '');
+  for (const m of s.matchAll(/instagram\.com\/(?!reels?\/|p\/|tv\/|stories\/|explore\/)([\w.]+)/gi)) out.push(m[1]);
+  for (const m of s.matchAll(/(?:^|\s)@([\w.]{2,30})/g)) out.push(m[1]);
+  return [...new Set(out.map((x) => x.toLowerCase().replace(/\.$/, '')))].slice(0, 3);
+}
+
+/**
+ * Рилсы публичного бизнес- или авторского аккаунта через business_discovery (право instagram_basic, без Public Content Access).
+ * Личные аккаунты Meta не отдаёт.
+ */
+async function searchAccount(fetch, cfg, name, { limit = 50 } = {}) {
+  const tok = encodeURIComponent(cfg.token), uid = encodeURIComponent(cfg.userId);
+  const fields = `business_discovery.username(${name}){username,media.limit(${limit}){id,media_type,caption,permalink,like_count,comments_count,timestamp,thumbnail_url}}`;
+  let j;
+  try { j = await getJson(fetch, `${API}/${uid}?fields=${encodeURIComponent(fields)}&access_token=${tok}`); } catch (e) {
+    const m = (e.meta && e.meta.message) || e.message;
+    if (e.code === 'IG' && (e.meta && (e.meta.code === 110 || e.meta.code === 100 || e.meta.error_subcode === 2207013) || /business_discovery|Invalid user id|cannot be accessed|username/i.test(m))) {
+      throw Object.assign(new Error(`Аккаунт @${name} не найден или личный: Meta отдаёт только публичные бизнес- и авторские аккаунты. Для остальных вставляй ссылки на рилсы.`), { code: 'IG' });
+    }
+    throw e;
+  }
+  const media = (((j.business_discovery || {}).media || {}).data) || [];
+  return media.filter((m) => m.media_type === 'VIDEO' && m.permalink).map((m) => ({ ...normMedia(m, name), channel: `@${name}`, title: String(m.caption || '').split('\n').map((x) => x.trim()).find(Boolean)?.slice(0, 120) || `@${name}`, thumb: m.thumbnail_url || '' }));
+}
+
+/** Instagram: если в запросе есть @ник или ссылка на профиль — по аккаунту, иначе по хэштегу. */
+async function searchInstagram(fetch, cfg, q, o = {}) {
+  const names = accountsOf(q);
+  if (!names.length) return searchHashtags(fetch, cfg, q, o);
+  if (!cfg || !cfg.token || !cfg.userId) throw Object.assign(new Error('Поиск в Instagram не настроен: вставь токен в Настройках → «Поиск в Instagram».'), { code: 'IG_SETUP' });
+  const out = [], errs = [];
+  for (const n of names) {
+    try { out.push(...await searchAccount(fetch, cfg, n, o)); } catch (e) { errs.push(e.message); }
+  }
+  if (!out.length) throw new Error(errs.join('\n') || `У @${names.join(', @')} нет рилсов.`);
+  return out.sort((a, b) => b.likes - a.likes).slice(0, o.limit || 50);
+}
+
 /**
  * Поиск: для каждого хэштега — популярные (top_media) и свежие (recent_media) публикации, только видео.
  * cfg: {token, userId}. Возвращает карточки без повторов, по лайкам.
@@ -86,4 +129,4 @@ async function searchHashtags(fetch, cfg, q, { limit = 50 } = {}) {
   return out.sort((a, b) => b.likes - a.likes).slice(0, limit);
 }
 
-module.exports = { API, hashtagsOf, igError, igAccounts, normMedia, searchHashtags };
+module.exports = { API, accountsOf, searchAccount, searchInstagram, hashtagsOf, igError, igAccounts, normMedia, searchHashtags };

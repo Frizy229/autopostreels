@@ -58,6 +58,37 @@ ok(/Public Content Access/.test(IG.igError({ error: { code: 10, message: 'Applic
 ok(/30 разных хэштегов/.test(IG.igError({ error: { code: 24, message: 'max 30 unique hashtags' } })));
 ok(/недействителен/.test(IG.igError({ error: { code: 190, message: 'expired' } })));
 
+// ---- Instagram по аккаунту (без Public Content Access)
+eq(IG.accountsOf('@evelone2004'), ['evelone2004']);
+eq(IG.accountsOf('https://www.instagram.com/evelone2004/reels/ @dayzero'), ['evelone2004', 'dayzero']);
+eq(IG.accountsOf('https://www.instagram.com/reel/ABC/'), [], 'ссылка на рилс — не аккаунт');
+eq(IG.accountsOf('#казино'), []);
+ok(/Instagram Public Content Access/.test(IG.igError({ error: { code: 10, message: 'x' } })) && /@ник/.test(IG.igError({ error: { code: 10, message: 'x' } })), 'ошибка Meta #10 подсказывает аккаунт и ссылки');
+(async () => {
+  const urls = [];
+  const fakeIg = async (u) => {
+    urls.push(u);
+    if (/business_discovery/.test(u)) {
+      if (/username\(private\)/.test(u)) return { ok: false, status: 400, json: async () => ({ error: { code: 110, message: 'Invalid user id' } }) };
+      return { ok: true, json: async () => ({ business_discovery: { media: { data: [
+        { id: '1', media_type: 'VIDEO', permalink: 'https://www.instagram.com/reel/A/', caption: 'Занос\nхэш', like_count: 50, thumbnail_url: 'https://t/1.jpg' },
+        { id: '2', media_type: 'IMAGE', permalink: 'https://www.instagram.com/p/B/', like_count: 99 },
+        { id: '3', media_type: 'VIDEO', permalink: 'https://www.instagram.com/reel/C/', caption: 'Второй', like_count: 70 }] } } }) };
+    }
+    return { ok: false, status: 400, json: async () => ({ error: { code: 10, message: 'Application does not have permission' } }) };
+  };
+  const cfg = { token: 't', userId: '17841431768361264' };
+  const acc = await IG.searchInstagram(fakeIg, cfg, '@dayzero');
+  eq(acc.map((x) => x.url), ['https://www.instagram.com/reel/C/', 'https://www.instagram.com/reel/A/'], 'только видео, по лайкам');
+  eq(acc[0].channel, '@dayzero'); eq(acc[1].thumb, 'https://t/1.jpg'); eq(acc[1].title, 'Занос');
+  ok(!urls.some((u) => /ig_hashtag_search/.test(u)), 'по аккаунту хэштеги не трогаем');
+  let err = ''; try { await IG.searchInstagram(fakeIg, cfg, '@private'); } catch (e) { err = e.message; }
+  ok(/не найден или личный/.test(err), 'личный аккаунт — понятная ошибка');
+  err = ''; try { await IG.searchInstagram(fakeIg, cfg, '#казино'); } catch (e) { err = e.message; }
+  ok(/Public Content Access/.test(err) && /ссылк/.test(err), 'хэштег без доступа — понятная ошибка с выходом');
+  n += 0;
+})().catch((e) => { console.error(e); process.exit(1); });
+
 (async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-'));
   const calls = [];

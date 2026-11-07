@@ -133,7 +133,7 @@ const QUICK = [
 function pageSearch(el) {
   const s = S.settings;
   el.innerHTML = `
-    <div class="search-box">${ic('search')}<input id="q" class="input" placeholder="Что искать: «эвелон казино», ссылка на канал, плейлист или видео" value="${esc(S.lastQuery)}"></div>
+    <div class="search-box">${ic('search')}<input id="q" class="input" placeholder="Что искать: «эвелон казино», #хэштег или @аккаунт Instagram, ссылка на канал, плейлист или видео" value="${esc(S.lastQuery)}"></div>
     <div class="row wrap" style="margin:12px 0 10px">
       <div class="seg" id="srcSeg">${[['all', 'Все'], ['youtube', 'YouTube'], ['twitch', 'Twitch'], ['instagram', 'Instagram']].map(([k, t]) => `<button class="${(S.srcView || s.searchSource) === k ? 'on' : ''}" data-src="${k}">${t}${S.results.length && k !== 'all' ? ` <span class="faint num">${S.results.filter((v) => v.platform === k).length}</span>` : ''}</button>`).join('')}</div>
       <label class="row muted" style="font-size:12.5px">Twitch-каналы <input id="twCh" class="input" style="width:220px;height:30px" value="${esc(s.twitchChannels.join(', '))}" title="Через запятую, до 5. В Twitch ищутся записи, хайлайты и клипы этих каналов по словам запроса"></label>
@@ -225,7 +225,7 @@ function drawResults() {
   const added = new Set(S.projects.map((p) => p.source.url));
   const shown = S.results.map((v, i) => ({ v, i })).filter(({ v }) => src === 'all' || v.platform === src);
   const loose = shown.some(({ v }) => v.loose) ? `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>В Twitch по словам «${esc(S.lastQuery)}» ничего</b><small>Twitch не умеет искать по всем видео, программа смотрит только названия записей и клипов каналов ${esc(S.settings.twitchChannels.join(', '))}. Поэтому показаны последние записи и лучшие клипы. Стримы обычно названы по-русски: попробуй русские слова или добавь каналы.</small></div></div>` : '';
-  const warn = loose + Object.entries(S.searchWarn || {}).map(([k, m]) => `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>${k === 'twitch' ? 'Twitch' : 'YouTube'} не ответил</b><small>${esc(String(m).split('\n').slice(0, 3).join(' '))}</small></div></div>`).join('');
+  const warn = loose + Object.entries(S.searchWarn || {}).map(([k, m]) => `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>${{ twitch: 'Twitch', instagram: 'Instagram' }[k] || 'YouTube'} не ответил</b><small>${esc(String(m).split('\n').slice(0, 3).join(' '))}</small></div></div>`).join('');
   if (!shown.length) { el.innerHTML = `${warn}<div class="empty">${ic('list-video')}<b>Здесь ничего</b>${src === 'twitch' ? `В названиях записей и клипов ${esc(S.settings.twitchChannels.join(', '))} нет слов запроса. Попробуй другие слова или добавь каналы.` : 'Попробуй другой запрос или другой источник.'}</div>`; return; }
   el.innerHTML = `${warn}<div class="results">${shown.map(({ v, i }) => `
     <div class="vcard">

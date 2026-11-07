@@ -11,9 +11,9 @@ const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
 const { layoutOutput, writeTexts, checkFolder, nextFolderNumber, slugify } = require('./output');
 const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe, videoKbps, MAX_FILE_MB } = require('./render');
-const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, twitchTargets, filterByQuery, isInstagramProfile, isShortSource, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
+const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, twitchTargets, filterByQuery, isInstagramProfile, isShortSource, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, cookieWhy, authHelp } = require('./sources');
 const { checkMoment } = require('./rules');
-const { searchHashtags } = require('./igsearch');
+const { searchInstagram } = require('./igsearch');
 const { whisperArgs, wavArgs, parseWhisperJson, whisperTags, MODELS } = require('./transcribe');
 const { judgeMoment, excerpt, parseVisual, visualArgs } = require('./judge');
 const { LLM_MODELS, LlmServer, momentText, llmBonus } = require('./llm');
@@ -90,7 +90,7 @@ class Pipeline {
       runOpts.signal = ctrl.signal;
     }
     const net = proxyArgs(this.settings().net, this.systemProxy());
-    const tried = [];
+    const tried = [], notes = [];
     let authHit = false, last = null, empty = false, emptyRes = null, netFail = false;
     try {
       for (const auth of plan) {
@@ -102,7 +102,7 @@ class Pipeline {
           if (timedOut) throw Object.assign(new Error(`yt-dlp не ответил за ${timeoutSec} с. Проверь интернет или VPN и повтори; если не поможет, обнови yt-dlp в Настройках → Компоненты.`), { code: 'TIMEOUT' });
           throw e;
         }
-        tried.push(auth);
+        tried.push(auth); notes.push(cookieWhy(r.stderr, auth));
         const out = r.stdout ? r.stdout.toString('utf8').trim() : '';
         // accept: ответ годится (например, в поиске есть хоть одно видео); иначе — код 0 или (okIfStdout) непустой вывод
         const ok = accept ? accept(r, out) : (r.code === 0 || (okIfStdout && out));
@@ -121,7 +121,7 @@ class Pipeline {
     if (empty && !authHit) last = emptyRes;
     this.logYtdlp([...net, ...args], last);
     if (netFail) throw Object.assign(new Error(netHelp(target, net.length && net[1])), { code: 'NET', res: last });
-    if (authHit) throw Object.assign(new Error(authHelp(tried.filter(Boolean).length ? tried : [], target)), { code: 'AUTH', res: last });
+    if (authHit) throw Object.assign(new Error(authHelp(tried, target, notes)), { code: 'AUTH', res: last });
     const tail = String((last && last.stderr) || '').trim().split(/\r?\n/).filter((l) => l && !/^\[(debug|info)\]/i.test(l)).slice(-3).join('\n');
     if (empty) throw Object.assign(new Error(`YouTube ничего не вернул.${tail ? `\n${tail}` : ''}\nПопробуй другой запрос, обнови yt-dlp (Настройки → Компоненты) или войди в YouTube (Настройки → «Вход в YouTube»).`), { code: 'EMPTY', res: last });
     throw Object.assign(new Error(`yt-dlp: код ${last.code}\n${tail}`), { res: last });
@@ -191,7 +191,7 @@ class Pipeline {
     if (src === 'all' || src === 'twitch') jobs.twitch = this.searchTwitch(q, s.twitchChannels || ['evelone2004'], o);
     // Instagram: по хэштегу через Graph API; во «Всех» — только если поиск настроен
     const ig = s.igSearch || {};
-    if (src === 'instagram' || (src === 'all' && ig.token && ig.userId)) jobs.instagram = searchHashtags(this.fetch, ig, q);
+    if (src === 'instagram' || (src === 'all' && ig.token && ig.userId)) jobs.instagram = searchInstagram(this.fetch, ig, q);
     const names = Object.keys(jobs);
     const done = await Promise.allSettled(names.map((k) => jobs[k]));
     const results = [], errors = {};

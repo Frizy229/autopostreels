@@ -59,4 +59,13 @@ assert.ok(S.isShortSource({ kind: 'url', duration: 45 }));
 assert.ok(!S.isShortSource({ kind: 'url', duration: 7200 }));
 assert.ok(!S.isShortSource({ kind: 'file', duration: 45 }));
 assert.ok(!S.isShortSource({ kind: 'url', duration: 0 }), 'длина неизвестна — качаем кусками, как раньше');
-console.log('источники: 48 проверок');
+// причина по каждому способу входа
+assert.match(S.cookieWhy('ERROR: Failed to decrypt with DPAPI', { browser: 'edge' }), /Firefox или файл cookies\.txt/);
+assert.match(S.cookieWhy('could not find firefox cookies database', { browser: 'firefox' }), /не найден/);
+assert.match(S.cookieWhy('Could not copy Chrome cookie database', { browser: 'chrome' }), /закрой этот браузер/);
+assert.match(S.cookieWhy('Sign in to confirm you are not a bot', null), /не бот/);
+const help = S.authHelp([null, { browser: 'edge' }], 'https://youtu.be/1', ['без входа', 'Windows не даёт прочитать cookies']);
+assert.match(help, /• без входа: без входа/);
+assert.match(help, /• cookies Edge: Windows не даёт/);
+assert.match(help, /Get cookies\.txt LOCALLY/);
+console.log('источники: 56 проверок');
