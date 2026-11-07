@@ -53,6 +53,20 @@ function parseWhisperJson(json, offset = 0) {
   return words;
 }
 
+/** Подписи звука, которые whisper ставит вместо слов: [музыка], (смех), [аплодисменты]. Считаем, сколько каких. */
+function whisperTags(json) {
+  const o = typeof json === 'string' ? JSON.parse(json) : json;
+  const tags = { music: 0, laugh: 0, applause: 0 };
+  for (const seg of (o && o.transcription) || []) {
+    const t = String(seg.text || '').trim();
+    if (!/^[\[(♪*].*[\])♪*]$|^♪/.test(t)) continue;
+    if (/музык|music|♪/i.test(t)) tags.music++;
+    else if (/смех|смеет|смеёт|хохот|laugh/i.test(t)) tags.laugh++;
+    else if (/аплодис|applause|clap/i.test(t)) tags.applause++;
+  }
+  return tags;
+}
+
 /** Текст из слов (для поиска/ИИ), с метками времени раз в ~15 с. */
 function wordsToText(words, every = 15) {
   let out = '', last = -Infinity;
@@ -63,4 +77,4 @@ function wordsToText(words, every = 15) {
   return out.trim();
 }
 
-module.exports = { MODELS, modelUrl, whisperArgs, wavArgs, parseWhisperJson, wordsToText };
+module.exports = { MODELS, modelUrl, whisperArgs, wavArgs, parseWhisperJson, whisperTags, wordsToText };

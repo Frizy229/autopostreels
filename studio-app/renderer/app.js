@@ -398,6 +398,9 @@ function pageProjects(el) {
 function checkBadges(m) {
   const c = m.check;
   const out = [];
+  if (m.junk) out.push(`<span class="badge err">${ic('trash-2', 'sm')}мусор: ${esc(m.junk)}</span>`);
+  for (const w of (m.judge && m.judge.warn) || []) out.push(`<span class="badge warn">${esc(w)}</span>`);
+  for (const w of (!m.junk && m.why) || []) out.push(`<span class="badge acc">${ic('sparkle', 'sm')}${esc(w)}</span>`);
   if (m.wordCount != null || (m.words && m.words.length)) out.push(`<span class="badge">${ic('captions', 'sm')}${m.wordCount ?? m.words.length} слов</span>`);
   if (c) {
     for (const i of c.issues) out.push(`<span class="badge err">${ic('triangle-alert', 'sm')}${esc(i)}</span>`);
@@ -437,6 +440,7 @@ function projectMain(pr) {
         <input id="mStart" class="input num" style="width:86px;height:30px" placeholder="12:30"><span class="faint">–</span><input id="mEnd" class="input num" style="width:86px;height:30px" placeholder="13:05">
         <button class="btn sm" id="mAdd">${ic('plus', 'sm')}Свой отрезок</button>
       </div>
+      ${pr.judgeNote ? `<p class="hint" style="margin-top:6px">${esc(pr.judgeNote)}</p>` : ''}
       <p class="hint" style="margin-top:6px">Заголовок пишется в две строки через «|»: «Контратака | хорошая». Галочка «Эвелон главный» — твоя проверка по правилам конкурса${s.rules.requireOk ? ' (без неё момент не соберётся)' : ''}.</p>
       <div id="mprev"></div>
       <div class="moments">${pr.moments.map((m) => `
@@ -445,6 +449,7 @@ function projectMain(pr) {
           <div class="tm"><b>${fmtTime(m.start)}–${fmtTime(m.end)}</b><span class="muted">${Math.round(m.end - m.start)} с${m.manual ? ' · свой' : ''}${m.whole && !m.trimmed ? ' · всё видео' : ''}${m.trimmed ? ' · обрезан' : ''}</span>
             <div class="score"><i style="width:${Math.max(4, (m.score || 0) / maxScore * 100)}%"></i></div></div>
           <div class="grow"><input class="input" data-title value="${esc(m.title || '')}" placeholder="Заголовок: строка 1 | строка 2">
+            ${m.excerpt ? `<div class="faint" style="font-size:12px;margin-top:4px">«${esc(m.excerpt)}»</div>` : ''}
             <div class="chk">${checkBadges(m)}</div></div>
           <div class="tools">
             <button class="btn sm icon ghost" data-play title="Посмотреть">${ic('play', 'sm')}</button>
@@ -1121,6 +1126,7 @@ function pageSettings(el) {
         <div class="switch"><div><b>Модель речи</b><small>${esc(s.whisperModel)}: ${esc((t.models[s.whisperModel] || {}).size)}, ${esc((t.models[s.whisperModel] || {}).note)}</small></div>
           <div class="row"><select class="input" id="model" style="width:170px;height:30px">${Object.keys(t.models).map((k) => `<option>${k}</option>`).join('')}</select>${state(!!t.model)}
           <button class="btn sm" data-inst="model">${ic('download', 'sm')}</button></div></div>
+        <label class="switch"><div><b>Умный отбор моментов</b><small>смотрит картинку и слушает речь: убирает чёрный экран, музыку без слов, ищет смех. Поиск дольше на несколько минут</small></div><input type="checkbox" id="smartPick" ${s.smartPick !== false ? 'checked' : ''}></label>
         <label class="switch"><div><b>Видеокарта для речи</b><small>RTX 3070: да</small></div><input type="checkbox" id="gpu" ${s.gpu ? 'checked' : ''}></label>
       </div>
       <div class="card">
@@ -1179,6 +1185,7 @@ function pageSettings(el) {
   $('#model').value = s.whisperModel; $('#enc').value = s.encoder; $('#q').value = s.quality; $('#fps').value = String(s.fps); $('#mat').value = s.material;
   $$('[data-inst]').forEach((b) => { b.onclick = async () => { try { const id = await call('install', b.dataset.inst); S.jobs.set(id, { id, kind: 'install', label: b.dataset.inst, progress: 0 }); renderDock(); } catch (e) { fail(e); } }; });
   $('#model').onchange = async (e) => { await saveSettings({ whisperModel: e.target.value }, true); refreshTools(); };
+  $('#smartPick').onchange = (e) => saveSettings({ smartPick: e.target.checked }, true);
   $('#gpu').onchange = (e) => saveSettings({ gpu: e.target.checked }, true);
   $('#enc').onchange = (e) => saveSettings({ encoder: e.target.value }, true);
   $('#q').onchange = (e) => saveSettings({ quality: e.target.value }, true);

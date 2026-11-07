@@ -14,7 +14,8 @@ const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, par
 const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, twitchTargets, filterByQuery, isInstagramProfile, isShortSource, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
 const { checkMoment } = require('./rules');
 const { searchHashtags } = require('./igsearch');
-const { whisperArgs, wavArgs, parseWhisperJson, MODELS } = require('./transcribe');
+const { whisperArgs, wavArgs, parseWhisperJson, whisperTags, MODELS } = require('./transcribe');
+const { judgeMoment, excerpt, parseVisual, visualArgs } = require('./judge');
 
 const hasEntries = (r, out) => { if (!out) return false; try { return parseList(out).length > 0; } catch { return false; } };
 const uid = () => crypto.randomBytes(5).toString('hex');
@@ -290,30 +291,90 @@ class Pipeline {
   async analyze(id, onProgress, signal) {
     const pr = this.get(id);
     const s = this.settings();
-    const audio = await this.audioSource(pr, (p, t) => onProgress && onProgress(p * 0.4, t), signal);
+    const audio = await this.audioSource(pr, (p, t) => onProgress && onProgress(p * 0.3, t), signal);
     if (!pr.source.duration) pr.source.duration = (await this.probe(audio)).duration;
     const env = new Envelope(8000, 0.5);
     const dur = pr.source.duration || 1;
     let samples = 0;
-    if (onProgress) onProgress(0.4, 'Слушаю звук');
+    if (onProgress) onProgress(0.3, 'Слушаю звук');
     await this.tools.run(this.tools.ffmpeg, envelopeArgs(audio), {
-      signal, onStdout: (b) => { env.push(b); samples += b.length / 2; if (onProgress) onProgress(0.4 + 0.5 * Math.min(1, samples / 8000 / dur), 'Слушаю звук'); },
+      signal, onStdout: (b) => { env.push(b); samples += b.length / 2; if (onProgress) onProgress(0.3 + 0.3 * Math.min(1, samples / 8000 / dur), 'Слушаю звук'); },
     });
     const values = env.finish();
-    if (onProgress) onProgress(0.92, 'Смотрю чат');
+    if (onProgress) onProgress(0.62, 'Смотрю чат');
     const chat = await this.chatTimes(pr, signal);
     const need = Math.max(20, Math.ceil(s.channels.length * s.perChannel * 1.5));
     // короткое видео (рилс, клип) — один момент на всю длину, обрезать можно вручную
     const whole = dur <= Math.max(60, s.maxLen) * 1.3;
+    // умный отбор: берём вдвое больше кандидатов, смотрим картинку и слушаем речь, мусор убираем, смешное поднимаем
+    const smart = s.smartPick !== false && !whole;
     const found = whole ? [{ start: 0, end: Math.round(dur * 100) / 100, peak: dur / 2, score: 0, whole: true }]
-      : findMoments(values, { winSec: env.winSec, minLen: s.minLen, maxLen: s.maxLen, count: need, chat });
+      : findMoments(values, { winSec: env.winSec, minLen: s.minLen, maxLen: s.maxLen, count: smart ? Math.min(60, need * 2) : need, chat });
     const old = new Map((pr.moments || []).map((m) => [`${m.start}-${m.end}`, m]));
     pr.moments = found.map((m, i) => old.get(`${m.start}-${m.end}`) || { id: uid(), ...m, title: '', selected: i < need });
+    pr.judgeNote = '';
+    if (smart) pr.judgeNote = await this.judgeMoments(pr, { env: values, winSec: env.winSec, need }, (p, t) => onProgress && onProgress(0.65 + p * 0.35, t), signal);
     pr.envelope = downsample(values, 600);
     pr.chatCount = chat.length;
     pr.analyzed = Date.now();
     if (onProgress) onProgress(1, 'Готово');
     return this.save(pr);
+  }
+
+  /**
+   * Низкое разрешение отрезка + ffmpeg blackdetect/freezedetect: какая доля — чёрный экран, какая — стоп-кадр.
+   * Ссылки: качается только этот отрезок в 360p (несколько МБ). Возвращает {black, frozen}.
+   */
+  async visual(pr, m, signal) {
+    const dur = m.end - m.start;
+    let args, tmp = null, secDur = dur;
+    if (pr.source.kind === 'file') args = visualArgs(pr.source.path, { start: m.start, dur });
+    else if (isShortSource(pr.source)) args = visualArgs(await this.wholeVideo(pr, null, signal), { start: m.start, dur });
+    else {
+      const a = Math.max(0, Math.floor(m.start)), b = Math.ceil(m.end);
+      secDur = b - a;
+      tmp = this.cache(pr, `lo_${a}_${b}.mp4`);
+      if (!fs.existsSync(tmp)) await this.ytdlp(downloadArgs(pr.source.url, { sections: [[a, b]], videoOnly: true, maxHeight: 360, out: tmp, ffmpeg: this.tools.ffmpeg }), pr.source.url, { signal });
+      args = visualArgs(tmp, {});
+    }
+    try {
+      const r = await this.tools.run(this.tools.ffmpeg, args, { signal, allowFail: true });
+      return parseVisual(r.stderr, secDur);
+    } finally { if (tmp) fs.rmSync(tmp, { force: true }); }
+  }
+
+  /**
+   * Оценить кандидатов: картинка (чёрный экран, стоп-кадр), речь (слова, музыка без слов), смех, ровность звука.
+   * Мусор снимается с выбора и получает причину; остальные ранжируются по громкости + «смешному». Возвращает заметку для экрана.
+   */
+  async judgeMoments(pr, o, onProgress, signal) {
+    const s = this.settings();
+    const model = this.tools.modelPath((MODELS[s.whisperModel] || MODELS.small).file);
+    const canSpeak = !!this.tools.whisper && fs.existsSync(model);
+    const todo = pr.moments.filter((m) => !m.judge).slice(0, 40);
+    let speechErr = '', visualFails = 0;
+    for (const [i, m] of todo.entries()) {
+      if (onProgress) onProgress(i / Math.max(1, todo.length), `Смотрю и слушаю моменты: ${i + 1} из ${todo.length}`);
+      let visual = null, words = null;
+      try { visual = await this.visual(pr, m, signal); } catch (e) { if (e.code === 'ABORT') throw e; visualFails++; }
+      try { words = await this.words(pr, m, signal); if (words) m.words = words; } catch (e) { if (e.code === 'ABORT') throw e; speechErr = speechErr || String(e.message).split('\n')[0]; }
+      const j = judgeMoment(m, { env: o.env, winSec: o.winSec, words, visual, tags: m.tags });
+      m.judge = { junk: j.junk, warn: j.warn, why: j.why, bonus: j.bonus, laughs: j.laughs, visual, speech: !!words };
+      m.junk = j.junk; m.why = j.why;
+      m.excerpt = words ? excerpt(words, m.start, m.end) : '';
+    }
+    // порядок: сначала хорошие по оценке, мусор в конце; выбраны лучшие need штук без мусора
+    const rank = (m) => (m.score || 0) + ((m.judge && m.judge.bonus) || 0);
+    pr.moments.sort((a, b) => (!!a.junk - !!b.junk) || rank(b) - rank(a));
+    let n = 0;
+    for (const m of pr.moments) { m.selected = !m.junk && n < o.need; if (m.selected) n++; }
+    const junk = pr.moments.filter((m) => m.junk).length;
+    const notes = [];
+    if (!canSpeak) notes.push('Распознавание речи не установлено (Настройки → Компоненты): музыка без слов и смех не отсеиваются и не ищутся. Остальная проверка работает.');
+    else if (speechErr) notes.push(`Речь проверить не удалось: ${speechErr}`);
+    if (visualFails >= todo.length && todo.length) notes.push('Картинку проверить не удалось (видео не скачалось): чёрный экран не отсеивается.');
+    if (junk) notes.push(`Отсеяно мусора: ${junk}.`);
+    return notes.join(' ');
   }
 
   /** Добавить момент вручную. */
@@ -379,7 +440,9 @@ class Pipeline {
       if (e.code === 'ABORT') throw e;
       throw Object.assign(new Error(whisperHelp(e)), { res: e.res });
     }
-    const words = parseWhisperJson(fs.readFileSync(`${base}.json`, 'utf8'), m.start);
+    const raw = fs.readFileSync(`${base}.json`, 'utf8');
+    const words = parseWhisperJson(raw, m.start);
+    m.tags = whisperTags(raw);      // [музыка], (смех) — пригодится при оценке момента
     fs.rmSync(wav, { force: true });
     return words;
   }
