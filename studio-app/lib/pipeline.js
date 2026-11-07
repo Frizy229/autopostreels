@@ -16,6 +16,7 @@ const { checkMoment } = require('./rules');
 const { searchHashtags } = require('./igsearch');
 const { whisperArgs, wavArgs, parseWhisperJson, whisperTags, MODELS } = require('./transcribe');
 const { judgeMoment, excerpt, parseVisual, visualArgs } = require('./judge');
+const { LLM_MODELS, LlmServer, momentText, llmBonus } = require('./llm');
 
 const hasEntries = (r, out) => { if (!out) return false; try { return parseList(out).length > 0; } catch { return false; } };
 const uid = () => crypto.randomBytes(5).toString('hex');
@@ -354,7 +355,7 @@ class Pipeline {
     const todo = pr.moments.filter((m) => !m.judge).slice(0, 40);
     let speechErr = '', visualFails = 0;
     for (const [i, m] of todo.entries()) {
-      if (onProgress) onProgress(i / Math.max(1, todo.length), `Смотрю и слушаю моменты: ${i + 1} из ${todo.length}`);
+      if (onProgress) onProgress(0.85 * i / Math.max(1, todo.length), `Смотрю и слушаю моменты: ${i + 1} из ${todo.length}`);
       let visual = null, words = null;
       try { visual = await this.visual(pr, m, signal); } catch (e) { if (e.code === 'ABORT') throw e; visualFails++; }
       try { words = await this.words(pr, m, signal); if (words) m.words = words; } catch (e) { if (e.code === 'ABORT') throw e; speechErr = speechErr || String(e.message).split('\n')[0]; }
@@ -363,6 +364,7 @@ class Pipeline {
       m.junk = j.junk; m.why = j.why;
       m.excerpt = words ? excerpt(words, m.start, m.end) : '';
     }
+    const llmNote = await this.llmScore(pr, s, onProgress, signal);
     // порядок: сначала хорошие по оценке, мусор в конце; выбраны лучшие need штук без мусора
     const rank = (m) => (m.score || 0) + ((m.judge && m.judge.bonus) || 0);
     pr.moments.sort((a, b) => (!!a.junk - !!b.junk) || rank(b) - rank(a));
@@ -374,7 +376,42 @@ class Pipeline {
     else if (speechErr) notes.push(`Речь проверить не удалось: ${speechErr}`);
     if (visualFails >= todo.length && todo.length) notes.push('Картинку проверить не удалось (видео не скачалось): чёрный экран не отсеивается.');
     if (junk) notes.push(`Отсеяно мусора: ${junk}.`);
+    if (llmNote) notes.push(llmNote);
     return notes.join(' ');
+  }
+
+  /**
+   * Нейросеть читает текст каждого не-мусорного момента и ставит 0–10 за «смешное и цепляющее».
+   * Сервер поднимается один раз на весь поиск. Нет программы или модели — тихо пропускаем (заметка только если включено, но не установлено).
+   * Возвращает заметку для экрана или ''.
+   */
+  async llmScore(pr, s, onProgress, signal) {
+    if (s.llm === false) return '';
+    const file = (LLM_MODELS[s.llmModel] || LLM_MODELS['7b']).file;
+    const bin = this.tools.llamaServer, model = this.tools.llmPath(file);
+    if (!bin || !fs.existsSync(model)) return 'Нейросеть для оценки смешного не установлена (Настройки → Компоненты): момент оценивается только по признакам.';
+    const list = pr.moments.filter((m) => !m.junk && m.words && m.words.length >= 5);
+    if (!list.length) return '';
+    const server = this.llmFactory ? this.llmFactory({ bin, model, gpu: s.gpu }) : new LlmServer({ bin, model, gpu: s.gpu });
+    try {
+      if (onProgress) onProgress(0.85, 'Запускаю нейросеть');
+      await server.start(signal);
+      let done = 0, fails = 0;
+      for (const m of list) {
+        if (signal && signal.aborted) { const e = new Error('Остановлено'); e.code = 'ABORT'; throw e; }
+        if (onProgress) onProgress(0.88 + 0.12 * done / list.length, `Нейросеть читает моменты: ${++done} из ${list.length}`);
+        let sc = null;
+        try { sc = await server.score(momentText(m.words, m.start, m.end)); } catch (e) { if (e.code === 'ABORT') throw e; fails++; }
+        if (sc == null) continue;
+        const b = llmBonus(sc);
+        m.judge.llm = sc; m.judge.bonus = Math.round((m.judge.bonus + b) * 100) / 100;
+        m.why = [...(m.why || []), `нейросеть: ${sc}/10`];
+      }
+      return fails ? `Нейросеть не смогла оценить моментов: ${fails}.` : '';
+    } catch (e) {
+      if (e.code === 'ABORT') throw e;
+      return `Нейросеть не сработала: ${String(e.message).split('\n')[0]}`;
+    } finally { server.stop(); }
   }
 
   /** Добавить момент вручную. */

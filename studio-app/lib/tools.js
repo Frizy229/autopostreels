@@ -59,12 +59,17 @@ class Tools {
       || which('whisper-cli')
       || findFile(dir, (n, d) => n.toLowerCase() === exe('main').toLowerCase() && !isDeprecationStub(path.join(d, n)));
   }
+  get llamaServer() {
+    return findFile(path.join(this.binDir, 'llama'), (n) => n.toLowerCase() === exe('llama-server').toLowerCase()) || which('llama-server');
+  }
+  llmPath(file) { return path.join(this.binDir, 'models', file); }
   modelPath(file) { return path.join(this.binDir, 'models', file); }
 
-  status(modelFile) {
+  status(modelFile, llmFile) {
     return {
-      ffmpeg: this.ffmpeg, ytdlp: this.ytdlp, whisper: this.whisper,
+      ffmpeg: this.ffmpeg, ytdlp: this.ytdlp, whisper: this.whisper, llama: this.llamaServer,
       model: modelFile && fs.existsSync(this.modelPath(modelFile)) ? this.modelPath(modelFile) : null,
+      llmModel: llmFile && fs.existsSync(this.llmPath(llmFile)) ? this.llmPath(llmFile) : null,
     };
   }
 

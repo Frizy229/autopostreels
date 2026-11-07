@@ -59,6 +59,34 @@ if (process.platform === 'win32' || spawnSync('ffmpeg', ['-version']).status !==
   const p4 = await pl.addFile(dead);
   const a4 = await pl.analyze(p4.id, () => {});
   assert.ok(a4.moments.every((m) => !m.junk && !m.judge));
+
+  // 5. нейросеть: без установки — заметка; с установкой — оценка в плашках и в ранге; падение сервера не ломает поиск
+  const mk5 = async () => { const p = await pl.addFile(live); return pl.analyze(p.id, () => {}); };
+  Object.assign(settings, { smartPick: true });
+  const a5 = await mk5();
+  assert.match(a5.judgeNote, /Нейросеть для оценки смешного не установлена/);
+  fs.mkdirSync(path.join(bin, 'llama'), { recursive: true });
+  fs.writeFileSync(path.join(bin, 'llama', 'llama-server'), 'x');
+  fs.writeFileSync(path.join(bin, 'models', require('../lib/llm').LLM_MODELS[settings.llmModel].file), 'x');
+  const calls = [];
+  pl.llmFactory = () => ({ start: async () => {}, stop: () => calls.push('stop'), score: async (t) => { calls.push(t.length); return calls.length % 2 ? 9 : 2; } });
+  const a6 = await mk5();
+  const scored = a6.moments.filter((m) => m.judge && m.judge.llm != null);
+  assert.ok(scored.length >= 2, 'нейросеть оценила моменты');
+  assert.ok(scored.some((m) => m.why.some((w) => /нейросеть: 9\/10/.test(w))));
+  assert.ok(!/не установлена/.test(a6.judgeNote || ''));
+  assert.strictEqual(calls[calls.length - 1], 'stop', 'сервер остановлен');
+  const hi = scored.find((m) => m.judge.llm === 9), lo = scored.find((m) => m.judge.llm === 2);
+  if (hi && lo) assert.ok(a6.moments.indexOf(hi) < a6.moments.indexOf(lo), 'высокая оценка выше в списке');
+  pl.llmFactory = () => ({ start: async () => { throw new Error('error loading model'); }, stop: () => {}, score: async () => 0 });
+  const a7 = await mk5();
+  assert.match(a7.judgeNote, /Нейросеть не сработала: error loading model/);
+  assert.ok(a7.moments.some((m) => !m.junk && m.selected), 'поиск моментов жив');
+  // выключено — не трогаем
+  pl.llmFactory = () => { throw new Error('не должна вызываться'); };
+  Object.assign(settings, { llm: false });
+  const a8 = await mk5();
+  assert.ok(!/Нейросет/.test(a8.judgeNote || ''));
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log('умный отбор: все проверки прошли');
 })().catch((e) => { console.error(e); process.exit(1); });
