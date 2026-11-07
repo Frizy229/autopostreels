@@ -74,6 +74,11 @@
       "media_id": "18122816498059416",
       "permalink": "https://www.instagram.com/reel/DfZ4YEXDtDr/",
       "at": "2026-11-06T15:02:01+00:00"
+    },
+    "instagram:003_Night-Shift/dayzerorules/short-1-the-notebook.mp4": {
+      "media_id": "17981390877154854",
+      "permalink": "https://www.instagram.com/reel/DfbK3LhjkMD/",
+      "at": "2026-11-07T03:02:50+00:00"
     }
   },
   "skipped": {},
@@ -168,6 +173,11 @@
         "media_id": "18118705981825572",
         "permalink": "https://www.instagram.com/reel/DfZ4b02OGmQ/",
         "at": "2026-11-06T15:02:35+00:00"
+      },
+      "instagram:003_Night-Shift/rulezerosurvivel/short-1-count-the-cars.mp4": {
+        "media_id": "18182486878430364",
+        "permalink": "https://www.instagram.com/reel/DfbK7XUB3Fw/",
+        "at": "2026-11-07T03:03:25+00:00"
       }
     },
     "survivelzerorule": {
@@ -225,6 +235,11 @@
         "media_id": "18378994402240299",
         "permalink": "https://www.instagram.com/reel/DfZ4f5fjvAc/",
         "at": "2026-11-06T15:03:09+00:00"
+      },
+      "instagram:003_Night-Shift/survivelzerorule/short-1-count-the-cars-tail.mp4": {
+        "media_id": "18122792533989761",
+        "permalink": "https://www.instagram.com/reel/DfbK_dYlVpW/",
+        "at": "2026-11-07T03:03:56+00:00"
       }
     },
     "evelon185": {
@@ -260,8 +275,34 @@
   },
   "lanes": {
     "instagram": {
-      "active": null,
-      "last_started": "2026-11-06",
+      "active": {
+        "folder": "003_Night-Shift",
+        "date": "2026-11-07",
+        "plan": {
+          "dayzerorules/short-1-the-notebook.mp4": "2026-11-07T10:00+07:00",
+          "dayzerorules/short-2-two-bells.mp4": "2026-11-07T12:00+07:00",
+          "dayzerorules/short-3-count-the-cars.mp4": "2026-11-07T14:00+07:00",
+          "dayzerorules/short-4-the-pay-phone.mp4": "2026-11-07T16:00+07:00",
+          "dayzerorules/short-5-3-10-am.mp4": "2026-11-07T18:00+07:00",
+          "dayzerorules/short-6-the-regular.mp4": "2026-11-07T20:00+07:00",
+          "dayzerorules/short-7-the-notebook-tail.mp4": "2026-11-07T22:00+07:00",
+          "rulezerosurvivel/short-1-count-the-cars.mp4": "2026-11-07T10:00+07:00",
+          "rulezerosurvivel/short-2-the-pay-phone.mp4": "2026-11-07T12:00+07:00",
+          "rulezerosurvivel/short-3-3-10-am.mp4": "2026-11-07T14:00+07:00",
+          "rulezerosurvivel/short-4-the-regular.mp4": "2026-11-07T16:00+07:00",
+          "rulezerosurvivel/short-5-two-bells-head.mp4": "2026-11-07T18:00+07:00",
+          "rulezerosurvivel/short-6-the-notebook.mp4": "2026-11-07T20:00+07:00",
+          "rulezerosurvivel/short-7-two-bells.mp4": "2026-11-07T22:00+07:00",
+          "survivelzerorule/short-1-count-the-cars-tail.mp4": "2026-11-07T10:00+07:00",
+          "survivelzerorule/short-2-the-regular.mp4": "2026-11-07T12:00+07:00",
+          "survivelzerorule/short-3-3-10-am.mp4": "2026-11-07T14:00+07:00",
+          "survivelzerorule/short-4-the-pay-phone.mp4": "2026-11-07T16:00+07:00",
+          "survivelzerorule/short-5-count-the-cars.mp4": "2026-11-07T18:00+07:00",
+          "survivelzerorule/short-6-two-bells.mp4": "2026-11-07T20:00+07:00",
+          "survivelzerorule/short-7-the-notebook.mp4": "2026-11-07T22:00+07:00"
+        }
+      },
+      "last_started": "2026-11-07",
       "plans": {
         "2026-11-06": {
           "folder": "002_Bunker",
@@ -285,6 +326,32 @@
             "survivelzerorule/short-6-the-air.mp4": "2026-11-06T19:36+07:00",
             "survivelzerorule/short-7-the-smell.mp4": "2026-11-06T22:00+07:00"
           }
+        },
+        "2026-11-07": {
+          "folder": "003_Night-Shift",
+          "plan": {
+            "dayzerorules/short-1-the-notebook.mp4": "2026-11-07T10:00+07:00",
+            "dayzerorules/short-2-two-bells.mp4": "2026-11-07T12:00+07:00",
+            "dayzerorules/short-3-count-the-cars.mp4": "2026-11-07T14:00+07:00",
+            "dayzerorules/short-4-the-pay-phone.mp4": "2026-11-07T16:00+07:00",
+            "dayzerorules/short-5-3-10-am.mp4": "2026-11-07T18:00+07:00",
+            "dayzerorules/short-6-the-regular.mp4": "2026-11-07T20:00+07:00",
+            "dayzerorules/short-7-the-notebook-tail.mp4": "2026-11-07T22:00+07:00",
+            "rulezerosurvivel/short-1-count-the-cars.mp4": "2026-11-07T10:00+07:00",
+            "rulezerosurvivel/short-2-the-pay-phone.mp4": "2026-11-07T12:00+07:00",
+            "rulezerosurvivel/short-3-3-10-am.mp4": "2026-11-07T14:00+07:00",
+            "rulezerosurvivel/short-4-the-regular.mp4": "2026-11-07T16:00+07:00",
+            "rulezerosurvivel/short-5-two-bells-head.mp4": "2026-11-07T18:00+07:00",
+            "rulezerosurvivel/short-6-the-notebook.mp4": "2026-11-07T20:00+07:00",
+            "rulezerosurvivel/short-7-two-bells.mp4": "2026-11-07T22:00+07:00",
+            "survivelzerorule/short-1-count-the-cars-tail.mp4": "2026-11-07T10:00+07:00",
+            "survivelzerorule/short-2-the-regular.mp4": "2026-11-07T12:00+07:00",
+            "survivelzerorule/short-3-3-10-am.mp4": "2026-11-07T14:00+07:00",
+            "survivelzerorule/short-4-the-pay-phone.mp4": "2026-11-07T16:00+07:00",
+            "survivelzerorule/short-5-count-the-cars.mp4": "2026-11-07T18:00+07:00",
+            "survivelzerorule/short-6-two-bells.mp4": "2026-11-07T20:00+07:00",
+            "survivelzerorule/short-7-the-notebook.mp4": "2026-11-07T22:00+07:00"
+          }
         }
       }
     },
@@ -297,15 +364,17 @@
     },
     "rulezerosurvivel": {
       "ok": true,
+      "expires": "2027-01-02",
       "since": "2026-11-06"
     },
     "survivelzerorule": {
       "ok": true,
+      "expires": "2027-01-02",
       "since": "2026-11-06"
     },
     "evelon185": {
       "ok": true,
-      "expires": "2027-11-04",
+      "expires": "2027-11-05",
       "since": "2026-11-06"
     }
   }
