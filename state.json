@@ -104,6 +104,11 @@
       "media_id": "18121640236954430",
       "permalink": "https://www.instagram.com/reel/DfcPcKBCIES/",
       "at": "2026-11-07T13:02:05+00:00"
+    },
+    "instagram:003_Night-Shift/dayzerorules/short-7-the-notebook-tail.mp4": {
+      "media_id": "18213588526370676",
+      "permalink": "https://www.instagram.com/reel/DfcdH0MChrL/",
+      "at": "2026-11-07T15:01:40+00:00"
     }
   },
   "skipped": {
@@ -113,7 +118,8 @@
   "failures": {
     "002_Night-Shift/short-5-3-10-am.mp4": 1,
     "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1,
-    "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3
+    "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3,
+    "survivelzerorule|instagram:003_Night-Shift/survivelzerorule/short-7-the-notebook.mp4": 1
   },
   "active": null,
   "plans": {
@@ -226,6 +232,11 @@
         "media_id": "18119600534043205",
         "permalink": "https://www.instagram.com/reel/DfcB7ovIyfo/",
         "at": "2026-11-07T11:04:04+00:00"
+      },
+      "instagram:003_Night-Shift/rulezerosurvivel/short-7-two-bells.mp4": {
+        "media_id": "18351348334269850",
+        "permalink": "https://www.instagram.com/reel/DfcdZxFK9kU/",
+        "at": "2026-11-07T15:04:09+00:00"
       }
     },
     "survivelzerorule": {
