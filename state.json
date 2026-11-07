@@ -89,14 +89,18 @@
       "media_id": "18026769950925914",
       "permalink": "https://www.instagram.com/reel/DfbmOXPk4Ee/",
       "at": "2026-11-07T07:02:05+00:00"
+    },
+    "instagram:003_Night-Shift/dayzerorules/short-4-the-pay-phone.mp4": {
+      "media_id": "17972858310190825",
+      "permalink": "https://www.instagram.com/reel/Dfb0mjjgnCY/",
+      "at": "2026-11-07T09:07:34+00:00"
     }
   },
   "skipped": {},
   "last_started": "2026-11-04",
   "failures": {
     "002_Night-Shift/short-5-3-10-am.mp4": 1,
-    "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1,
-    "instagram:003_Night-Shift/dayzerorules/short-4-the-pay-phone.mp4": 1
+    "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1
   },
   "active": null,
   "plans": {
