@@ -236,22 +236,35 @@ const isAuthError = (text) => /sign in to confirm|not a bot|use --cookies|--cook
 /** Cookies не прочитались: нет браузера/профиля, база занята открытым браузером, шифрование Chrome/Edge. */
 const isCookieError = (text) => /cookies? database|could not find .*(browser|profile|cookies)|failed to decrypt|decrypt.*cookie|dpapi|app.?bound|could not copy .*cookie|permission denied.*cookie|cookies? file|does not look like a netscape/i.test(String(text || ''));
 
+/** Почему cookies этого браузера не помогли (по тексту ошибки yt-dlp). */
+function cookieWhy(stderr, auth) {
+  const t = String(stderr || '');
+  if (!auth) return 'без входа YouTube просит подтвердить, что ты не бот';
+  if (/failed to decrypt|decrypt.*cookie|dpapi|app.?bound/i.test(t)) return 'Windows не даёт прочитать cookies (Edge/Chrome шифруют их), используй Firefox или файл cookies.txt';
+  if (/could not find .*(browser|profile|cookies)|no such file/i.test(t)) return 'браузер или его профиль не найден';
+  if (/could not copy .*cookie|permission denied|database is locked|cookies? database/i.test(t)) return 'файл cookies занят: закрой этот браузер полностью (и в трее) и повтори';
+  if (isAuthError(t)) return 'cookies прочитались, но вход в YouTube в этом браузере не выполнен или устарел';
+  return 'cookies не помогли';
+}
+
 const authName = (a) => (!a ? 'без входа' : a.file ? 'файл cookies.txt' : `cookies ${BROWSERS[a.browser] || a.browser}`);
 
 /** Что сказать человеку, когда сайт не пустил ни одним способом. target — для Instagram свой текст. */
-function authHelp(tried, target = '') {
+function authHelp(tried, target = '', notes = []) {
   const list = (tried || []).map(authName).join(', ');
+  const detail = (tried || []).map((a, i) => (notes && notes[i] ? `• ${authName(a)}: ${notes[i]}` : '')).filter(Boolean).join('\n');
   if (platformOf(target) === 'instagram') {
     return 'Instagram не отдаёт этот рилс без входа (или рилс закрыт, удалён, аккаунт приватный).\n'
       + 'Что сделать: войди в Instagram в Firefox (лучше всего) или в Edge/Chrome, закрой этот браузер и повтори. '
       + 'Либо выбери браузер или файл cookies.txt в Настройках → «Вход на сайты».'
-      + (list ? `\nПробовал: ${list}.` : '')
+      + (detail ? `\nПробовал:\n${detail}` : (list ? `\nПробовал: ${list}.` : ''))
       + '\nЕсли качаешь много рилсов подряд, Instagram может временно ограничить скачивание: подожди 10–20 минут.';
   }
   return 'YouTube просит подтвердить, что ты не бот.\n'
     + 'Что сделать: войди в YouTube в Firefox (лучше всего) или в Edge/Chrome, закрой этот браузер и повтори. '
     + 'Либо выбери браузер или файл cookies.txt в Настройках → «Вход на сайты».'
-    + (list ? `\nПробовал: ${list}.` : '')
+    + (detail ? `\nПробовал:\n${detail}` : (list ? `\nПробовал: ${list}.` : ''))
+    + '\nСамый надёжный способ: расширение «Get cookies.txt LOCALLY» в браузере → выгрузить cookies youtube.com → Настройки → «Вход на сайты» → «Файл cookies.txt».'
     + '\nЗаписи Twitch и файлы с диска работают без входа.';
 }
 
@@ -347,4 +360,4 @@ function netHelp(target, viaProxy) {
 module.exports = { twitchTargets, matchScore, filterByQuery, mergeResults, VIDEO_EXT, platformOf, isUrl, parseLinks, isInstagramProfile, SHORT_SEC, isShortSource, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf,
   NET_MODES, proxyFromPac, normProxy, proxyArgs, isNetworkError, netHelp, ytResultsUrl,
   FILLER_QUERIES, parseQueryLine, fillerTarget, filterFillers, fillerDownloadArgs,
-  BROWSERS, AUTO_BROWSERS, COOKIE_MODES, needsAuth, cookieArgs, authPlan, isAuthError, isCookieError, authName, authHelp };
+  BROWSERS, AUTO_BROWSERS, COOKIE_MODES, needsAuth, cookieArgs, authPlan, isAuthError, isCookieError, cookieWhy, authName, authHelp };
