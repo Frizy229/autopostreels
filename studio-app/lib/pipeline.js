@@ -11,8 +11,9 @@ const { Envelope, findMoments, parseChat, fmtTime } = require('./moments');
 const { planChannels } = require('./plan');
 const { layoutOutput, writeTexts, checkFolder, nextFolderNumber, slugify } = require('./output');
 const { renderArgs, coverArgs, frameArgs, envelopeArgs, parseRenderProgress, parseProbe, videoKbps, MAX_FILE_MB } = require('./render');
-const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, isInstagramProfile, isShortSource, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
+const { listArgs, downloadArgs, parseList, parseProgress, statusOf, proxyArgs, isNetworkError, netHelp, ytResultsUrl, fillerTarget, filterFillers, fillerDownloadArgs, platformOf, VIDEO_EXT, searchTarget, twitchTargets, filterByQuery, isInstagramProfile, isShortSource, authPlan, cookieArgs, needsAuth, isAuthError, isCookieError, authHelp } = require('./sources');
 const { checkMoment } = require('./rules');
+const { searchHashtags } = require('./igsearch');
 const { whisperArgs, wavArgs, parseWhisperJson, MODELS } = require('./transcribe');
 
 const hasEntries = (r, out) => { if (!out) return false; try { return parseList(out).length > 0; } catch { return false; } };
@@ -23,6 +24,7 @@ class Pipeline {
   constructor(o) {
     this.tools = o.tools; this.dataDir = o.dataDir; this.fontsDir = o.fontsDir; this.settings = o.settings;
     this.systemProxy = o.systemProxy || (() => '');  // прокси Windows (из Electron), '' — напрямую
+    this.fetch = o.fetch || ((...a) => globalThis.fetch(...a)); // в программе — net.fetch Electron (системный прокси/VPN)
     this.projDir = path.join(this.dataDir, 'projects');
     this.cacheDir = path.join(this.dataDir, 'cache');
     fs.mkdirSync(this.projDir, { recursive: true });
@@ -173,6 +175,48 @@ class Pipeline {
       // вертикальное видео (рилс) — обычно без отдельной вебки: сразу «Без вебки», рамку можно поменять
       frame: height > width ? { cams: [], cam: null, content: { x: 0, y: 0, w: 1, h: 1 } } : null };
     return this.save(pr);
+  }
+
+  /**
+   * Поиск сразу в нескольких местах. o.source: all | youtube | twitch; o.limit.
+   * Возвращает {results, errors: {youtube?, twitch?}}; ошибка, только если не получилось нигде.
+   */
+  async searchAll(q, o = {}) {
+    const s = this.settings();
+    const src = o.source || 'all';
+    const jobs = {};
+    if (src === 'all' || src === 'youtube') jobs.youtube = this.search(q, o.limit || 30);
+    if (src === 'all' || src === 'twitch') jobs.twitch = this.searchTwitch(q, s.twitchChannels || ['evelone2004'], o);
+    // Instagram: по хэштегу через Graph API; во «Всех» — только если поиск настроен
+    const ig = s.igSearch || {};
+    if (src === 'instagram' || (src === 'all' && ig.token && ig.userId)) jobs.instagram = searchHashtags(this.fetch, ig, q);
+    const names = Object.keys(jobs);
+    const done = await Promise.allSettled(names.map((k) => jobs[k]));
+    const results = [], errors = {};
+    done.forEach((r, i) => { if (r.status === 'fulfilled') results.push(...r.value); else errors[names[i]] = (r.reason && r.reason.message) || String(r.reason); });
+    if (!results.length && Object.keys(errors).length === names.length) {
+      const e = done.find((r) => r.status === 'rejected').reason;
+      const label = { youtube: 'YouTube', twitch: 'Twitch', instagram: 'Instagram' };
+      throw Object.assign(new Error(names.map((k) => (names.length > 1 ? `${label[k]}: ${errors[k]}` : errors[k])).join('\n\n')), { code: e && e.code });
+    }
+    return { results, errors };
+  }
+
+  /** Twitch: записи, хайлайты и клипы каналов, отобранные по словам запроса. */
+  async searchTwitch(q, channels, o = {}) {
+    const lists = [], fails = [];
+    for (const ch of channels.slice(0, 5)) {
+      for (const t of twitchTargets(ch)) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const r = await this.ytdlp(listArgs(t.url, o.twitchLimit || 100), t.url, { accept: hasEntries, timeoutSec: 90 });
+          lists.push(...parseList(r.stdout.toString('utf8').trim()).map((e) => ({ ...e, kind: t.kind, channel: e.channel || ch, platform: 'twitch' })));
+        } catch (e) { if (e.code === 'NET') throw e; fails.push(`${ch} (${t.kind}): ${String(e.message).split('\n')[0]}`); }
+      }
+    }
+    if (!lists.length && fails.length) throw new Error(`Twitch ничего не отдал.\n${fails.slice(0, 3).join('\n')}`);
+    const seen = new Set();
+    return filterByQuery(lists.filter((e) => e.url && !seen.has(e.url) && seen.add(e.url)), q);
   }
 
   /** Поиск лонгов/нарезок: запрос, ссылка на канал или плейлист. */

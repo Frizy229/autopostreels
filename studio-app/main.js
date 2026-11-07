@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, ipcMain, dialog, nativeTheme, shell, net, session } = require('electron');
 const { normalize, LANES, igOverride } = require('./lib/settings');
+const { igAccounts } = require('./lib/igsearch');
 const { LAYOUTS, FITS, CAM_LAYOUTS } = require('./lib/layout');
 const handoff = require('./lib/handoff');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
@@ -11,7 +12,7 @@ const { BROWSERS, COOKIE_MODES, NET_MODES, proxyFromPac } = require('./lib/sourc
 const { Tools, download, whisperAssets, exe, errorTail, exitHint } = require('./lib/tools');
 const { Pipeline } = require('./lib/pipeline');
 const { MODELS, modelUrl } = require('./lib/transcribe');
-const { channelUrl, filterLongs } = require('./lib/sources');
+const { channelUrl, filterLongs, mergeResults, isUrl } = require('./lib/sources');
 const { ENCODERS } = require('./lib/render');
 
 // Распознавание лиц в окне (Shape Detection API) — для автопоиска рамки вебки.
@@ -154,8 +155,27 @@ function registerIpc() {
 
   // источники
   handle('search', async (q, o = {}) => {
-    const list = await pipeline.search(channelUrl(q), o.limit || 30);
-    return filterLongs(list, { minDur: (o.minMin || 0) * 60, sort: o.sort || 'views' });
+    // ссылка на канал, плейлист или видео — как раньше, только по ней
+    if (isUrl(String(q).trim()) || /^(?:www\.)?(twitch\.tv|youtube\.com)\//i.test(String(q).trim())) {
+      const list = await pipeline.search(channelUrl(q), o.limit || 30);
+      return { results: filterLongs(list, { minDur: (o.minMin || 0) * 60, sort: o.sort || 'views' }), errors: {} };
+    }
+    const r = await pipeline.searchAll(q, { source: o.source || 'all', limit: o.limit || 30 });
+    return { results: mergeResults(r.results, { minDur: (o.minMin || 0) * 60, sort: o.sort || 'views' }), errors: r.errors };
+  });
+  // поиск в Instagram: проверить токен, найти Instagram-аккаунт и сохранить (userId можно ввести вручную)
+  handle('igsearch:setup', async (token, userId = '') => {
+    const t = String(token || '').trim();
+    if (!t) { settings = normalize({ ...settings, igSearch: {} }); saveSettings(); return { ok: true, cleared: true }; }
+    let id = String(userId || '').trim(), username = '';
+    if (!id) {
+      const list = await igAccounts((...a) => net.fetch(...a), t);
+      if (!list.length) throw new Error('Токен рабочий, но Instagram-аккаунт к нему не найден. Впиши ID аккаунта Instagram вручную (например, 17841431768361264).');
+      ({ id, username } = list[0]);
+    }
+    settings = normalize({ ...settings, igSearch: { token: t, userId: id, username } });
+    saveSettings();
+    return { ok: true, userId: id, username };
   });
   handle('project:addUrl', (url) => pipeline.addUrl(url));
   handle('project:addFiles', async () => {
@@ -257,7 +277,7 @@ app.whenReady().then(() => {
   loadSettings();
   nativeTheme.themeSource = settings.theme;
   tools = new Tools(path.join(userData(), 'bin'));
-  pipeline = new Pipeline({ tools, dataDir: userData(), fontsDir: fontsDir(), settings: () => settings, systemProxy: () => sysProxy });
+  pipeline = new Pipeline({ tools, dataDir: userData(), fontsDir: fontsDir(), settings: () => settings, systemProxy: () => sysProxy, fetch: (...a) => net.fetch(...a) });
   refreshSysProxy();
   setInterval(refreshSysProxy, 60000);
   registerIpc();
