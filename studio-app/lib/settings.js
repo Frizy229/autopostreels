@@ -42,6 +42,10 @@ const DEFAULTS = {
   rules: { ...DEFAULT_RULES },
   presets: {},           // рамки вебки/контента по стримерам: { "evelone2004": {cam, content, layout} }
   searchMinMin: 20,      // поиск лонгов: от N минут
+  searchSource: 'all',   // где искать: all | youtube | twitch
+  twitchChannels: ['evelone2004'], // поиск Twitch: записи, хайлайты и клипы этих каналов
+  // поиск рилсов по хэштегам (Graph API Meta): токен Instagram через Facebook и id Instagram-аккаунта
+  igSearch: { token: '', userId: '', username: '' },
   // вход в YouTube для yt-dlp: auto — при «докажи, что не бот» пробовать cookies браузеров
   cookies: { mode: 'auto', browser: 'firefox', file: '' },
   // сеть для yt-dlp: system — прокси/VPN из Windows (если есть), manual — свой адрес, none — напрямую
@@ -49,6 +53,7 @@ const DEFAULTS = {
 };
 
 const MAX_CHANNELS = 60;
+const SEARCH_SOURCES = { all: 'Все', youtube: 'YouTube', twitch: 'Twitch', instagram: 'Instagram' };
 const LANES = { queue: 'Общая очередь (все сети)', 'queue-instagram': 'Только Instagram', 'queue-tiktok': 'Только TikTok' };
 
 const num = (v, lo, hi, d) => { const n = Number(v); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
@@ -95,6 +100,12 @@ function normalize(raw) {
   s.lang = /^[a-z]{2}$|^auto$/.test(s.lang) ? s.lang : 'ru';
   s.theme = pick(s.theme, { dark: 1, light: 1, system: 1 }, 'dark');
   s.searchMinMin = num(s.searchMinMin, 0, 600, DEFAULTS.searchMinMin);
+  s.searchSource = pick(s.searchSource, SEARCH_SOURCES, 'all');
+  const tw = Array.isArray(s.twitchChannels) ? s.twitchChannels : String(s.twitchChannels || '').split(/[\s,;]+/);
+  s.twitchChannels = [...new Set(tw.map((c) => String(c || '').trim().replace(/^(?:https?:\/\/)?(?:www\.)?twitch\.tv\//i, '').replace(/[/?#].*$/, '').replace(/^@/, '').toLowerCase()).filter((c) => /^\w{2,25}$/.test(c)))].slice(0, 5);
+  if (!s.twitchChannels.length) s.twitchChannels = [...DEFAULTS.twitchChannels];
+  const igs = (raw && raw.igSearch && typeof raw.igSearch === 'object') ? raw.igSearch : {};
+  s.igSearch = { token: String(igs.token || '').trim().slice(0, 600), userId: /^\d{5,25}$/.test(String(igs.userId || '').trim()) ? String(igs.userId).trim() : '', username: String(igs.username || '').slice(0, 60) };
   for (const k of ['vary', 'allowMirror', 'allowSpeed', 'gpu', 'loudnorm', 'subsOn', 'autoSend']) s[k] = !!s[k];
   const ck = { ...DEFAULTS.cookies, ...((raw && raw.cookies && typeof raw.cookies === 'object') ? raw.cookies : {}) };
   s.cookies = { mode: pick(ck.mode, COOKIE_MODES, 'auto'), browser: pick(ck.browser, BROWSERS, 'firefox'), file: typeof ck.file === 'string' ? ck.file : '' };
@@ -118,4 +129,4 @@ function igOverride(s) {
   return { channels: s.ig.accounts.map((name) => ({ name })), perChannel: s.ig.perChannel, lane: 'queue-instagram', ...(s.ig.formats.length ? { formats: s.ig.formats } : {}) };
 }
 
-module.exports = { DEFAULTS, LANES, MAX_CHANNELS, normalize, igOverride };
+module.exports = { DEFAULTS, LANES, MAX_CHANNELS, SEARCH_SOURCES, normalize, igOverride };

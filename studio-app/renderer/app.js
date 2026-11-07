@@ -133,7 +133,11 @@ const QUICK = [
 function pageSearch(el) {
   const s = S.settings;
   el.innerHTML = `
-    <div class="search-box">${ic('search')}<input id="q" class="input" placeholder="Что искать: «эвелон стрим», ссылка на канал, плейлист или видео" value="${esc(S.lastQuery)}"></div>
+    <div class="search-box">${ic('search')}<input id="q" class="input" placeholder="Что искать: «эвелон казино», ссылка на канал, плейлист или видео" value="${esc(S.lastQuery)}"></div>
+    <div class="row wrap" style="margin:12px 0 10px">
+      <div class="seg" id="srcSeg">${[['all', 'Все'], ['youtube', 'YouTube'], ['twitch', 'Twitch'], ['instagram', 'Instagram']].map(([k, t]) => `<button class="${(S.srcView || s.searchSource) === k ? 'on' : ''}" data-src="${k}">${t}${S.results.length && k !== 'all' ? ` <span class="faint num">${S.results.filter((v) => v.platform === k).length}</span>` : ''}</button>`).join('')}</div>
+      <label class="row muted" style="font-size:12.5px">Twitch-каналы <input id="twCh" class="input" style="width:220px;height:30px" value="${esc(s.twitchChannels.join(', '))}" title="Через запятую, до 5. В Twitch ищутся записи, хайлайты и клипы этих каналов по словам запроса"></label>
+    </div>
     <div class="quick">${QUICK.map((x) => `<button class="chip" data-q="${esc(x.q)}">${ic(x.icon, 'sm')}${esc(x.t)}</button>`).join('')}
       <span class="grow"></span>
       <label class="row muted" style="font-size:12.5px">от <input id="minMin" class="input num" style="width:64px;height:30px" type="number" min="0" value="${s.searchMinMin}"> мин</label>
@@ -147,15 +151,31 @@ function pageSearch(el) {
   const doSearch = async (q) => {
     if (!q.trim()) return;
     if (!S.tools.ytdlp) { toast('Сначала поставь yt-dlp: Настройки → Компоненты'); return; }
-    S.lastQuery = q; S.searching = true; S.searchError = ''; drawResults();
+    const src = S.settings.searchSource;
+    S.lastQuery = q; S.searching = true; S.searchError = ''; S.searchWarn = {}; S.srcView = src; drawResults();
     try {
       const minMin = +$('#minMin').value || 0;
       saveSettings({ searchMinMin: minMin }, true);
-      S.results = await call('search', q, { minMin, sort: $('#sort').value, limit: 40 });
+      const r = await call('search', q, { minMin, sort: $('#sort').value, limit: 40, source: src });
+      S.results = r.results; S.searchWarn = r.errors || {}; S.lastSrc = src;
     } catch (e) { S.searchError = e.message || String(e); S.results = []; }
-    S.searching = false; drawResults();
+    S.searching = false;
+    if (S.page === 'search') render();
   };
   $('#q').onkeydown = (e) => { if (e.key === 'Enter') doSearch(e.target.value); };
+  // источник: где искать; если выдача уже есть из всех источников — просто показать нужную часть
+  $$('[data-src]').forEach((b) => {
+    b.onclick = async () => {
+      const k = b.dataset.src;
+      if (k === 'instagram' && !(S.settings.igSearch.token && S.settings.igSearch.userId)) { toast('Поиск в Instagram идёт по хэштегам через токен Meta. Вставь токен: Настройки → «Поиск в Instagram»', 7000); go('settings'); return; }
+      await saveSettings({ searchSource: k }, true);
+      const had = S.results.length && (S.lastSrc === 'all' || S.lastSrc === k);
+      S.srcView = k;
+      render();
+      if (!had && $('#q').value.trim()) doSearch($('#q').value);
+    };
+  });
+  $('#twCh').onchange = (e) => saveSettings({ twitchChannels: e.target.value }, true).then(render);
   $$('[data-q]').forEach((b) => { b.onclick = () => { $('#q').value = b.dataset.q; doSearch(b.dataset.q); }; });
   $('#pick').onclick = async () => { try { const r = await call('addFiles'); if (r.length) { await refreshProjects(); await openProject(r[0].id); } } catch (e) { fail(e); } };
   $('#addUrl').onclick = () => addUrl($('#url').value);
@@ -188,7 +208,8 @@ async function addUrl(text) {
 function drawResults() {
   const el = $('#res');
   if (!el) return;
-  if (S.searching) { el.innerHTML = `<div class="empty">${ic('refresh-cw')}<b>Ищу…</b>yt-dlp смотрит YouTube и Twitch</div>`; return; }
+  const src = S.srcView || S.settings.searchSource;
+  if (S.searching) { el.innerHTML = `<div class="empty">${ic('refresh-cw')}<b>Ищу…</b>${src === 'twitch' ? 'yt-dlp смотрит записи и клипы Twitch' : src === 'youtube' ? 'yt-dlp смотрит YouTube' : 'yt-dlp смотрит YouTube и Twitch'}</div>`; return; }
   if (!S.results.length && S.searchError) {
     el.innerHTML = searchError(S.searchError);
     $('#retry').onclick = () => { $('#q').value = S.lastQuery; $('#q').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })); };
@@ -200,14 +221,17 @@ function drawResults() {
     return;
   }
   const added = new Set(S.projects.map((p) => p.source.url));
-  el.innerHTML = `<div class="results">${S.results.map((v, i) => `
+  const shown = S.results.map((v, i) => ({ v, i })).filter(({ v }) => src === 'all' || v.platform === src);
+  const warn = Object.entries(S.searchWarn || {}).map(([k, m]) => `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>${k === 'twitch' ? 'Twitch' : 'YouTube'} не ответил</b><small>${esc(String(m).split('\n').slice(0, 3).join(' '))}</small></div></div>`).join('');
+  if (!shown.length) { el.innerHTML = `${warn}<div class="empty">${ic('list-video')}<b>Здесь ничего</b>${src === 'twitch' ? `В названиях записей и клипов ${esc(S.settings.twitchChannels.join(', '))} нет слов запроса. Попробуй другие слова или добавь каналы.` : 'Попробуй другой запрос или другой источник.'}</div>`; return; }
+  el.innerHTML = `${warn}<div class="results">${shown.map(({ v, i }) => `
     <div class="vcard">
       <div class="thumb" style="background-image:url('${esc(v.thumb)}')">
-        <span class="badge plat">${esc(v.platform)}</span>${v.duration ? `<span class="badge num">${fmtTime(v.duration)}</span>` : ''}
+        <span class="badge plat">${esc(v.platform)}${v.kind === 'reel' ? ' · рилс' : v.kind === 'clip' ? ' · клип' : v.kind === 'highlight' ? ' · хайлайт' : v.kind === 'vod' ? ' · запись' : ''}</span>${v.duration ? `<span class="badge num">${fmtTime(v.duration)}</span>` : ''}
       </div>
       <div class="body">
         <div class="t" title="${esc(v.title)}">${esc(v.title)}</div>
-        <div class="meta">${esc(v.channel)}${v.views ? ` · ${H.fmtViews(v.views)} просм.` : ''}${v.date ? ` · ${v.date.slice(6, 8)}.${v.date.slice(4, 6)}.${v.date.slice(0, 4)}` : ''}</div>
+        <div class="meta">${esc(v.channel)}${v.platform === 'instagram' ? (v.likes ? ` · ${H.fmtViews(v.likes)} лайков` : '') : v.views ? ` · ${H.fmtViews(v.views)} просм.` : ''}${v.date ? ` · ${v.date.slice(6, 8)}.${v.date.slice(4, 6)}.${v.date.slice(0, 4)}` : ''}</div>
         <div class="act">
           ${added.has(v.url) ? `<span class="badge ok">${ic('check', 'sm')}добавлено</span>` : `<button class="btn sm primary" data-add="${i}">${ic('plus', 'sm')}В работу</button>`}
           <button class="btn sm ghost" data-open="${i}">${ic('external-link', 'sm')}</button>
@@ -1109,6 +1133,16 @@ function pageSettings(el) {
         </div>
       </div>
       <div class="card">
+        <h3>Поиск в Instagram</h3>
+        <p class="hint">Рилсы ищутся по хэштегу через официальный API Meta: напиши в поиске «#evelone» или «эвелон». Нужен токен Instagram через Facebook (как IG_TOKEN автопостера) с правом instagram_basic, а у приложения Meta — доступ «Instagram Public Content Access». Лимит Meta: 30 разных хэштегов за 7 дней. Токен хранится только на этом компьютере.</p>
+        <div class="stack">
+          <div class="field"><span>Токен</span><input class="input" id="igsTok" type="password" value="${esc(s.igSearch.token)}" placeholder="EAA…"></div>
+          <div class="field"><span>ID аккаунта Instagram (если не найдётся сам)</span><input class="input num" id="igsId" value="${esc(s.igSearch.userId)}" placeholder="17841…"></div>
+          <div class="row"><button class="btn" id="igsSave">${ic('check', 'sm')}Проверить и сохранить</button>${s.igSearch.token ? `<button class="btn ghost" id="igsClear">Убрать токен</button>` : ''}
+            <small class="grow ${s.igSearch.userId ? 'okc' : 'muted'}">${s.igSearch.userId ? `Готово${s.igSearch.username ? `: @${esc(s.igSearch.username)}` : ''}` : 'не настроено'}</small></div>
+        </div>
+      </div>
+      <div class="card">
         <h3>Вход на сайты (YouTube, Instagram)</h3>
         <p class="hint">Если YouTube пишет «Sign in to confirm you're not a bot» или Instagram не отдаёт рилс, программе нужны cookies браузера, где ты вошёл в YouTube и Instagram. Перед загрузкой закрой этот браузер. Лучше всего работает Firefox. Twitch и файлы с диска работают без входа.</p>
         <div class="stack">
@@ -1143,6 +1177,14 @@ function pageSettings(el) {
   };
   $('#ckBrowser').value = s.cookies.browser;
   const setCk = async (patch) => { await saveSettings({ cookies: { ...s.cookies, ...patch } }, true); render(); };
+  $('#igsSave').onclick = async () => {
+    try {
+      const r = await call('igSearchSetup', $('#igsTok').value, $('#igsId').value);
+      S.settings = await call('getSettings');
+      toast(r.cleared ? 'Токен убран' : `Поиск в Instagram готов${r.username ? `: @${r.username}` : ''}`, 4000); render();
+    } catch (e) { fail(e); }
+  };
+  if ($('#igsClear')) $('#igsClear').onclick = async () => { await call('igSearchSetup', ''); S.settings = await call('getSettings'); render(); };
   $('#ckMode').value = s.cookies.mode;
   $('#ckMode').onchange = async (e) => {
     if (e.target.value === 'file' && !s.cookies.file) { const f = await call('pickFile', 'Файл cookies.txt', [{ name: 'cookies.txt', extensions: ['txt'] }]); if (!f) { e.target.value = s.cookies.mode; return; } await setCk({ mode: 'file', file: f }); return; }

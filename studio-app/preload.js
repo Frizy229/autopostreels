@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('api', {
   handoffStatus: call('handoff:status'),
   handoffAccounts: call('handoff:accounts'),
   handoffIgAccounts: call('handoff:igAccounts'),
+  igSearchSetup: call('igsearch:setup'),
   openLog: call('open:log'),
   netInfo: call('net:info'),
   netTest: call('net:test'),

@@ -61,6 +61,58 @@ function listArgs(q, limit = 20) {
   return a;
 }
 
+// ------------------------------------------------------------------ поиск в Twitch
+// Открытого поиска по видео у Twitch без ключей API нет. Поэтому программа берёт списки записей, хайлайтов
+// и клипов нужных каналов (yt-dlp, как кнопка «Записи стримов Twitch») и отбирает их по словам запроса.
+
+/** Что смотреть у канала: записи стримов, хайлайты, клипы за всё время (самые просматриваемые). */
+function twitchTargets(channel) {
+  const c = String(channel || '').trim().toLowerCase();
+  return [
+    { kind: 'vod', url: `https://www.twitch.tv/${c}/videos?filter=archives&sort=time` },
+    { kind: 'highlight', url: `https://www.twitch.tv/${c}/videos?filter=highlights&sort=views` },
+    { kind: 'clip', url: `https://www.twitch.tv/${c}/clips?filter=clips&range=all` },
+  ];
+}
+
+const words = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1);
+
+/**
+ * Насколько название подходит к запросу: доля слов запроса, которые есть в названии (начало слова тоже считается:
+ * «казино» найдёт «казиношка»). Пустой запрос — всё подходит (1).
+ */
+function matchScore(title, q) {
+  const qw = words(q);
+  if (!qw.length) return 1;
+  const tw = words(title);
+  return qw.filter((w) => tw.some((t) => t.startsWith(w) || (w.length > 4 && t.startsWith(w.slice(0, -1))))).length / qw.length;
+}
+
+/** Отбор видео Twitch по запросу: сначала самые подходящие, потом по просмотрам. */
+function filterByQuery(list, q) {
+  return list.map((e) => ({ e, s: matchScore(`${e.title} ${e.channel}`, q) })).filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s || b.e.views - a.e.views).map((x) => x.e);
+}
+
+/**
+ * Общая выдача YouTube + Twitch. Клипы Twitch короткие по природе: фильтр «от N минут» к ним не относится.
+ * По просмотрам — источники через один (у YouTube просмотров на порядки больше, иначе Twitch уходит в самый низ,
+ * а внутри Twitch порядок «сначала подходящие по словам»); по дате и длине — общий порядок.
+ */
+function mergeResults(list, { minDur = 0, sort = 'views' } = {}) {
+  // клипы Twitch и рилсы короткие по природе: фильтр «от N минут» к ним не относится
+  const ok = list.filter((e) => e.kind === 'clip' || e.platform === 'instagram' || !minDur || !e.duration || e.duration >= minDur);
+  if (sort !== 'views') return filterLongs(ok, { sort });
+  const groups = [
+    filterLongs(ok.filter((e) => e.platform !== 'twitch' && e.platform !== 'instagram'), { sort: 'views' }),
+    ok.filter((e) => e.platform === 'twitch'),
+    ok.filter((e) => e.platform === 'instagram'),
+  ];
+  const out = [];
+  for (let i = 0; i < Math.max(...groups.map((g) => g.length)); i++) for (const g of groups) if (g[i]) out.push(g[i]);
+  return out;
+}
+
 /** Канал Twitch → список записей стримов. */
 function channelUrl(input) {
   const s = String(input || '').trim();
@@ -291,7 +343,7 @@ function netHelp(target, viaProxy) {
     + 'Записи Twitch и файлы с диска работают без этого.';
 }
 
-module.exports = { VIDEO_EXT, platformOf, isUrl, parseLinks, isInstagramProfile, SHORT_SEC, isShortSource, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf,
+module.exports = { twitchTargets, matchScore, filterByQuery, mergeResults, VIDEO_EXT, platformOf, isUrl, parseLinks, isInstagramProfile, SHORT_SEC, isShortSource, searchTarget, listArgs, channelUrl, parseList, filterLongs, downloadArgs, parseProgress, normEntry, statusOf,
   NET_MODES, proxyFromPac, normProxy, proxyArgs, isNetworkError, netHelp, ytResultsUrl,
   FILLER_QUERIES, parseQueryLine, fillerTarget, filterFillers, fillerDownloadArgs,
   BROWSERS, AUTO_BROWSERS, COOKIE_MODES, needsAuth, cookieArgs, authPlan, isAuthError, isCookieError, authName, authHelp };
