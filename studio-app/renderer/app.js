@@ -152,12 +152,14 @@ function pageSearch(el) {
     if (!q.trim()) return;
     if (!S.tools.ytdlp) { toast('Сначала поставь yt-dlp: Настройки → Компоненты'); return; }
     const src = S.settings.searchSource;
-    S.lastQuery = q; S.searching = true; S.searchError = ''; S.searchWarn = {}; S.srcView = src; drawResults();
+    S.lastQuery = q; S.searching = true; S.searchError = ''; S.searchWarn = {}; S.srcView = src; S.ytNext = 0; drawResults();
     try {
       const minMin = +$('#minMin').value || 0;
       saveSettings({ searchMinMin: minMin }, true);
       const r = await call('search', q, { minMin, sort: $('#sort').value, limit: 40, source: src });
       S.results = r.results; S.searchWarn = r.errors || {}; S.lastSrc = src;
+      // YouTube отдал полную страницу — дальше могут быть ещё
+      S.ytNext = r.raw >= 40 && src !== 'twitch' && src !== 'instagram' ? 41 : 0;
     } catch (e) { S.searchError = e.message || String(e); S.results = []; }
     S.searching = false;
     if (S.page === 'search') render();
@@ -222,7 +224,8 @@ function drawResults() {
   }
   const added = new Set(S.projects.map((p) => p.source.url));
   const shown = S.results.map((v, i) => ({ v, i })).filter(({ v }) => src === 'all' || v.platform === src);
-  const warn = Object.entries(S.searchWarn || {}).map(([k, m]) => `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>${k === 'twitch' ? 'Twitch' : 'YouTube'} не ответил</b><small>${esc(String(m).split('\n').slice(0, 3).join(' '))}</small></div></div>`).join('');
+  const loose = shown.some(({ v }) => v.loose) ? `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>В Twitch по словам «${esc(S.lastQuery)}» ничего</b><small>Twitch не умеет искать по всем видео, программа смотрит только названия записей и клипов каналов ${esc(S.settings.twitchChannels.join(', '))}. Поэтому показаны последние записи и лучшие клипы. Стримы обычно названы по-русски: попробуй русские слова или добавь каналы.</small></div></div>` : '';
+  const warn = loose + Object.entries(S.searchWarn || {}).map(([k, m]) => `<div class="card notice"><span class="warnc">${ic('triangle-alert')}</span><div class="grow"><b>${k === 'twitch' ? 'Twitch' : 'YouTube'} не ответил</b><small>${esc(String(m).split('\n').slice(0, 3).join(' '))}</small></div></div>`).join('');
   if (!shown.length) { el.innerHTML = `${warn}<div class="empty">${ic('list-video')}<b>Здесь ничего</b>${src === 'twitch' ? `В названиях записей и клипов ${esc(S.settings.twitchChannels.join(', '))} нет слов запроса. Попробуй другие слова или добавь каналы.` : 'Попробуй другой запрос или другой источник.'}</div>`; return; }
   el.innerHTML = `${warn}<div class="results">${shown.map(({ v, i }) => `
     <div class="vcard">
@@ -237,9 +240,25 @@ function drawResults() {
           <button class="btn sm ghost" data-open="${i}">${ic('external-link', 'sm')}</button>
         </div>
       </div>
-    </div>`).join('')}</div>`;
+    </div>`).join('')}</div>
+    ${S.ytNext && src !== 'twitch' && src !== 'instagram' ? `<div class="row" style="justify-content:center;margin:16px 0"><button class="btn" id="more">${ic('plus', 'sm')}Показать ещё с YouTube</button></div>` : ''}`;
   $$('[data-add]').forEach((b) => { b.onclick = () => addUrl(S.results[+b.dataset.add].url); });
   $$('[data-open]').forEach((b) => { b.onclick = () => call('openUrl', S.results[+b.dataset.open].url); });
+  if ($('#more')) {
+    $('#more').onclick = async () => {
+      const btn = $('#more'); btn.disabled = true; btn.innerHTML = `${ic('refresh-cw', 'sm')}Загружаю…`;
+      try {
+        const r = await call('search', S.lastQuery, { minMin: S.settings.searchMinMin, sort: $('#sort') ? $('#sort').value : 'views', limit: 40, start: S.ytNext });
+        const have = new Set(S.results.map((v) => v.url));
+        const fresh = r.results.filter((v) => !have.has(v.url));
+        S.results = [...S.results, ...fresh];
+        S.ytNext = r.raw >= 40 ? S.ytNext + 40 : 0;
+        if (!fresh.length && S.ytNext) toast('На этой странице всё короче фильтра «от N минут», нажми ещё раз', 4000);
+        if (!S.ytNext) toast('YouTube больше ничего не отдал', 3000);
+      } catch (e) { fail(e); }
+      drawResults();
+    };
+  }
 }
 
 /** Ошибка поиска на месте результатов: видна, пока не начнёшь новый поиск. */

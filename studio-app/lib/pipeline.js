@@ -216,12 +216,18 @@ class Pipeline {
     }
     if (!lists.length && fails.length) throw new Error(`Twitch ничего не отдал.\n${fails.slice(0, 3).join('\n')}`);
     const seen = new Set();
-    return filterByQuery(lists.filter((e) => e.url && !seen.has(e.url) && seen.add(e.url)), q);
+    const all = lists.filter((e) => e.url && !seen.has(e.url) && seen.add(e.url));
+    const found = filterByQuery(all, q);
+    if (found.length) return found;
+    // в названиях нет слов запроса (часто запрос по-английски, а стримы названы по-русски) — не пусто,
+    // а последние записи и самые просматриваемые клипы, с пометкой
+    const vods = all.filter((e) => e.kind !== 'clip').slice(0, 20), clips = all.filter((e) => e.kind === 'clip').sort((a, b) => b.views - a.views).slice(0, 20);
+    return [...vods, ...clips].map((e) => ({ ...e, loose: true }));
   }
 
   /** Поиск лонгов/нарезок: запрос, ссылка на канал или плейлист. */
-  async search(q, limit = 20) {
-    const r = await this.ytdlp(listArgs(q, limit), searchTarget(q, limit), { accept: hasEntries, timeoutSec: 90 });
+  async search(q, limit = 20, start = 1) {
+    const r = await this.ytdlp(listArgs(q, limit, start), searchTarget(q, limit), { accept: hasEntries, timeoutSec: 90 });
     return parseList(r.stdout.toString('utf8').trim());
   }
 

@@ -157,11 +157,16 @@ function registerIpc() {
   handle('search', async (q, o = {}) => {
     // ссылка на канал, плейлист или видео — как раньше, только по ней
     if (isUrl(String(q).trim()) || /^(?:www\.)?(twitch\.tv|youtube\.com)\//i.test(String(q).trim())) {
-      const list = await pipeline.search(channelUrl(q), o.limit || 30);
-      return { results: filterLongs(list, { minDur: (o.minMin || 0) * 60, sort: o.sort || 'views' }), errors: {} };
+      const list = await pipeline.search(channelUrl(q), o.limit || 30, o.start || 1);
+      return { results: filterLongs(list, { minDur: (o.minMin || 0) * 60, sort: o.sort || 'views' }), errors: {}, raw: list.length };
+    }
+    // «Показать ещё»: следующая страница YouTube (Twitch и Instagram приходят сразу целиком)
+    if (o.start > 1) {
+      const list = await pipeline.search(q, o.limit || 30, o.start);
+      return { results: filterLongs(list, { minDur: (o.minMin || 0) * 60, sort: o.sort || 'views' }), errors: {}, raw: list.length };
     }
     const r = await pipeline.searchAll(q, { source: o.source || 'all', limit: o.limit || 30 });
-    return { results: mergeResults(r.results, { minDur: (o.minMin || 0) * 60, sort: o.sort || 'views' }), errors: r.errors };
+    return { results: mergeResults(r.results, { minDur: (o.minMin || 0) * 60, sort: o.sort || 'views' }), errors: r.errors, raw: r.results.filter((e) => e.platform === 'youtube').length };
   });
   // поиск в Instagram: проверить токен, найти Instagram-аккаунт и сохранить (userId можно ввести вручную)
   handle('igsearch:setup', async (token, userId = '') => {
