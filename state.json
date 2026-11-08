@@ -143,8 +143,7 @@
   "failures": {
     "002_Night-Shift/short-5-3-10-am.mp4": 1,
     "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1,
-    "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3,
-    "rulezerosurvivel|instagram:004_Metro/rulezerosurvivel/short-5-the-horn.mp4": 1
+    "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3
   },
   "active": null,
   "plans": {
@@ -282,6 +281,11 @@
         "media_id": "18230350039329964",
         "permalink": "https://www.instagram.com/reel/DfeYxcZTFKd/",
         "at": "2026-11-08T09:02:10+00:00"
+      },
+      "instagram:004_Metro/rulezerosurvivel/short-5-the-horn.mp4": {
+        "media_id": "18121517872971623",
+        "permalink": "https://www.instagram.com/reel/DfenBToz8gh/",
+        "at": "2026-11-08T11:06:45+00:00"
       }
     },
     "survivelzerorule": {
