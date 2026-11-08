@@ -129,6 +129,11 @@
       "media_id": "18136609285671384",
       "permalink": "https://www.instagram.com/reel/DfeYtZ5D_Q5/",
       "at": "2026-11-08T09:01:33+00:00"
+    },
+    "instagram:004_Metro/dayzerorules/short-5-the-blue-light.mp4": {
+      "media_id": "18005929716007593",
+      "permalink": "https://www.instagram.com/reel/DfemcqADPZT/",
+      "at": "2026-11-08T11:01:34+00:00"
     }
   },
   "skipped": {
@@ -138,7 +143,8 @@
   "failures": {
     "002_Night-Shift/short-5-3-10-am.mp4": 1,
     "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1,
-    "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3
+    "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3,
+    "rulezerosurvivel|instagram:004_Metro/rulezerosurvivel/short-5-the-horn.mp4": 1
   },
   "active": null,
   "plans": {
@@ -388,6 +394,11 @@
         "media_id": "18350005651281667",
         "permalink": "https://www.instagram.com/reel/DfeY2D8jwjG/",
         "at": "2026-11-08T09:02:37+00:00"
+      },
+      "instagram:004_Metro/survivelzerorule/short-5-doors-stay-shut.mp4": {
+        "media_id": "18348936325284718",
+        "permalink": "https://www.instagram.com/reel/DfemzADjLuv/",
+        "at": "2026-11-08T11:04:37+00:00"
       }
     },
     "evelon185": {
