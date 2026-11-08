@@ -139,6 +139,11 @@
       "media_id": "18132313834699155",
       "permalink": "https://www.instagram.com/reel/Dfe0Q_tjWUw/",
       "at": "2026-11-08T13:02:21+00:00"
+    },
+    "instagram:004_Metro/dayzerorules/short-7-the-horn.mp4": {
+      "media_id": "18079052852455437",
+      "permalink": "https://www.instagram.com/reel/DffDcChCdox/",
+      "at": "2026-11-08T15:15:04+00:00"
     }
   },
   "skipped": {
@@ -149,9 +154,7 @@
     "002_Night-Shift/short-5-3-10-am.mp4": 1,
     "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1,
     "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3,
-    "instagram:004_Metro/dayzerorules/short-7-the-horn.mp4": 1,
-    "rulezerosurvivel|instagram:004_Metro/rulezerosurvivel/short-7-six-seven.mp4": 1,
-    "survivelzerorule|instagram:004_Metro/survivelzerorule/short-7-6-40-pm.mp4": 1
+    "survivelzerorule|instagram:004_Metro/survivelzerorule/short-7-6-40-pm.mp4": 2
   },
   "active": null,
   "plans": {
@@ -299,6 +302,11 @@
         "media_id": "18067257323534604",
         "permalink": "https://www.instagram.com/reel/Dfe1IaUliYF/",
         "at": "2026-11-08T13:09:58+00:00"
+      },
+      "instagram:004_Metro/rulezerosurvivel/short-7-six-seven.mp4": {
+        "media_id": "18003515979010623",
+        "permalink": "https://www.instagram.com/reel/DffDhRGhnvO/",
+        "at": "2026-11-08T15:15:37+00:00"
       }
     },
     "survivelzerorule": {
