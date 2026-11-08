@@ -134,6 +134,11 @@
       "media_id": "18005929716007593",
       "permalink": "https://www.instagram.com/reel/DfemcqADPZT/",
       "at": "2026-11-08T11:01:34+00:00"
+    },
+    "instagram:004_Metro/dayzerorules/short-6-not-today-rat.mp4": {
+      "media_id": "18132313834699155",
+      "permalink": "https://www.instagram.com/reel/Dfe0Q_tjWUw/",
+      "at": "2026-11-08T13:02:21+00:00"
     }
   },
   "skipped": {
@@ -143,7 +148,8 @@
   "failures": {
     "002_Night-Shift/short-5-3-10-am.mp4": 1,
     "survivelzerorule|002_Night-Shift/short-5-3-10-am.mp4": 1,
-    "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3
+    "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": 3,
+    "rulezerosurvivel|instagram:004_Metro/rulezerosurvivel/short-6-6-40-pm.mp4": 1
   },
   "active": null,
   "plans": {
@@ -403,6 +409,11 @@
         "media_id": "18348936325284718",
         "permalink": "https://www.instagram.com/reel/DfemzADjLuv/",
         "at": "2026-11-08T11:04:37+00:00"
+      },
+      "instagram:004_Metro/survivelzerorule/short-6-six-seven.mp4": {
+        "media_id": "18200056909391881",
+        "permalink": "https://www.instagram.com/reel/Dfe0mSNgF2e/",
+        "at": "2026-11-08T13:05:17+00:00"
       }
     },
     "evelon185": {
