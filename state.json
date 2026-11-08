@@ -109,6 +109,11 @@
       "media_id": "18213588526370676",
       "permalink": "https://www.instagram.com/reel/DfcdH0MChrL/",
       "at": "2026-11-07T15:01:40+00:00"
+    },
+    "instagram:004_Metro/dayzerorules/short-1-6-40-pm.mp4": {
+      "media_id": "17995491471058373",
+      "permalink": "https://www.instagram.com/reel/Dfdvnw7kXmv/",
+      "at": "2026-11-08T03:02:39+00:00"
     }
   },
   "skipped": {
@@ -236,6 +241,11 @@
         "media_id": "18351348334269850",
         "permalink": "https://www.instagram.com/reel/DfcdZxFK9kU/",
         "at": "2026-11-07T15:04:09+00:00"
+      },
+      "instagram:004_Metro/rulezerosurvivel/short-1-doors-stay-shut.mp4": {
+        "media_id": "18108411395307374",
+        "permalink": "https://www.instagram.com/reel/Dfdvs3oxGVG/",
+        "at": "2026-11-08T03:03:14+00:00"
       }
     },
     "survivelzerorule": {
@@ -328,6 +338,11 @@
         "media_id": "18118285964018865",
         "permalink": "https://www.instagram.com/reel/Dfcd5mbAfPW/",
         "at": "2026-11-07T15:08:26+00:00"
+      },
+      "instagram:004_Metro/survivelzerorule/short-1-the-horn.mp4": {
+        "media_id": "18113600873618763",
+        "permalink": "https://www.instagram.com/reel/Dfdv3mwEcwT/",
+        "at": "2026-11-08T03:04:48+00:00"
       }
     },
     "evelon185": {
@@ -363,8 +378,34 @@
   },
   "lanes": {
     "instagram": {
-      "active": null,
-      "last_started": "2026-11-07",
+      "active": {
+        "folder": "004_Metro",
+        "date": "2026-11-08",
+        "plan": {
+          "dayzerorules/short-1-6-40-pm.mp4": "2026-11-08T10:00+07:00",
+          "dayzerorules/short-2-six-seven.mp4": "2026-11-08T12:00+07:00",
+          "dayzerorules/short-3-doors-stay-shut.mp4": "2026-11-08T14:00+07:00",
+          "dayzerorules/short-4-the-third-rail.mp4": "2026-11-08T16:00+07:00",
+          "dayzerorules/short-5-the-blue-light.mp4": "2026-11-08T18:00+07:00",
+          "dayzerorules/short-6-not-today-rat.mp4": "2026-11-08T20:00+07:00",
+          "dayzerorules/short-7-the-horn.mp4": "2026-11-08T22:00+07:00",
+          "rulezerosurvivel/short-1-doors-stay-shut.mp4": "2026-11-08T10:00+07:00",
+          "rulezerosurvivel/short-2-the-third-rail.mp4": "2026-11-08T12:00+07:00",
+          "rulezerosurvivel/short-3-the-blue-light.mp4": "2026-11-08T14:00+07:00",
+          "rulezerosurvivel/short-4-not-today-rat.mp4": "2026-11-08T16:00+07:00",
+          "rulezerosurvivel/short-5-the-horn.mp4": "2026-11-08T18:00+07:00",
+          "rulezerosurvivel/short-6-6-40-pm.mp4": "2026-11-08T20:00+07:00",
+          "rulezerosurvivel/short-7-six-seven.mp4": "2026-11-08T22:00+07:00",
+          "survivelzerorule/short-1-the-horn.mp4": "2026-11-08T10:00+07:00",
+          "survivelzerorule/short-2-not-today-rat.mp4": "2026-11-08T12:00+07:00",
+          "survivelzerorule/short-3-the-blue-light.mp4": "2026-11-08T14:00+07:00",
+          "survivelzerorule/short-4-the-third-rail.mp4": "2026-11-08T16:00+07:00",
+          "survivelzerorule/short-5-doors-stay-shut.mp4": "2026-11-08T18:00+07:00",
+          "survivelzerorule/short-6-six-seven.mp4": "2026-11-08T20:00+07:00",
+          "survivelzerorule/short-7-6-40-pm.mp4": "2026-11-08T22:00+07:00"
+        }
+      },
+      "last_started": "2026-11-08",
       "plans": {
         "2026-11-06": {
           "folder": "002_Bunker",
@@ -414,6 +455,32 @@
             "survivelzerorule/short-6-two-bells.mp4": "2026-11-07T20:00+07:00",
             "survivelzerorule/short-7-the-notebook.mp4": "2026-11-07T22:00+07:00"
           }
+        },
+        "2026-11-08": {
+          "folder": "004_Metro",
+          "plan": {
+            "dayzerorules/short-1-6-40-pm.mp4": "2026-11-08T10:00+07:00",
+            "dayzerorules/short-2-six-seven.mp4": "2026-11-08T12:00+07:00",
+            "dayzerorules/short-3-doors-stay-shut.mp4": "2026-11-08T14:00+07:00",
+            "dayzerorules/short-4-the-third-rail.mp4": "2026-11-08T16:00+07:00",
+            "dayzerorules/short-5-the-blue-light.mp4": "2026-11-08T18:00+07:00",
+            "dayzerorules/short-6-not-today-rat.mp4": "2026-11-08T20:00+07:00",
+            "dayzerorules/short-7-the-horn.mp4": "2026-11-08T22:00+07:00",
+            "rulezerosurvivel/short-1-doors-stay-shut.mp4": "2026-11-08T10:00+07:00",
+            "rulezerosurvivel/short-2-the-third-rail.mp4": "2026-11-08T12:00+07:00",
+            "rulezerosurvivel/short-3-the-blue-light.mp4": "2026-11-08T14:00+07:00",
+            "rulezerosurvivel/short-4-not-today-rat.mp4": "2026-11-08T16:00+07:00",
+            "rulezerosurvivel/short-5-the-horn.mp4": "2026-11-08T18:00+07:00",
+            "rulezerosurvivel/short-6-6-40-pm.mp4": "2026-11-08T20:00+07:00",
+            "rulezerosurvivel/short-7-six-seven.mp4": "2026-11-08T22:00+07:00",
+            "survivelzerorule/short-1-the-horn.mp4": "2026-11-08T10:00+07:00",
+            "survivelzerorule/short-2-not-today-rat.mp4": "2026-11-08T12:00+07:00",
+            "survivelzerorule/short-3-the-blue-light.mp4": "2026-11-08T14:00+07:00",
+            "survivelzerorule/short-4-the-third-rail.mp4": "2026-11-08T16:00+07:00",
+            "survivelzerorule/short-5-doors-stay-shut.mp4": "2026-11-08T18:00+07:00",
+            "survivelzerorule/short-6-six-seven.mp4": "2026-11-08T20:00+07:00",
+            "survivelzerorule/short-7-6-40-pm.mp4": "2026-11-08T22:00+07:00"
+          }
         }
       }
     },
@@ -436,7 +503,7 @@
     },
     "evelon185": {
       "ok": true,
-      "expires": "2027-11-04",
+      "expires": "2027-11-05",
       "since": "2026-11-06"
     }
   }
