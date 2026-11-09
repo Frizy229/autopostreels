@@ -85,6 +85,12 @@ DEFAULT_CONFIG = {
     "media_keep_days": 2,
     "max_posts_per_account_run": 0,  # 0 = как max_posts_per_run; лимит публикаций одного аккаунта за запуск
     "parallel_accounts": 4,          # сколько аккаунтов публикуют одновременно
+    # Лучшие ролики (команда stats): ролик группы, набравший в factor раз больше обычного (медиана за 14 дней), не реже
+    # чем через after_hours после выхода. Его видео не удаляется из хранилища ("keep"), виджет показывает его в «Сводке».
+    "best": {"enabled": True, "factor": 2.0, "min_views": 300, "after_hours": 20, "per_day": 1, "keep_days": 30},
+    # Повтор лучшего ролика в аккаунты группы, где его ещё не было (через after_days дней, в середине окна).
+    # same_accounts: ещё и в те же аккаунты через same_after_days дней (повтор одного ролика может резать охват).
+    "repost": {"enabled": True, "after_days": 1, "same_accounts": False, "same_after_days": 14},
 }
 
 NETWORKS = ("instagram", "tiktok")
@@ -94,7 +100,7 @@ RESERVED_GROUP_IDS = {"default", "main", "instagram", "tiktok", "queue", "posted
 # что группа может задать своё (остальное, например часовой пояс и лимит за запуск, общее)
 GROUP_OVERRIDES = ("day_start", "day_end", "hashtags", "default_text", "caption_template")
 HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
-TEXT_KEYS = ("caption", "footer", "hashtags", "comment", "use_pinned_comment")
+TEXT_KEYS = ("caption", "footer", "hashtags", "comment", "use_pinned_comment", "caption_b", "footer_b")
 
 IG_CAPTION_LIMIT = 2200
 IG_HASHTAG_LIMIT = 30
@@ -421,10 +427,56 @@ def parse_captions(text: str) -> list[tuple[str, str]]:
     return out
 
 
+AB_HEAD_RE = re.compile(r"^REELS CAPTION\s*\(?\s*([AB])\s*\)?\s*$", re.I)
+
+
+def ab_blocks(item: dict) -> dict:
+    """Варианты подписи A/B из .txt: блоки «REELS CAPTION A:» и «REELS CAPTION B:»."""
+    out = {}
+    for head, body in item.get("captions") or []:
+        m = AB_HEAD_RE.match(head.strip())
+        if m:
+            out[m.group(1).upper()] = body
+    return out if len(out) == 2 else {}
+
+
+def ab_variant(item: dict, acc: dict, texts: dict) -> str:
+    """A/B подписи: "A" или "B", если у ролика (или в текстах сети) есть второй вариант, иначе "".
+    Вариант меняется и по роликам, и по аккаунтам: каждый аккаунт получает оба варианта поровну,
+    каждый ролик выходит с обоими вариантами в разных аккаунтах."""
+    if not (ab_blocks(item) or texts.get("caption_b") or texts.get("footer_b")):
+        return ""
+    base = item.get("ab_id") or item["id"]
+    n = sum(base.encode("utf-8")) + acc_index(acc)
+    return "AB"[n % 2]
+
+
+def make_caption(cfg: dict, item: dict, acc: dict) -> tuple[str, str]:
+    """Готовая подпись для аккаунта и вариант A/B ("" без A/B)."""
+    texts = resolve_texts(cfg, item, acc)
+    gc = group_cfg(cfg, acc.get("group", ""))
+    v = ab_variant(item, acc, texts)
+    blocks = ab_blocks(item)
+    if v == "B":
+        texts = dict(texts)
+        if texts.get("caption_b"):
+            texts["caption"] = texts["caption_b"]
+        if texts.get("footer_b"):
+            texts["footer"] = texts["footer_b"]
+    text = blocks[v] if v and blocks and not own_caption(item, acc) else caption_for(item, acc, acc_index(acc))
+    return build_caption(gc, text, texts), v
+
+
+def own_caption(item: dict, acc: dict) -> bool:
+    name = acc["name"].lower().lstrip("@")
+    return any(name and name in h.lower() for h, _ in item.get("captions") or [])
+
+
 def caption_for(item: dict, acc: dict, index: int) -> str:
     """Подпись для аккаунта: блок, где в заголовке есть имя аккаунта; иначе блок без имён
     нужного порядка; иначе общий текст."""
-    caps = item.get("captions") or []
+    caps = [(h, b) for h, b in item.get("captions") or [] if not AB_HEAD_RE.match(h.strip())] \
+        if ab_blocks(item) else item.get("captions") or []
     name = acc["name"].lower().lstrip("@")
     for head, body in caps:
         if name and name in head.lower():
@@ -436,7 +488,8 @@ def caption_for(item: dict, acc: dict, index: int) -> str:
     plain = [b for h, b in caps if "@" not in h and "tiktok" not in h.lower()]
     if plain:
         return plain[0] if len(plain) == 1 or index >= len(plain) else plain[index]
-    return item["text"]
+    blocks = ab_blocks(item)
+    return blocks["A"] if blocks else item["text"]
 
 
 def parse_section(text: str, names: tuple[str, ...]) -> str:
@@ -616,8 +669,14 @@ def cleanup_media(cfg: dict, state: dict, now: dt.datetime) -> None:
         for stub in pd.rglob("*" + REMOTE_SUFFIX):
             data = read_stub(stub)
             aid = str(data.get("asset_id") or "")
-            if not aid or data.get("deleted") or data.get("keep"):
+            if not aid or data.get("deleted"):
                 continue
+            if data.get("keep"):
+                # лучший ролик держим keep_days дней (и пока не вышли повторы); "keep" без "best" — навсегда
+                if not data.get("best") or not best_expired(cfg, state, data["best"], stub, now):
+                    continue
+                data.pop("keep")
+                stub.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             seen.add(aid)
             since = marks.setdefault(aid, now.isoformat(timespec="minutes"))
             if now - dt.datetime.fromisoformat(since) < dt.timedelta(days=days):
@@ -643,6 +702,22 @@ def cleanup_media(cfg: dict, state: dict, now: dt.datetime) -> None:
         marks.pop(aid)
     if not marks:
         state.pop("media_done", None)
+
+
+def opt(cfg: dict, key: str) -> dict:
+    """Вложенная настройка (best, repost): значения по умолчанию + то, что задано в config.json."""
+    return {**DEFAULT_CONFIG.get(key, {}), **(cfg.get(key) or {})}
+
+
+def best_expired(cfg: dict, state: dict, day: str, stub: pathlib.Path, now: dt.datetime) -> bool:
+    try:
+        old = now.date() - dt.date.fromisoformat(str(day)[:10]) >= dt.timedelta(days=float(opt(cfg, "best")["keep_days"]))
+    except ValueError:
+        return False
+    rel = stub.relative_to(ROOT).as_posix()[: -len(REMOTE_SUFFIX)]
+    waiting = any(b.get("video") == rel and any(not (r.get("at") or r.get("skipped")) for r in (b.get("reposts") or {}).values())
+                  for b in (state.get("best") or {}).values())
+    return old and not waiting
 
 
 def _subdirs(folder: pathlib.Path) -> list[pathlib.Path]:
@@ -703,25 +778,29 @@ def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], 
         pending = [a for a in accounts if not acc_done(state, a, key)]
         if not pending:
             continue
-        txt = video.with_suffix(".txt")
-        raw = txt.read_text(encoding="utf-8-sig") if txt.exists() else ""
-        caption, cover_name = parse_txt(raw)
-        items.append({
-            "tiktok": load_tt_settings(video),
-            "id": key,
-            "plan_key": key.split("/", 1)[1],   # путь внутри папки дня: имя файла или «подпапка/файл»
-            "group": group,                      # рилсы одного аккаунта планируются отдельно
-            "video": video,
-            "txt": txt if txt.exists() else None,
-            "cover": find_cover(video, cover_name),
-            "text": caption,
-            "raw": raw,
-            "texts": texts or {},
-            "captions": parse_captions(raw),
-            "covers": parse_covers(raw),
-            "pending": pending,
-        })
+        items.append(make_item(video, key, group, texts, pending))
     return items
+
+
+def make_item(video: pathlib.Path, key: str, group: str, texts: dict | None, pending: list[dict]) -> dict:
+    txt = video.with_suffix(".txt")
+    raw = txt.read_text(encoding="utf-8-sig") if txt.exists() else ""
+    caption, cover_name = parse_txt(raw)
+    return {
+        "tiktok": load_tt_settings(video),
+        "id": key,
+        "plan_key": key.split("/", 1)[-1],  # путь внутри папки дня: имя файла или «подпапка/файл»
+        "group": group,                      # рилсы одного аккаунта планируются отдельно
+        "video": video,
+        "txt": txt if txt.exists() else None,
+        "cover": find_cover(video, cover_name),
+        "text": caption,
+        "raw": raw,
+        "texts": texts or {},
+        "captions": parse_captions(raw),
+        "covers": parse_covers(raw),
+        "pending": pending,
+    }
 
 
 # ---------------------------------------------------------------- lanes (очереди по соцсетям)
@@ -1321,6 +1400,132 @@ def tt_code_from(text: str) -> str:
 
 # ---------------------------------------------------------------- commands
 
+# ---------------------------------------------------------------- лучшие ролики и повторы
+
+def video_of_id(cfg: dict, pid: str) -> pathlib.Path | None:
+    """Где лежит видео рилса: в posted… (папка могла получить суффикс времени) или ещё в очереди."""
+    ln = lane_of_id(cfg, pid)
+    rel = pid[len(ln["prefix"]):]
+    have = lambda v: v.exists() or remote_stub(v).exists()  # noqa: E731
+    for d in (ln["posted_dir"], ln["queue_dir"]):
+        if have(ROOT / d / rel):
+            return ROOT / d / rel
+    folder, _, rest = rel.partition("/")
+    pd = ROOT / ln["posted_dir"]
+    if rest and pd.exists():
+        for f in sorted(pd.glob(f"{folder}_*"), reverse=True):
+            if have(f / rest):
+                return f / rest
+    return None
+
+
+def group_scores(state: dict, stats: dict, gid: str) -> dict:
+    """Рилсы группы в Instagram с цифрами: средние просмотры на аккаунт (или лайки, если просмотров нет)."""
+    out: dict = {}
+    for acc in ACTIVE_ACCOUNTS:
+        if acc.get("group", "") != gid or acc.get("platform") == "tiktok":
+            continue
+        for pid, info in acc_posted(state, acc).items():
+            row = stats.get(acc_key(acc, pid)) or {}
+            score = row.get("views") if row.get("views") is not None else row.get("likes")
+            if score is None or pid.startswith("repost:"):
+                continue
+            e = out.setdefault(pid, {"scores": [], "accounts": [], "at": info["at"], "views": 0, "likes": 0})
+            e["scores"].append(score)
+            e["accounts"].append(acc["name"])
+            e["at"] = min(e["at"], info["at"])
+            e["views"] += row.get("views") or 0
+            e["likes"] += row.get("likes") or 0
+    for e in out.values():
+        e["score"] = sum(e["scores"]) / len(e["scores"])
+    return out
+
+
+def pick_best(cfg: dict, state: dict, stats: dict, now: dt.datetime) -> None:
+    """Отметить лучшие ролики групп: видео не удаляется, виджет показывает их в «Сводке», запланировать повторы."""
+    b = opt(cfg, "best")
+    if not b.get("enabled"):
+        return
+    tz = ZoneInfo(cfg["timezone"])
+    local = now.astimezone(tz)
+    today = local.date().isoformat()
+    best = state.setdefault("best", {})
+    for gid in [""] + [g["id"] for g in groups(cfg)]:
+        posts = group_scores(state, stats, gid)
+        recent = {p: e for p, e in posts.items() if now - dt.datetime.fromisoformat(e["at"]) <= dt.timedelta(days=14)}
+        scores = sorted(e["score"] for e in recent.values())
+        if len(scores) < 5:
+            continue  # мало данных, «лучше обычного» не определить
+        median = scores[len(scores) // 2]
+        need = max(float(b["min_views"]), float(b["factor"]) * median)
+        room = int(b["per_day"]) - sum(1 for x in best.values() if x.get("group", "") == gid and x.get("day") == today)
+        cands = []
+        for pid, e in recent.items():
+            age = (now - dt.datetime.fromisoformat(e["at"])).total_seconds() / 3600
+            if pid in best or e["score"] < need or not (float(b["after_hours"]) <= age <= 7 * 24):
+                continue
+            cands.append((e["score"], pid, e))
+        for score, pid, e in sorted(cands, reverse=True)[:max(0, room)]:
+            video = video_of_id(cfg, pid)
+            stub = remote_stub(video) if video else None
+            if video is None or (stub.exists() and read_stub(stub).get("deleted")):
+                continue  # видео уже нет: выделять нечего
+            if stub.exists():
+                data = read_stub(stub)
+                data.update(keep=True, best=today)
+                stub.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            best[pid] = {"group": gid, "day": today, "score": round(score), "median": round(median),
+                         "views": e["views"], "likes": e["likes"], "accounts": e["accounts"],
+                         "video": video.relative_to(ROOT).as_posix(), "reposts": plan_reposts(cfg, state, gid, pid, local)}
+            log(f"Лучший ролик{' группы ' + gid if gid else ''}: {pid} ({round(score)} при обычных {round(median)}).")
+    if not best:
+        state.pop("best", None)
+
+
+def plan_reposts(cfg: dict, state: dict, gid: str, pid: str, local: dt.datetime) -> dict:
+    r = opt(cfg, "repost")
+    if not r.get("enabled"):
+        return {}
+    gc, tz = group_cfg(cfg, gid), ZoneInfo(cfg["timezone"])
+
+    def due(days: float) -> str:
+        d = local.date() + dt.timedelta(days=int(days))
+        start, end = at_time(d, gc["day_start"], tz), at_time(d, gc["day_end"], tz)
+        return (start + (end - start) / 2).isoformat(timespec="minutes")
+    out = {}
+    for acc in ACTIVE_ACCOUNTS:
+        if acc.get("group", "") != gid or acc.get("platform") == "tiktok":
+            continue
+        if pid not in acc_posted(state, acc):
+            out[acc["name"]] = {"due": due(r["after_days"])}
+        elif r.get("same_accounts"):
+            out[acc["name"]] = {"due": due(r["same_after_days"])}
+    return out
+
+
+def repost_items(cfg: dict, state: dict, now: dt.datetime) -> list[dict]:
+    """Повторы лучших роликов, которым пора выйти (по одному элементу на аккаунт)."""
+    out = []
+    for pid, b in (state.get("best") or {}).items():
+        gc = group_cfg(cfg, b.get("group", ""))
+        if "instagram" in {str(x).lower() for x in gc.get("paused") or []}:
+            continue
+        for name, r in (b.get("reposts") or {}).items():
+            if r.get("at") or r.get("skipped") or dt.datetime.fromisoformat(r["due"]) > now:
+                continue
+            acc = next((a for a in ACTIVE_ACCOUNTS if a["name"] == name), None)
+            if acc is None or acc_key(acc, "repost:" + pid) in state["skipped"]:
+                continue
+            video = ROOT / b["video"]
+            if not video.exists() and (not remote_stub(video).exists() or read_stub(remote_stub(video)).get("deleted")):
+                r["skipped"] = "видео удалено"
+                continue
+            item = make_item(video, "repost:" + pid, "", load_folder_texts(video.parent), [acc])
+            item["ab_id"] = pid
+            out.append(item)
+    return out
+
+
 def cmd_post(args) -> int:
     cfg = load_config()
     if not ACTIVE_ACCOUNTS:
@@ -1346,8 +1551,8 @@ def cmd_post(args) -> int:
                         if acc not in i["pending"]:
                             continue
                         texts = resolve_texts(cfg, i, acc)
-                        gc = group_cfg(cfg, acc.get("group", ""))
-                        print(f"[@{acc['name']}]\n{build_caption(gc, caption_for(i, acc, acc_index(acc)), texts)}")
+                        cap, v = make_caption(cfg, i, acc)
+                        print(f"[@{acc['name']}{' · вариант ' + v if v else ''}]\n{cap}")
                         com = comment_for(i, acc, texts)
                         print(f"(комментарий: {com})\n" if com else "")
         return 0
@@ -1379,6 +1584,7 @@ def cmd_post(args) -> int:
     else:
         for ln in lanes(cfg):
             due += schedule(cfg, state, now, ln)[1]
+        due += repost_items(cfg, state, now)
     for ln in lanes(cfg):
         slot = lane_slot(state, ln)
         if slot.get("active"):
@@ -1475,7 +1681,11 @@ def note_failure(state: dict, fkey: str, e: Exception) -> None:
 
 def note_posted(state: dict, acc: dict, item_id: str, fkey: str, record: dict) -> None:
     with STATE_LOCK:
-        acc_posted(state, acc)[item_id] = record
+        if item_id.startswith("repost:"):
+            entry = ((state.get("best") or {}).get(item_id[7:]) or {}).setdefault("reposts", {})
+            entry[acc["name"]] = {**(entry.get(acc["name"]) or {}), **record}
+        else:
+            acc_posted(state, acc)[item_id] = record
         state.get("failures", {}).pop(fkey, None)
         save_state(state)
 
@@ -1505,13 +1715,15 @@ def _post_one(cfg: dict, state: dict, acc: dict, item: dict, ig, dead: set) -> s
     """Опубликовать один рилс в один аккаунт. Возвращает posted | failed | skip. Состояние пишется под замком:
     аккаунты публикуют параллельно."""
     fail = False
-    index, gc = acc_index(acc), group_cfg(cfg, acc.get("group", ""))
+    variant = ""
     fkey = acc_key(acc, item["id"])
     log(f"→ {item['id']} → @{acc['name']}")
     if acc.get("platform") == "tiktok":
         try:
-            res = ig.post(fetch_video(item["video"]), build_caption(gc, caption_for(item, acc, index), resolve_texts(cfg, item, acc)),
-                          item.get("tiktok"))
+            cap, variant = make_caption(cfg, item, acc)
+            res = ig.post(fetch_video(item["video"]), cap, item.get("tiktok"))
+            if variant:
+                res["ab"] = variant
         except TikTokLimit as e:
             log(f"TikTok @{acc['name']}: лимит, попробую в следующий раз. {e}")
             if "pending_share" in str(e):
@@ -1533,7 +1745,7 @@ def _post_one(cfg: dict, state: dict, acc: dict, item: dict, ig, dead: set) -> s
         return "posted"
     texts = resolve_texts(cfg, item, acc)
     try:
-        caption = build_caption(gc, caption_for(item, acc, index), texts)
+        caption, variant = make_caption(cfg, item, acc)
         cover = item["cover"]
         named = item.get("covers", {}).get(acc["name"].lower())
         if named and (item["video"].parent / named).is_file():
@@ -1568,6 +1780,8 @@ def _post_one(cfg: dict, state: dict, acc: dict, item: dict, ig, dead: set) -> s
         "permalink": link,
         "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
     }
+    if variant:
+        record["ab"] = variant
     comment = comment_for(item, acc, texts)
     if comment:
         # комментарий не должен ломать публикацию: рилс уже вышел
@@ -1612,7 +1826,12 @@ def cmd_stats(args) -> int:
             continue  # статистику TikTok пока не собираем
         ig = make_ig(acc, cfg)
         insights_ok = True
-        for pid, info in acc_posted(state, acc).items():
+        mine = dict(acc_posted(state, acc))
+        for bpid, b in (state.get("best") or {}).items():
+            rec = (b.get("reposts") or {}).get(acc["name"]) or {}
+            if rec.get("media_id"):
+                mine["repost:" + bpid] = rec
+        for pid, info in mine.items():
             key = acc_key(acc, pid)
             at = dt.datetime.fromisoformat(info["at"])
             if at < cutoff and key in stats:
@@ -1639,6 +1858,11 @@ def cmd_stats(args) -> int:
             stats[key] = row
     stats_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     log(f"Статистика обновлена для {len(stats)} рилсов.")
+    had = json.dumps(state.get("best"), sort_keys=True)
+    pick_best(cfg, state, stats, dt.datetime.now(dt.timezone.utc))
+    if json.dumps(state.get("best"), sort_keys=True) != had:
+        save_state(state)
+        stage_group_dirs(cfg)
     return 0
 
 

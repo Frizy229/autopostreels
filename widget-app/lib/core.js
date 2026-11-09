@@ -223,7 +223,7 @@ function buildSnapshot(state, stats, queues, now = new Date(), opts = {}) {
   return { today, net, group, todayRows, folders: all, nextNum, summary: { ...summary(todayRows), late: lateCount } };
 }
 
-const TEXT_KEYS = ['caption', 'footer', 'hashtags', 'comment', 'use_pinned_comment'];
+const TEXT_KEYS = ['caption', 'footer', 'hashtags', 'comment', 'use_pinned_comment', 'caption_b', 'footer_b'];
 /** Тексты из формы: пустые поля убираем (значит «как в настройках сети»), лишние ключи отбрасываем. */
 function cleanTexts(t) {
   const out = {};
@@ -353,5 +353,81 @@ function inspectFolder(dir, accounts = [], { remote = false } = {}) {
   return { name: path.basename(dir), files, videos, texts, covers, size, groups, warnings, errors };
 }
 
-module.exports = { runHealth, slug, dayIn, buildSnapshot, summary, inspectFolder, captionFor, cleanTexts, LANES, NETS, laneByKey, laneOfId,
+/**
+ * «Сводка» для всех групп: аккаунты (выложено, просмотры, лимит Meta), группы, лучшие ролики (state.best),
+ * топ за 7 дней, A/B подписи. accounts: allAccounts(config) (с _group/_groupName); groupNames: {id: имя}.
+ * Ключи stats.json: у первого аккаунта основной группы id рилса, у остальных «ник|id».
+ */
+function buildDigest(state, stats, accounts, now = new Date(), opts = {}) {
+  state = state || {}; stats = stats || {};
+  const tz = opts.scheduleTz || 'Europe/Moscow';
+  const names = opts.groupNames || {};
+  const gname = (g) => names[g] || (g ? g : 'Основная');
+  const today = dayIn(now, tz);
+  const D = 86400000;
+  const primary = (accounts.find((a) => !a._group) || {}).name;
+  const postedOf = (a) => (a.name === primary ? state.posted : (state.posted_acc || {})[a.name]) || {};
+  const keyOf = (a, id) => (a.name === primary ? id : `${a.name}|${id}`);
+  const rows = []; // каждая публикация: аккаунт, группа, id, время, цифры
+  for (const a of accounts) {
+    const plat = (a.platform || 'instagram').toLowerCase();
+    for (const [id, p] of Object.entries(postedOf(a))) {
+      if (!p || !p.at) continue;
+      const s = stats[keyOf(a, id)] || {};
+      rows.push({ acc: a.name, group: a._group || '', platform: plat, id, at: p.at, ab: p.ab || '', inbox: p.mode === 'inbox',
+        permalink: s.permalink || p.permalink || '', views: s.views ?? null, likes: s.likes ?? null, reach: s.reach ?? null, comments: s.comments ?? null });
+    }
+  }
+  const age = (r) => now - new Date(r.at);
+  const week = rows.filter((r) => age(r) <= 7 * D);
+  const sum = (list, k) => list.reduce((n, r) => n + (r[k] || 0), 0);
+  const limits = state.limits || {};
+  const accRows = accounts.map((a) => {
+    const mine = rows.filter((r) => r.acc === a.name);
+    const w = mine.filter((r) => age(r) <= 7 * D);
+    const lim = limits[a.name];
+    return { name: a.name, group: a._group || '', groupName: gname(a._group || ''), platform: (a.platform || 'instagram').toLowerCase(),
+      today: mine.filter((r) => dayIn(new Date(r.at), tz) === today).length, week: w.length,
+      views: sum(w, 'views'), likes: sum(w, 'likes'), reach: sum(w, 'reach'), total: mine.length,
+      limit: lim ? { used: lim.used, total: lim.total, at: lim.at } : null };
+  });
+  const gids = [...new Set(accounts.map((a) => a._group || ''))];
+  const best = state.best || {};
+  const groups = gids.map((g) => {
+    const w = week.filter((r) => r.group === g);
+    const ab = {};
+    for (const v of ['A', 'B']) {
+      const list = w.filter((r) => r.ab === v && r.views != null);
+      ab[v] = { n: list.length, views: list.length ? Math.round(sum(list, 'views') / list.length) : null,
+        likes: list.length ? Math.round(sum(list, 'likes') / list.length) : null };
+    }
+    const abWinner = ab.A.n >= 3 && ab.B.n >= 3 && ab.A.views !== ab.B.views ? (ab.A.views > ab.B.views ? 'A' : 'B') : '';
+    return { id: g, name: gname(g), accounts: accounts.filter((a) => (a._group || '') === g).length,
+      today: rows.filter((r) => r.group === g && dayIn(new Date(r.at), tz) === today).length, week: w.length,
+      views: sum(w, 'views'), likes: sum(w, 'likes'), ab: ab.A.n || ab.B.n ? { ...ab, winner: abWinner } : null };
+  });
+  // топ за 7 дней: один ролик (id) во всех аккаунтах вместе, по средним просмотрам на аккаунт
+  const byId = {};
+  for (const r of week) {
+    if (r.platform !== 'instagram') continue;
+    const e = byId[r.id] || (byId[r.id] = { id: r.id, group: r.group, groupName: gname(r.group), at: r.at, views: 0, likes: 0, n: 0, withViews: 0, links: [] });
+    e.n += 1; e.likes += r.likes || 0;
+    if (r.views != null) { e.views += r.views; e.withViews += 1; }
+    if (r.permalink) e.links.push({ acc: r.acc, url: r.permalink });
+    if (r.at < e.at) e.at = r.at;
+  }
+  const top = Object.values(byId).map((e) => ({ ...e, avg: e.withViews ? Math.round(e.views / e.withViews) : null, best: !!best[e.id],
+    video: best[e.id] ? best[e.id].video : '' }))
+    .sort((x, y) => (y.avg ?? -1) - (x.avg ?? -1) || y.likes - x.likes).slice(0, opts.top || 10);
+  const bestList = Object.entries(best).map(([id, b]) => ({
+    id, group: b.group || '', groupName: gname(b.group || ''), day: b.day, score: b.score, median: b.median, video: b.video || '',
+    file: String(b.video || '').split('/').pop(), times: b.median ? Math.round((b.score / b.median) * 10) / 10 : null,
+    reposts: Object.entries(b.reposts || {}).map(([acc, r]) => ({ acc, due: r.due || '', at: r.at || '', permalink: r.permalink || '',
+      status: r.at ? 'done' : r.skipped ? 'skipped' : 'wait', note: r.skipped || '' })),
+  })).sort((x, y) => String(y.day).localeCompare(String(x.day)));
+  return { today, accounts: accRows, groups, top, best: bestList,
+    totals: { today: rows.filter((r) => dayIn(new Date(r.at), tz) === today).length, week: week.length, views: sum(week, 'views'), likes: sum(week, 'likes') } };
+}
+
+module.exports = { buildDigest, runHealth, slug, dayIn, buildSnapshot, summary, inspectFolder, captionFor, cleanTexts, LANES, NETS, laneByKey, laneOfId,
   groupLanes, validGroupId, GROUPS_DIR, RESERVED_GROUPS, VIDEO_EXT, MAX_FILE, MAX_ASSET, REMOTE_SUFFIX, videoOfPath };

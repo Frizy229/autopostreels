@@ -8,7 +8,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "test": "node test/core.test.js && node test/github.test.js && node test/tiktok.test.js && node test/lanes.test.js && node test/ui.test.js && node test/health.test.js && node test/accounts.test.js && node test/handoff.test.js && node test/groups.test.js",
+    "test": "node test/core.test.js && node test/github.test.js && node test/tiktok.test.js && node test/lanes.test.js && node test/ui.test.js && node test/health.test.js && node test/accounts.test.js && node test/handoff.test.js && node test/groups.test.js && node test/digest.test.js",
     "dist": "electron-builder --win nsis --publish never"
   },
   "devDependencies": {

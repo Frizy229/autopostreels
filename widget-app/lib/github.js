@@ -101,9 +101,9 @@ class GitHub {
     return this.commitFiles({ [path]: sha }, `Настройки TikTok подтверждены: ${path.split('/').slice(1).join('/')}`);
   }
 
-  /** Скачать видео из очереди во временный файл для просмотра перед публикацией. */
+  /** Скачать видео из очереди или из опубликованных (posted…): просмотр перед публикацией, лучший ролик из «Сводки». */
   async downloadVideo(rel, dest) {
-    if (!/^(?:groups\/[a-z0-9][a-z0-9_-]*\/)?queue(?:-instagram|-tiktok)?\/[^./]/.test(rel) || rel.includes('..')) throw new Error('Недопустимый путь.');
+    if (!/^(?:groups\/[a-z0-9][a-z0-9_-]*\/)?(?:queue|posted)(?:-instagram|-tiktok)?\/[^./]/.test(rel) || rel.includes('..')) throw new Error('Недопустимый путь.');
     const res = await fetch(`${API}/repos/${this.repo}/contents/${rel.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(this.branch)}`, {
       headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.raw+json', 'User-Agent': 'reels-widget' },
     });
