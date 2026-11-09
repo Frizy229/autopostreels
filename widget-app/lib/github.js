@@ -2,7 +2,8 @@
 // Работа с GitHub через REST API: чтение очереди и загрузка папки одним коммитом.
 const fs = require('fs');
 const path = require('path');
-const { slug, inspectFolder, cleanTexts, LANES, laneByKey, groupLanes, GROUPS_DIR, VIDEO_EXT } = require('./core');
+const { slug, inspectFolder, cleanTexts, LANES, laneByKey, groupLanes, GROUPS_DIR, VIDEO_EXT, REMOTE_SUFFIX, videoOfPath } = require('./core');
+const MEDIA_TAG = 'media'; // релиз-хранилище видео очереди
 const { push } = require('./gitpush');
 const { seal } = require('./secrets');
 
@@ -83,10 +84,11 @@ class GitHub {
     const dirs = (await this.listDir(dir)).filter((d) => d.type === 'dir' && !d.name.startsWith('.'));
     return Promise.all(dirs.map(async (d) => {
       const t = await this.req('GET', `/git/trees/${d.sha}?recursive=1`);
+      // видео: файлы и описания видео из хранилища (a.mp4.remote.json → a.mp4)
       const items = ((t && t.tree) || []).filter((e) => e.type === 'blob' && e.path.split('/').length <= 2
-        && VIDEO_EXT.has(path.extname(e.path).toLowerCase()) && !e.path.split('/').some((x) => x.startsWith('.')));
+        && videoOfPath(e.path) && !e.path.split('/').some((x) => x.startsWith('.')));
       const tiktok = ((t && t.tree) || []).filter((e) => e.type === 'blob' && e.path.endsWith('.tiktok.json')).map((e) => e.path);
-      const out = { name: d.name, videos: items.map((e) => e.path).sort(), tiktok };
+      const out = { name: d.name, videos: [...new Set(items.map((e) => videoOfPath(e.path)))].sort(), tiktok };
       if (((t && t.tree) || []).some((e) => e.type === 'blob' && e.path === 'texts.json')) out.texts = true;
       return out;
     }));
@@ -105,9 +107,71 @@ class GitHub {
     const res = await fetch(`${API}/repos/${this.repo}/contents/${rel.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(this.branch)}`, {
       headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.raw+json', 'User-Agent': 'reels-widget' },
     });
+    if (res.status === 404) {
+      // видео в хранилище: качаем файл релиза по описанию <видео>.remote.json
+      const stub = await this.readText(rel + REMOTE_SUFFIX);
+      const info = stub ? JSON.parse(stub) : null;
+      if (!info || !info.asset_id) throw new Error('Видео нет ни в очереди, ни в хранилище.');
+      if (info.deleted) throw new Error(`Видео уже удалено из хранилища (${info.deleted}).`);
+      const r2 = await fetch(`${API}/repos/${this.repo}/releases/assets/${info.asset_id}`, {
+        headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/octet-stream', 'User-Agent': 'reels-widget' },
+      });
+      if (!r2.ok) throw new Error(`Не удалось скачать видео из хранилища: GitHub ${r2.status}`);
+      fs.writeFileSync(dest, Buffer.from(await r2.arrayBuffer()));
+      return dest;
+    }
     if (!res.ok) throw new Error(`Не удалось скачать видео: GitHub ${res.status}`);
     fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
     return dest;
+  }
+
+  /** Релиз-хранилище видео (создаётся при первой загрузке). Видео там не попадают в историю git. */
+  async mediaRelease() {
+    if (this._media) return this._media;
+    let r = await this.req('GET', `/releases/tags/${MEDIA_TAG}`);
+    if (!r) {
+      r = await this.req('POST', '/releases', {
+        tag_name: MEDIA_TAG, target_commitish: this.branch, name: 'Хранилище видео очереди', prerelease: true,
+        body: 'Видео, загруженные виджетом в очередь автопостера. Не трогай вручную: автопостер сам удаляет их через 2 дня после публикации.',
+      });
+    }
+    this._media = r;
+    return r;
+  }
+
+  /** Загрузить файл в релиз-хранилище. Возвращает описание для <видео>.remote.json. */
+  async uploadAsset(name, buf) {
+    const rel = await this.mediaRelease();
+    let last;
+    for (let i = 0; i < 3; i++) {
+      try {
+        const res = await fetch(`https://uploads.github.com/repos/${this.repo}/releases/${rel.id}/assets?name=${encodeURIComponent(name)}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/octet-stream', Accept: 'application/vnd.github+json', 'User-Agent': 'reels-widget' },
+          body: buf,
+        });
+        if (!res.ok) {
+          let msg = ''; try { msg = (await res.json()).message; } catch { /* ignore */ }
+          const e = new Error(`GitHub ${res.status}: ${msg || res.statusText} (загрузка видео в хранилище)`); e.status = res.status; throw e;
+        }
+        const a = await res.json();
+        return { asset_id: a.id, name: a.name, size: a.size, url: a.browser_download_url, repo: this.repo };
+      } catch (e) {
+        last = e;
+        if (e.status && e.status < 500) throw e;
+        await new Promise((r) => setTimeout(r, 2000 * (i + 1)));
+      }
+    }
+    throw last;
+  }
+
+  /** Удалить файлы хранилища по описаниям .remote.json (404 = уже нет). */
+  async deleteAssets(ids) {
+    let n = 0;
+    for (const id of ids) {
+      try { await this.req('DELETE', `/releases/assets/${id}`); n++; } catch (e) { if (e.status !== 404) throw e; }
+    }
+    return n;
   }
 
   async nextNumber(group = '') {
@@ -151,7 +215,16 @@ class GitHub {
    * opts.lane: shared | instagram | tiktok; opts.group: id группы ('' = по умолчанию); opts.texts: тексты папки (texts.json).
    */
   async uploadFolder(dir, progress = () => {}, accounts = [], opts = {}) {
-    const info = inspectFolder(dir, accounts);
+    // видео в релиз-хранилище (по умолчанию) или, как раньше, прямо в git (opts.storage = 'git')
+    let remote = opts.storage !== 'git';
+    if (remote) {
+      try { await this.mediaRelease(); } catch (e) {
+        if (!e.status || e.status >= 500) throw e;
+        remote = false; // нет права создать релиз: грузим по-старому, в git
+        progress(0, 'Хранилище недоступно (нужно право Contents: Read and write), видео пойдут в git');
+      }
+    }
+    const info = inspectFolder(dir, accounts, { remote });
     if (info.errors.length) throw new Error(info.errors.join(' '));
     const lane = laneByKey(opts.lane || 'shared', opts.group || '');
     const name = `${String(await this.nextNumber(opts.group || '')).padStart(3, '0')}_${slug(path.basename(dir))}`;
@@ -162,12 +235,19 @@ class GitHub {
     for (const f of info.files) {
       const size = fs.statSync(f).size;
       const rel = path.relative(dir, f).split(path.sep).join('/');
-      progress(0.3 * done / total, `Читаю ${rel} (${(size / 1e6).toFixed(1)} МБ)`);
-      files[`${lane.dir}/${name}/${rel}`] = fs.readFileSync(f);
+      if (remote && VIDEO_EXT.has(path.extname(f).toLowerCase())) {
+        progress(0.9 * done / total, `Загружаю в хранилище ${rel} (${(size / 1e6).toFixed(1)} МБ)`);
+        const asset = `${Date.now().toString(36)}-${`${lane.dir}/${name}/${rel}`.replace(/[^A-Za-z0-9._-]+/g, '_')}`.slice(0, 200);
+        const stub = await this.uploadAsset(asset, fs.readFileSync(f));
+        files[`${lane.dir}/${name}/${rel}${REMOTE_SUFFIX}`] = Buffer.from(JSON.stringify(stub, null, 2) + '\n', 'utf8');
+      } else {
+        progress((remote ? 0.9 : 0.3) * done / total, `Читаю ${rel} (${(size / 1e6).toFixed(1)} МБ)`);
+        files[`${lane.dir}/${name}/${rel}`] = fs.readFileSync(f);
+      }
       done += size;
     }
     if (Object.keys(texts).length) files[`${lane.dir}/${name}/texts.json`] = Buffer.from(JSON.stringify(texts, null, 2) + '\n', 'utf8');
-    progress(0.4, `Отправляю на GitHub: ${(info.size / 1e6).toFixed(0)} МБ, это может занять несколько минут…`);
+    progress(remote ? 0.92 : 0.4, remote ? 'Записываю папку в очередь…' : `Отправляю на GitHub: ${(info.size / 1e6).toFixed(0)} МБ, это может занять несколько минут…`);
     await push({
       repo: this.repo, token: this.token, branch: this.branch, files,
       message: `Новая папка рилсов: ${lane.dir}/${name} (${info.videos} видео)`,
@@ -196,6 +276,18 @@ class GitHub {
       if (!dir) throw new Error(`Папки ${name} нет в очереди (возможно, её уже удалили или она опубликована).`);
       const all = (await this.req('GET', `/git/trees/${dir.sha}?recursive=1`)).tree.filter((e) => e.type === 'blob');
       if (!all.length) throw new Error(`Папка ${name} пустая.`);
+      if (i === 0) {
+        // видео из хранилища: удаляем и сами файлы релиза
+        const ids = [];
+        for (const e of all.filter((x) => x.path.endsWith(REMOTE_SUFFIX))) {
+          try {
+            const b = await this.req('GET', `/git/blobs/${e.sha}`);
+            const j = JSON.parse(Buffer.from(b.content || '', 'base64').toString('utf8'));
+            if (j.asset_id && !j.deleted) ids.push(j.asset_id);
+          } catch { /* битое описание: просто убираем из очереди */ }
+        }
+        if (ids.length) await this.deleteAssets(ids);
+      }
       const tree = (await this.req('POST', '/git/trees', {
         base_tree: base,
         tree: all.map((e) => ({ path: `${qdir}/${name}/${e.path}`, mode: '100644', type: 'blob', sha: null })),

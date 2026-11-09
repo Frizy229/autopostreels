@@ -218,11 +218,11 @@ const accountNames = async (lane = 'shared', group = '') => {
 };
 handle('folder:inspect', async (p, lane, group) => {
   if (!fs.statSync(p).isDirectory()) throw new Error('Перетащи именно папку, а не отдельные файлы.');
-  const { files, ...info } = inspectFolder(p, await accountNames(lane, group));
+  const { files, ...info } = inspectFolder(p, await accountNames(lane, group), { remote: (repoCfg.media_storage || 'release') !== 'git' });
   return info;
 });
 handle('folder:upload', async (p, opts = {}) => gh().uploadFolder(p, (frac, text) => win && win.webContents.send('upload:progress', { frac, text }),
-  await accountNames(opts.lane, opts.group), { lane: opts.lane, texts: opts.texts, group: groupOf(opts.group) }));
+  await accountNames(opts.lane, opts.group), { lane: opts.lane, texts: opts.texts, group: groupOf(opts.group), storage: repoCfg.media_storage || 'release' }));
 handle('folder:delete', async (name, lane, group) => gh().deleteFolder(String(name), lane, groupOf(group)));
 handle('folder:texts', async (lane, name, group) => gh().folderTexts(lane, String(name), groupOf(group)));
 handle('folder:saveTexts', async (lane, name, texts, group) => { await gh().saveFolderTexts(lane, String(name), texts, groupOf(group)); return true; });
@@ -598,7 +598,7 @@ async function pollHandoff() {
     const dest = await gh().uploadFolder(job.folder, (frac, text) => {
       handoff.progress(dir, job.id, frac, text);
       if (win) win.webContents.send('upload:progress', { frac, text });
-    }, await accountNames(job.lane, job.group), { lane: job.lane, group: groupOf(job.group) });
+    }, await accountNames(job.lane, job.group), { lane: job.lane, group: groupOf(job.group), storage: repoCfg.media_storage || 'release' });
     let posted = false;
     if (job.postNow) {
       // «Выложить сразу»: запускаем публикацию первого ролика каждого выбранного аккаунта, остальные — по расписанию

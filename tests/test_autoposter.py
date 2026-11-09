@@ -29,6 +29,8 @@ class Base(unittest.TestCase):
             mock.patch.object(a, "CONFIG_PATH", self.root / "config.json"),
             mock.patch.object(a, "STATE_PATH", self.root / "state.json"),
             mock.patch.object(a.time, "sleep", lambda s: None),
+            # по умолчанию аккаунты публикуют параллельно; в тестах по очереди, чтобы порядок был предсказуем
+            mock.patch.dict(a.DEFAULT_CONFIG, {"parallel_accounts": 1}),
         ]
         for p in self.patches:
             p.start()

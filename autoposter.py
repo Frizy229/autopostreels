@@ -35,7 +35,10 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -77,6 +80,11 @@ DEFAULT_CONFIG = {
     # Группы: отдельные сетки аккаунтов для другого проекта (свои аккаунты, очереди, расписание, тексты, пауза).
     # Всё, что выше, это группа по умолчанию. Папки группы лежат в groups/<id>/queue, queue-instagram, queue-tiktok.
     "groups": [],
+    # Хранилище видео: виджет кладёт mp4 файлами в релиз GitHub "media" (не в git), в очереди лежит <видео>.remote.json.
+    # Через media_keep_days дней после публикации папки файл из релиза удаляется.
+    "media_keep_days": 2,
+    "max_posts_per_account_run": 0,  # 0 = как max_posts_per_run; лимит публикаций одного аккаунта за запуск
+    "parallel_accounts": 4,          # сколько аккаунтов публикуют одновременно
 }
 
 NETWORKS = ("instagram", "tiktok")
@@ -516,8 +524,125 @@ def match_account(name: str, accounts: list[dict] | None = None) -> dict | None:
     return max(hits, key=lambda x: len(x["name"])) if hits else None
 
 
+REMOTE_SUFFIX = ".remote.json"
+
+
 def _videos(d: pathlib.Path) -> list[pathlib.Path]:
-    return sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXT)
+    """Видео папки: настоящие файлы и видео из хранилища (<имя>.mp4.remote.json -> путь <имя>.mp4, файла может не быть)."""
+    out = set()
+    for p in d.iterdir():
+        if not p.is_file():
+            continue
+        if p.suffix.lower() in VIDEO_EXT:
+            out.add(p)
+        elif p.name.lower().endswith(REMOTE_SUFFIX) and pathlib.Path(p.name[: -len(REMOTE_SUFFIX)]).suffix.lower() in VIDEO_EXT:
+            out.add(p.with_name(p.name[: -len(REMOTE_SUFFIX)]))
+    return sorted(out)
+
+
+# ---------------------------------------------------------------- хранилище видео (релиз GitHub)
+
+def remote_stub(video: pathlib.Path) -> pathlib.Path:
+    return video.with_name(video.name + REMOTE_SUFFIX)
+
+
+def read_stub(stub: pathlib.Path) -> dict:
+    try:
+        data = json.loads(stub.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def gh_token() -> str:
+    return secret("GH_PAT") or secret("GITHUB_TOKEN")
+
+
+_FETCH_LOCK = threading.Lock()
+
+
+def fetch_video(video: pathlib.Path) -> pathlib.Path:
+    """Путь к файлу видео: сам файл или скачанный из релиза GitHub (кэш во временной папке, не в репозитории)."""
+    if video.exists():
+        return video
+    stub = remote_stub(video)
+    data = read_stub(stub)
+    if not data:
+        raise RuntimeError(f"нет файла {video.name} и описания хранилища {stub.name}")
+    if data.get("deleted"):
+        raise RuntimeError(f"{video.name} уже удалён из хранилища ({data['deleted']})")
+    cache = pathlib.Path(tempfile.gettempdir()) / "autoposter-media"
+    dest = cache / f"{data.get('asset_id') or abs(hash(stub))}{video.suffix.lower()}"
+    with _FETCH_LOCK:
+        if dest.exists() and (not data.get("size") or dest.stat().st_size == int(data["size"])):
+            return dest
+        cache.mkdir(parents=True, exist_ok=True)
+        repo, token = data.get("repo") or os.environ.get("GITHUB_REPOSITORY", ""), gh_token()
+        if token and repo and data.get("asset_id"):
+            url = f"https://api.github.com/repos/{repo}/releases/assets/{data['asset_id']}"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/octet-stream"}
+        else:
+            url, headers = data.get("url", ""), {}
+        if not url:
+            raise RuntimeError(f"{stub.name}: нет адреса видео")
+        log(f"Скачиваю {video.name} из хранилища ({int(data.get('size') or 0) / 1e6:.1f} МБ)")
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        try:
+            with requests.get(url, headers=headers, stream=True, timeout=600) as r:
+                if not r.ok:
+                    raise RuntimeError(f"не скачалось видео {video.name}: {r.status_code}")
+                with tmp.open("wb") as f:
+                    for chunk in r.iter_content(1 << 20):
+                        f.write(chunk)
+        except requests.RequestException as e:
+            raise RuntimeError(f"не скачалось видео {video.name}: {e}") from e
+        tmp.replace(dest)
+    return dest
+
+
+def cleanup_media(cfg: dict, state: dict, now: dt.datetime) -> None:
+    """Видео опубликованных папок (posted*) удаляем из релиза через media_keep_days дней. Описание .remote.json
+    остаётся с пометкой deleted. "keep": true в описании (лучшие ролики для повтора) не трогаем."""
+    days = float(cfg.get("media_keep_days", 2))
+    if days < 0:
+        return
+    marks = state.setdefault("media_done", {})
+    seen = set()
+    token, repo = gh_token(), os.environ.get("GITHUB_REPOSITORY", "")
+    for ln in lanes(cfg):
+        pd = ROOT / ln["posted_dir"]
+        if not pd.exists():
+            continue
+        for stub in pd.rglob("*" + REMOTE_SUFFIX):
+            data = read_stub(stub)
+            aid = str(data.get("asset_id") or "")
+            if not aid or data.get("deleted") or data.get("keep"):
+                continue
+            seen.add(aid)
+            since = marks.setdefault(aid, now.isoformat(timespec="minutes"))
+            if now - dt.datetime.fromisoformat(since) < dt.timedelta(days=days):
+                continue
+            if not (token and (data.get("repo") or repo)):
+                continue  # без токена удалить нельзя (локальный запуск): попробуем в Actions
+            try:
+                r = requests.delete(f"https://api.github.com/repos/{data.get('repo') or repo}/releases/assets/{aid}",
+                                    headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+                                    timeout=60)
+            except requests.RequestException as e:
+                log(f"Не удалил видео {stub.name[: -len(REMOTE_SUFFIX)]} из хранилища: {e}")
+                continue
+            if r.status_code not in (204, 404):
+                log(f"Не удалил видео {stub.name[: -len(REMOTE_SUFFIX)]} из хранилища: {r.status_code} {r.text[:200]}")
+                continue
+            data["deleted"] = now.date().isoformat()
+            stub.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            marks.pop(aid, None)
+            seen.discard(aid)
+            log(f"Видео {stub.name[: -len(REMOTE_SUFFIX)]} удалено из хранилища (опубликовано {days:g}+ дн. назад).")
+    for aid in [a for a in marks if a not in seen]:
+        marks.pop(aid)
+    if not marks:
+        state.pop("media_done", None)
 
 
 def _subdirs(folder: pathlib.Path) -> list[pathlib.Path]:
@@ -754,7 +879,7 @@ def group_loose_files(cfg: dict, now: dt.datetime, lane: dict | None = None) -> 
     qd = _lane(cfg, lane)["queue_dir"]
     q = ROOT / qd
     loose = [p for p in q.iterdir() if p.is_file() and not p.name.startswith(".")] if q.exists() else []
-    if not any(p.suffix.lower() in VIDEO_EXT for p in loose):
+    if not any(p.suffix.lower() in VIDEO_EXT or p.name.lower().endswith(REMOTE_SUFFIX) for p in loose):
         return
     dest = q / f"{now:%Y%m%d_%H%M}_upload"
     dest.mkdir(exist_ok=True)
@@ -968,6 +1093,12 @@ class Instagram:
         elif thumb_offset is not None:
             data["thumb_offset"] = str(thumb_offset)
         return self._req("POST", f"{self.base}/{self.user_id}/media", data=data)["id"]
+
+    def publishing_limit(self) -> tuple[int, int]:
+        """Сколько публикаций через API аккаунт уже сделал за последние сутки и сколько можно (лимит Meta)."""
+        d = self._req("GET", f"{self.base}/{self.user_id}/content_publishing_limit", params={"fields": "config,quota_usage"})
+        row = (d.get("data") or [{}])[0]
+        return int(row.get("quota_usage") or 0), int((row.get("config") or {}).get("quota_total") or 0)
 
     def upload_video(self, container_id: str, path: pathlib.Path) -> None:
         size = path.stat().st_size
@@ -1258,6 +1389,8 @@ def cmd_post(args) -> int:
                 plans.pop(old_day)
     if not state.get("lanes"):
         state.pop("lanes", None)
+    if not due:
+        cleanup_media(cfg, state, now)
     save_state(state)
     stage_group_dirs(cfg)
     if not due:
@@ -1283,107 +1416,170 @@ def cmd_post(args) -> int:
             if note_token(state, acc, True, expires=getattr(igs[acc["name"]], "refresh_expires", "")):
                 save_state(state)
     posted = failed = 0
-    for item in due[: int(cfg["max_posts_per_run"])]:
+    # у каждого аккаунта свой лимит за запуск; аккаунты публикуют параллельно (Instagram обрабатывает ролик минутами)
+    cap = int(cfg.get("max_posts_per_account_run") or cfg["max_posts_per_run"])
+    jobs: dict[str, list[dict]] = {}
+    for item in due:
         for acc in ACTIVE_ACCOUNTS:
-            if acc not in item["pending"] or acc["name"] in dead:
-                continue
-            index, gc = acc_index(acc), group_cfg(cfg, acc.get("group", ""))
-            ig = igs[acc["name"]]
-            fkey = acc_key(acc, item["id"])
-            log(f"→ {item['id']} → @{acc['name']}")
-            if acc.get("platform") == "tiktok":
-                try:
-                    res = ig.post(item["video"], build_caption(gc, caption_for(item, acc, index), resolve_texts(cfg, item, acc)),
-                                  item.get("tiktok"))
-                except TikTokLimit as e:
-                    log(f"TikTok @{acc['name']}: лимит, попробую в следующий раз. {e}")
-                    if "pending_share" in str(e):
-                        log("В черновиках TikTok уже 5 неопубликованных роликов: опубликуйте их в приложении TikTok.")
-                    dead.add(acc["name"])
-                    continue
-                except Exception as e:  # noqa: BLE001
-                    failed += 1
-                    log(f"ОШИБКА с {item['id']} (TikTok @{acc['name']}): {e}")
-                    fails = state.setdefault("failures", {})
-                    fails[fkey] = fails.get(fkey, 0) + 1
-                    if fails[fkey] >= 3:
-                        state["skipped"][fkey] = f"3 неудачные попытки: {str(e)[:300]}"
-                        log("Ролик пропущен после 3 попыток, смотрите state.json -> skipped.")
-                    save_state(state)
-                    if "OAuthException" in str(e):
-                        log(f"Похоже, токен TikTok недействителен. Подключите @{acc['name']} заново.")
-                        dead.add(acc["name"])
-                    continue
-                res["at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-                acc_posted(state, acc)[item["id"]] = res
-                state.get("failures", {}).pop(fkey, None)
-                save_state(state)
-                posted += 1
-                log("Ролик в черновиках TikTok: откройте уведомление в приложении и опубликуйте."
-                    if res["mode"] == "inbox" else f"Опубликовано в TikTok: {res['permalink'] or res['media_id']}")
-                continue
-            texts = resolve_texts(cfg, item, acc)
-            try:
-                caption = build_caption(gc, caption_for(item, acc, index), texts)
-                cover = item["cover"]
-                named = item.get("covers", {}).get(acc["name"].lower())
-                if named and (item["video"].parent / named).is_file():
-                    cover = item["video"].parent / named
-                cover_url = cover_url_for(cfg, cover)
-                for attempt in range(3):
-                    try:
-                        cid = ig.create_reel_container(caption, cover_url, int(cfg["thumb_offset_ms"]),
-                                                       bool(cfg["share_to_feed"]))
-                        ig.upload_video(cid, item["video"])
-                        break
-                    except RuntimeError as e:
-                        # Instagram иногда отвечает «ProcessingFailedError» на первую попытку: пробуем заново
-                        if "ProcessingFailedError" in str(e) and attempt < 2:
-                            log(f"Instagram не принял видео (попытка {attempt + 1}), пробую ещё раз.")
-                            time.sleep(20)
-                            continue
-                        raise
-                ig.wait_ready(cid)
-                media_id = ig.publish(cid)
-            except Exception as e:  # noqa: BLE001
-                failed += 1
-                log(f"ОШИБКА с {item['id']} (@{acc['name']}): {e}")
-                fails = state.setdefault("failures", {})
-                fails[fkey] = fails.get(fkey, 0) + 1
-                if fails[fkey] >= 3:
-                    state["skipped"][fkey] = f"3 неудачные попытки: {str(e)[:300]}"
-                    log("Ролик пропущен после 3 попыток, смотрите state.json -> skipped.")
-                save_state(state)
-                if "OAuthException" in str(e) or "access token" in str(e).lower():
-                    log(f"Похоже, токен недействителен. Обновите секрет {acc['token_env']}.")
-                    dead.add(acc["name"])
-                continue
-            link = ig.permalink(media_id)
-            record = {
-                "media_id": media_id,
-                "permalink": link,
-                "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-            }
-            comment = comment_for(item, acc, texts)
-            if comment:
-                # комментарий не должен ломать публикацию: рилс уже вышел
-                try:
-                    record["comment_id"] = ig.comment(media_id, comment)
-                    log("Комментарий добавлен.")
-                except Exception as e:  # noqa: BLE001
-                    record["comment_error"] = str(e)[:300]
-                    log(f"Комментарий не добавлен (нужно разрешение instagram_manage_comments): {str(e)[:200]}")
-            acc_posted(state, acc)[item["id"]] = record
-            state.get("failures", {}).pop(fkey, None)
-            save_state(state)
-            posted += 1
-            log(f"Опубликовано: {link or media_id}")
+            if acc in item["pending"] and acc["name"] not in dead and len(jobs.setdefault(acc["name"], [])) < cap:
+                jobs[acc["name"]].append(item)
+    # видео из хранилища (релиз GitHub) скачиваем заранее, один раз на ролик
+    for item in {id(i): i for lst in jobs.values() for i in lst}.values():
+        try:
+            fetch_video(item["video"])
+        except RuntimeError as e:
+            log(f"{item['id']}: {e}")
+
+    def run_account(acc: dict) -> tuple[int, int]:
+        ok = bad = 0
+        if not quota_ok(state, acc, igs[acc["name"]], len(jobs.get(acc["name"], []))):
+            return 0, 0
+        for item in jobs.get(acc["name"], []):
+            if acc["name"] in dead:
+                break
+            res = _post_one(cfg, state, acc, item, igs[acc["name"]], dead)
+            ok += res == "posted"
+            bad += res == "failed"
+        return ok, bad
+
+    workers = [a for a in ACTIVE_ACCOUNTS if jobs.get(a["name"])]
+    par = max(1, int(cfg.get("parallel_accounts", 4)))
+    if par == 1 or len(workers) < 2:
+        results = [run_account(a) for a in workers]
+    else:
+        with ThreadPoolExecutor(max_workers=min(par, len(workers))) as ex:
+            results = list(ex.map(run_account, workers))
+    posted = sum(r[0] for r in results)
+    failed = sum(r[1] for r in results)
 
     for ln in lanes(cfg):
         sweep_finished(cfg, state, ln)
+    cleanup_media(cfg, state, now)
     save_state(state)
     stage_group_dirs(cfg)
     return 1 if failed and not posted else 0
+
+
+STATE_LOCK = threading.Lock()
+
+
+def note_failure(state: dict, fkey: str, e: Exception) -> None:
+    with STATE_LOCK:
+        fails = state.setdefault("failures", {})
+        fails[fkey] = fails.get(fkey, 0) + 1
+        if fails[fkey] >= 3:
+            state["skipped"][fkey] = f"3 неудачные попытки: {str(e)[:300]}"
+            log("Ролик пропущен после 3 попыток, смотрите state.json -> skipped.")
+        save_state(state)
+
+
+def note_posted(state: dict, acc: dict, item_id: str, fkey: str, record: dict) -> None:
+    with STATE_LOCK:
+        acc_posted(state, acc)[item_id] = record
+        state.get("failures", {}).pop(fkey, None)
+        save_state(state)
+
+
+def quota_ok(state: dict, acc: dict, ig, want: int) -> bool:
+    """Лимит Meta на публикации через API за сутки: запоминаем для сводки, при исчерпании аккаунт ждёт."""
+    if acc.get("platform") == "tiktok" or not hasattr(ig, "publishing_limit"):
+        return True
+    try:
+        used, total = ig.publishing_limit()
+    except Exception as e:  # noqa: BLE001
+        log(f"@{acc['name']}: не узнал лимит публикаций Meta: {str(e)[:150]}")
+        return True
+    with STATE_LOCK:
+        lim = state.setdefault("limits", {})
+        if (lim.get(acc["name"]) or {}).get("used") != used or (lim.get(acc["name"]) or {}).get("total") != total:
+            lim[acc["name"]] = {"used": used, "total": total, "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="minutes")}
+    if total and used >= total:
+        log(f"@{acc['name']}: исчерпан суточный лимит публикаций Meta ({used}/{total}), ролики подождут.")
+        return False
+    if total and used + want > total:
+        log(f"@{acc['name']}: до лимита Meta осталось {total - used} публикаций за сутки.")
+    return True
+
+
+def _post_one(cfg: dict, state: dict, acc: dict, item: dict, ig, dead: set) -> str:
+    """Опубликовать один рилс в один аккаунт. Возвращает posted | failed | skip. Состояние пишется под замком:
+    аккаунты публикуют параллельно."""
+    fail = False
+    index, gc = acc_index(acc), group_cfg(cfg, acc.get("group", ""))
+    fkey = acc_key(acc, item["id"])
+    log(f"→ {item['id']} → @{acc['name']}")
+    if acc.get("platform") == "tiktok":
+        try:
+            res = ig.post(fetch_video(item["video"]), build_caption(gc, caption_for(item, acc, index), resolve_texts(cfg, item, acc)),
+                          item.get("tiktok"))
+        except TikTokLimit as e:
+            log(f"TikTok @{acc['name']}: лимит, попробую в следующий раз. {e}")
+            if "pending_share" in str(e):
+                log("В черновиках TikTok уже 5 неопубликованных роликов: опубликуйте их в приложении TikTok.")
+            dead.add(acc["name"])
+            return "failed" if fail else "skip"
+        except Exception as e:  # noqa: BLE001
+            fail = True
+            log(f"ОШИБКА с {item['id']} (TikTok @{acc['name']}): {e}")
+            note_failure(state, fkey, e)
+            if "OAuthException" in str(e):
+                log(f"Похоже, токен TikTok недействителен. Подключите @{acc['name']} заново.")
+                dead.add(acc["name"])
+            return "failed" if fail else "skip"
+        res["at"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        note_posted(state, acc, item["id"], fkey, res)
+        log("Ролик в черновиках TikTok: откройте уведомление в приложении и опубликуйте."
+            if res["mode"] == "inbox" else f"Опубликовано в TikTok: {res['permalink'] or res['media_id']}")
+        return "posted"
+    texts = resolve_texts(cfg, item, acc)
+    try:
+        caption = build_caption(gc, caption_for(item, acc, index), texts)
+        cover = item["cover"]
+        named = item.get("covers", {}).get(acc["name"].lower())
+        if named and (item["video"].parent / named).is_file():
+            cover = item["video"].parent / named
+        cover_url = cover_url_for(cfg, cover)
+        for attempt in range(3):
+            try:
+                cid = ig.create_reel_container(caption, cover_url, int(cfg["thumb_offset_ms"]),
+                                               bool(cfg["share_to_feed"]))
+                ig.upload_video(cid, fetch_video(item["video"]))
+                break
+            except RuntimeError as e:
+                # Instagram иногда отвечает «ProcessingFailedError» на первую попытку: пробуем заново
+                if "ProcessingFailedError" in str(e) and attempt < 2:
+                    log(f"Instagram не принял видео (попытка {attempt + 1}), пробую ещё раз.")
+                    time.sleep(20)
+                    continue
+                raise
+        ig.wait_ready(cid)
+        media_id = ig.publish(cid)
+    except Exception as e:  # noqa: BLE001
+        fail = True
+        log(f"ОШИБКА с {item['id']} (@{acc['name']}): {e}")
+        note_failure(state, fkey, e)
+        if "OAuthException" in str(e) or "access token" in str(e).lower():
+            log(f"Похоже, токен недействителен. Обновите секрет {acc['token_env']}.")
+            dead.add(acc["name"])
+        return "failed" if fail else "skip"
+    link = ig.permalink(media_id)
+    record = {
+        "media_id": media_id,
+        "permalink": link,
+        "at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+    }
+    comment = comment_for(item, acc, texts)
+    if comment:
+        # комментарий не должен ломать публикацию: рилс уже вышел
+        try:
+            record["comment_id"] = ig.comment(media_id, comment)
+            log("Комментарий добавлен.")
+        except Exception as e:  # noqa: BLE001
+            record["comment_error"] = str(e)[:300]
+            log(f"Комментарий не добавлен (нужно разрешение instagram_manage_comments): {str(e)[:200]}")
+    note_posted(state, acc, item["id"], fkey, record)
+    log(f"Опубликовано: {link or media_id}")
+    return "posted"
 
 
 def export_tt_creator(cfg: dict, acc: dict) -> None:

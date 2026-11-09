@@ -7,7 +7,9 @@ const VIDEO_EXT = new Set(['.mp4', '.mov']);
 const IMG_EXT = new Set(['.jpg', '.jpeg', '.png']);
 const ALLOWED_EXT = new Set([...VIDEO_EXT, ...IMG_EXT, '.txt', '.srt']);
 const LATE_MS = 15 * 60 * 1000;
-const MAX_FILE = 95 * 1024 * 1024; // ограничение GitHub ~100 МБ на файл
+const MAX_FILE = 95 * 1024 * 1024; // ограничение GitHub ~100 МБ на файл в git
+const MAX_ASSET = 2000 * 1024 * 1024; // файл релиза GitHub (хранилище видео) до 2 ГБ
+const REMOTE_SUFFIX = '.remote.json'; // видео в релизе GitHub: в очереди лежит <видео>.remote.json
 
 const slug = (name) => {
   let s = String(name).trim().replace(/^\d+[_\- ]*/, '');
@@ -278,6 +280,13 @@ function summary(rows) {
   return { text: `Сегодня ${done} из ${rows.length}`, done, total: rows.length, next: next ? next.planAt : null };
 }
 
+/** Путь файла очереди → путь видео: «a.mp4» и «a.mp4.remote.json» (видео в релизе) дают «a.mp4», остальное null. */
+function videoOfPath(p) {
+  const s = String(p);
+  const v = s.toLowerCase().endsWith(REMOTE_SUFFIX) ? s.slice(0, -REMOTE_SUFFIX.length) : s;
+  return VIDEO_EXT.has(path.extname(v).toLowerCase()) ? v : null;
+}
+
 /** Проверка одной директории: видео, описания, обложки (без вложенных папок). */
 function scanDir(dir) {
   const entries = fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile());
@@ -308,7 +317,7 @@ function scanDir(dir) {
  * Два формата: плоская папка (все рилсы во все аккаунты) или папка с подпапками по аккаунтам.
  * accounts: имена аккаунтов из config.json (если известны, проверяем имена подпапок).
  */
-function inspectFolder(dir, accounts = []) {
+function inspectFolder(dir, accounts = [], { remote = false } = {}) {
   const top = scanDir(dir);
   const groups = [];
   const files = [...top.files];
@@ -334,13 +343,15 @@ function inspectFolder(dir, accounts = []) {
   const texts = top.texts + groups.reduce((s, g) => s + g.texts, 0);
   const covers = top.covers + groups.reduce((s, g) => s + g.covers, 0);
   const size = files.reduce((s, p) => s + fs.statSync(p).size, 0);
-  const big = files.filter((p) => fs.statSync(p).size > MAX_FILE).map((p) => path.relative(dir, p));
+  // видео в хранилище (релиз GitHub) могут быть до 2 ГБ, остальные файлы идут в git: до 95 МБ
+  const limit = (p) => (remote && VIDEO_EXT.has(path.extname(p).toLowerCase()) ? MAX_ASSET : MAX_FILE);
+  const big = files.filter((p) => fs.statSync(p).size > limit(p)).map((p) => path.relative(dir, p));
   if (!videos) errors.push('В папке нет видео (.mp4 или .mov).');
-  if (big.length) errors.push('Файлы больше 95 МБ GitHub не примет, сожми их: ' + big.join(', '));
+  if (big.length) errors.push(`Файлы больше ${remote ? '2 ГБ (видео) или 95 МБ (остальное)' : '95 МБ'} GitHub не примет, сожми их: ` + big.join(', '));
   if (top.texts < top.videos) warnings.push(`Без описания: ${top.videos - top.texts} (подпись будет пустой)`);
   if (top.covers < top.videos) warnings.push(`Без обложки: ${top.videos - top.covers} (возьмётся кадр из видео)`);
   return { name: path.basename(dir), files, videos, texts, covers, size, groups, warnings, errors };
 }
 
 module.exports = { runHealth, slug, dayIn, buildSnapshot, summary, inspectFolder, captionFor, cleanTexts, LANES, NETS, laneByKey, laneOfId,
-  groupLanes, validGroupId, GROUPS_DIR, RESERVED_GROUPS, VIDEO_EXT, MAX_FILE };
+  groupLanes, validGroupId, GROUPS_DIR, RESERVED_GROUPS, VIDEO_EXT, MAX_FILE, MAX_ASSET, REMOTE_SUFFIX, videoOfPath };
