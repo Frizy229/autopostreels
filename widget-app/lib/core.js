@@ -21,15 +21,31 @@ const dayIn = (date, timeZone) =>
 
 const num = (name) => { const m = /\d+/.exec(name); return m ? String(parseInt(m[0], 10)) : ''; };
 
-/** Очереди: общая (во все аккаунты) и отдельные для каждой соцсети. Как lanes() в autoposter.py. */
+/** Очереди: общая (во все аккаунты) и отдельные для каждой соцсети. Как lanes() в autoposter.py.
+ * slot: где лежит расписание очереди в state.json ('' = прямо в state, иначе state.lanes[slot]). */
 const LANES = [
-  { key: 'shared', net: '', dir: 'queue', posted: 'posted', prefix: '' },
-  { key: 'instagram', net: 'instagram', dir: 'queue-instagram', posted: 'posted-instagram', prefix: 'instagram:' },
-  { key: 'tiktok', net: 'tiktok', dir: 'queue-tiktok', posted: 'posted-tiktok', prefix: 'tiktok:' },
+  { key: 'shared', net: '', dir: 'queue', posted: 'posted', prefix: '', slot: '', group: '' },
+  { key: 'instagram', net: 'instagram', dir: 'queue-instagram', posted: 'posted-instagram', prefix: 'instagram:', slot: 'instagram', group: '' },
+  { key: 'tiktok', net: 'tiktok', dir: 'queue-tiktok', posted: 'posted-tiktok', prefix: 'tiktok:', slot: 'tiktok', group: '' },
 ];
 const NETS = ['instagram', 'tiktok'];
-const laneByKey = (k) => LANES.find((l) => l.key === k) || LANES[0];
-const laneOfId = (id) => LANES.slice(1).find((l) => String(id).startsWith(l.prefix)) || LANES[0];
+// группа: отдельная сетка аккаунтов (другой проект) со своими тремя очередями в groups/<id>/
+const GROUPS_DIR = 'groups';
+const GROUP_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const RESERVED_GROUPS = ['default', 'main', 'instagram', 'tiktok', 'queue', 'posted', 'shared'];
+const validGroupId = (id) => GROUP_ID.test(String(id || '')) && !RESERVED_GROUPS.includes(id);
+/** Очереди группы ('' = группа по умолчанию, как раньше). */
+function groupLanes(gid = '') {
+  if (!gid) return LANES;
+  if (!validGroupId(gid)) throw new Error(`Недопустимый id группы: ${gid}`);
+  const base = `${GROUPS_DIR}/${gid}`;
+  return [
+    { key: 'shared', net: '', dir: `${base}/queue`, posted: `${base}/posted`, prefix: `${gid}:`, slot: gid, group: gid },
+    ...NETS.map((n) => ({ key: n, net: n, dir: `${base}/queue-${n}`, posted: `${base}/posted-${n}`, prefix: `${gid}:${n}:`, slot: `${gid}:${n}`, group: gid })),
+  ];
+}
+const laneByKey = (k, gid = '') => { const ls = groupLanes(gid); return ls.find((l) => l.key === k) || ls[0]; };
+const laneOfId = (id, gid = '') => { const ls = groupLanes(gid); return ls.slice(1).find((l) => String(id).startsWith(l.prefix)) || ls[0]; };
 
 /**
  * Собрать данные для экрана.
@@ -43,13 +59,16 @@ function buildSnapshot(state, stats, queues, now = new Date(), opts = {}) {
   const Q = Array.isArray(queues) || !queues ? { shared: queues || [] } : queues;
   const posted = state.posted || {}, skipped = state.skipped || {};
   const postedAcc = state.posted_acc || {};
-  const accNames = (opts.accounts && opts.accounts.length) ? opts.accounts : ['main'];
+  const accNames = (opts.accounts && opts.accounts.length) ? opts.accounts : (opts.group ? [] : ['main']);
   const platformOf = (n) => ((opts.platforms || {})[n] || 'instagram').toLowerCase();
   const net = opts.net || '';
+  const group = opts.group || '';
+  // первый аккаунт группы по умолчанию хранится по-старому (state.posted); в остальных группах таких нет
+  const primary = opts.primary != null ? !!opts.primary : !group;
   const today = dayIn(now, scheduleTz);
   // какие очереди показываем: в разделе сети общая + своя, без раздела все
-  const lanes = LANES.filter((l) => !net || !l.net || l.net === net);
-  const slotOf = (l) => (l.net ? ((state.lanes || {})[l.net] || {}) : state);
+  const lanes = groupLanes(group).filter((l) => !net || !l.net || l.net === net);
+  const slotOf = (l) => (l.slot ? ((state.lanes || {})[l.slot] || {}) : state);
   // аккаунты (индексы в общем списке): в разделе только аккаунты этой сети; в своей очереди сети только они
   const allIdx = accNames.map((_, i) => i).filter((i) => !net || platformOf(accNames[i]) === net);
   const laneIdx = (l) => allIdx.filter((i) => !l.net || platformOf(accNames[i]) === l.net);
@@ -73,8 +92,9 @@ function buildSnapshot(state, stats, queues, now = new Date(), opts = {}) {
   // состояние рилса в одном аккаунте (первый аккаунт хранится по-старому: state.posted, ключ без имени)
   const perAccount = (idx, key) => {
     const name = accNames[idx];
-    const p = idx === 0 ? posted[key] : (postedAcc[name] || {})[key];
-    const k2 = idx === 0 ? key : `${name}|${key}`;
+    const first = idx === 0 && primary;
+    const p = first ? posted[key] : (postedAcc[name] || {})[key];
+    const k2 = first ? key : `${name}|${key}`;
     const st = stats[k2] || {};
     return {
       name, platform: platformOf(name) || (p && p.platform) || 'instagram', inbox: !!(p && p.mode === 'inbox'),
@@ -127,11 +147,11 @@ function buildSnapshot(state, stats, queues, now = new Date(), opts = {}) {
   // все известные ключи по аккаунтам раздела (у остальных аккаунтов свои словари, пропуски с префиксом «аккаунт|»)
   const keySet = new Set();
   const idxSet = new Set(allIdx);
-  if (idxSet.has(0)) for (const k of Object.keys(posted)) keySet.add(k);
-  allIdx.filter((i) => i > 0).forEach((i) => { for (const k of Object.keys(postedAcc[accNames[i]] || {})) keySet.add(k); });
+  if (primary && idxSet.has(0)) for (const k of Object.keys(posted)) keySet.add(k);
+  allIdx.filter((i) => i > 0 || !primary).forEach((i) => { for (const k of Object.keys(postedAcc[accNames[i]] || {})) keySet.add(k); });
   for (const k of Object.keys(skipped)) {
     const m = /^([^/|]+)\|(.*)$/.exec(k);
-    const idx = m ? accNames.indexOf(m[1]) : 0;
+    const idx = m ? accNames.indexOf(m[1]) : (primary ? 0 : -1);
     if (idx >= 0 && (!net || idxSet.has(idx))) keySet.add(m ? m[2] : k);
   }
   const allKeys = [...keySet];
@@ -156,8 +176,10 @@ function buildSnapshot(state, stats, queues, now = new Date(), opts = {}) {
   const finished = [];
   for (const id of doneIds) {
     if (seen.has(id)) continue;
-    const l = laneOfId(id);
-    if (!lanes.includes(l)) continue;
+    if (group && !id.startsWith(`${group}:`)) continue;
+    const l = laneOfId(id, group);
+    if (!lanes.some((x) => x.key === l.key)) continue;
+    if (!group && !l.net && id.includes(':')) continue; // рилс другой группы (cars:…) в основной не показываем
     const name = id.slice(l.prefix.length);
     const names = new Set();
     for (const k of allKeys) if (k.startsWith(id + '/')) names.add(k.slice(id.length + 1));
@@ -196,7 +218,7 @@ function buildSnapshot(state, stats, queues, now = new Date(), opts = {}) {
     .map((n) => (/^(\d+)/.exec(n) || [0, 0])[1]).map(Number);
   const nextNum = Math.max(0, ...nums) + 1;
   const lateCount = todayRows.filter((r) => r.late).length;
-  return { today, net, todayRows, folders: all, nextNum, summary: { ...summary(todayRows), late: lateCount } };
+  return { today, net, group, todayRows, folders: all, nextNum, summary: { ...summary(todayRows), late: lateCount } };
 }
 
 const TEXT_KEYS = ['caption', 'footer', 'hashtags', 'comment', 'use_pinned_comment'];
@@ -320,4 +342,5 @@ function inspectFolder(dir, accounts = []) {
   return { name: path.basename(dir), files, videos, texts, covers, size, groups, warnings, errors };
 }
 
-module.exports = { runHealth, slug, dayIn, buildSnapshot, summary, inspectFolder, captionFor, cleanTexts, LANES, NETS, laneByKey, laneOfId, VIDEO_EXT, MAX_FILE };
+module.exports = { runHealth, slug, dayIn, buildSnapshot, summary, inspectFolder, captionFor, cleanTexts, LANES, NETS, laneByKey, laneOfId,
+  groupLanes, validGroupId, GROUPS_DIR, RESERVED_GROUPS, VIDEO_EXT, MAX_FILE };

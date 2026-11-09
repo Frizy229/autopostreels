@@ -74,9 +74,18 @@ DEFAULT_CONFIG = {
     # hashtags: хэштеги (вместо общих "hashtags"); comment: первый комментарий (только Instagram);
     # use_pinned_comment: брать комментарий из раздела PINNED COMMENT: в .txt
     "texts": {"instagram": {}, "tiktok": {}},
+    # Группы: отдельные сетки аккаунтов для другого проекта (свои аккаунты, очереди, расписание, тексты, пауза).
+    # Всё, что выше, это группа по умолчанию. Папки группы лежат в groups/<id>/queue, queue-instagram, queue-tiktok.
+    "groups": [],
 }
 
 NETWORKS = ("instagram", "tiktok")
+GROUPS_DIR = "groups"
+GROUP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+RESERVED_GROUP_IDS = {"default", "main", "instagram", "tiktok", "queue", "posted", "shared"}
+# что группа может задать своё (остальное, например часовой пояс и лимит за запуск, общее)
+GROUP_OVERRIDES = ("day_start", "day_end", "hashtags", "default_text", "caption_template")
+HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
 TEXT_KEYS = ("caption", "footer", "hashtags", "comment", "use_pinned_comment")
 
 IG_CAPTION_LIMIT = 2200
@@ -139,40 +148,125 @@ def secret(name: str) -> str:
         return ""
 
 
+def _make_account(a: dict, i: int, group: str = "") -> dict:
+    """Запись аккаунта из config.json -> рабочий аккаунт. Первый аккаунт группы по умолчанию хранится по-старому (primary)."""
+    platform = (a.get("platform") or "instagram").lower()
+    primary = not group and i == 0
+    name = a.get("name") or (f"acc{i + 1}" if not group else f"{group}_{i + 1}")
+    if group:
+        # в группах имена секретов всегда по нику (как их создаёт виджет)
+        tok, uid = f"IG_TOKEN_{secret_suffix(name)}", f"IG_USER_ID_{secret_suffix(name)}"
+    else:
+        tok = "IG_TOKEN" if i == 0 else f"IG_TOKEN_{i + 1}"
+        uid = "IG_USER_ID" if i == 0 else f"IG_USER_ID_{i + 1}"
+    acc = {"name": name,
+           "token_env": a.get("token_env") or tok,
+           "user_id_env": a.get("user_id_env") or uid,
+           "user_id": str(a.get("user_id") or ""),
+           "platform": platform,
+           "group": group,
+           "primary": primary}
+    if platform == "tiktok":
+        acc.update(token_env=a.get("token_env") or tt_secret_name(acc["name"]),
+                   mode=(a.get("mode") or "inbox").lower(),
+                   privacy=a.get("privacy") or "PUBLIC_TO_EVERYONE",
+                   client_key_env=a.get("client_key_env") or "TT_CLIENT_KEY",
+                   client_secret_env=a.get("client_secret_env") or "TT_CLIENT_SECRET",
+                   disable_comment=bool(a.get("disable_comment", False)),
+                   disable_duet=bool(a.get("disable_duet", False)),
+                   disable_stitch=bool(a.get("disable_stitch", False)),
+                   is_aigc=bool(a.get("is_aigc", False)))
+    return acc
+
+
 def configure_accounts(cfg: dict) -> list[dict]:
-    """Какие аккаунты сейчас работают: первый обязателен, остальные включаются, когда задан их токен."""
+    """Какие аккаунты сейчас работают: первый обязателен, остальные включаются, когда задан их токен.
+    Аккаунты групп идут после аккаунтов группы по умолчанию; ник должен быть уникальным во всех группах."""
     global ACTIVE_ACCOUNTS
     raw = cfg.get("accounts") or []
     if not raw:
         # старый формат: без списка работает один аккаунт IG_TOKEN. Новая копия (например, у друга) без токена: аккаунтов нет
         raw = [{"name": "main"}] if secret("IG_TOKEN") else []
-        if not raw:
+        if not raw and not any(g.get("accounts") for g in groups(cfg)):
             log("В config.json нет аккаунтов: добавьте их в виджете (кнопка «+» у аккаунтов).")
-    out = []
-    for i, a in enumerate(raw):
-        platform = (a.get("platform") or "instagram").lower()
-        acc = {"name": a.get("name") or f"acc{i + 1}",
-               "token_env": a.get("token_env") or ("IG_TOKEN" if i == 0 else f"IG_TOKEN_{i + 1}"),
-               "user_id_env": a.get("user_id_env") or ("IG_USER_ID" if i == 0 else f"IG_USER_ID_{i + 1}"),
-               "user_id": str(a.get("user_id") or ""),
-               "platform": platform,
-               "primary": i == 0}
-        if platform == "tiktok":
-            acc.update(token_env=a.get("token_env") or tt_secret_name(acc["name"]),
-                       mode=(a.get("mode") or "inbox").lower(),
-                       privacy=a.get("privacy") or "PUBLIC_TO_EVERYONE",
-                       client_key_env=a.get("client_key_env") or "TT_CLIENT_KEY",
-                       client_secret_env=a.get("client_secret_env") or "TT_CLIENT_SECRET",
-                       disable_comment=bool(a.get("disable_comment", False)),
-                       disable_duet=bool(a.get("disable_duet", False)),
-                       disable_stitch=bool(a.get("disable_stitch", False)),
-                       is_aigc=bool(a.get("is_aigc", False)))
-        if not acc["primary"] and not secret(acc["token_env"]):
-            log(f"Аккаунт «{acc['name']}»: нет секрета {acc['token_env']}, пропускаю.")
-            continue
-        out.append(acc)
+    sources = [("", raw)] + [(g["id"], g.get("accounts") or []) for g in groups(cfg)]
+    out, seen = [], {}
+    for gid, lst in sources:
+        for i, a in enumerate(lst):
+            if not isinstance(a, dict):
+                continue
+            acc = _make_account(a, i, gid)
+            key = acc["name"].lower()
+            if key in seen:
+                log(f"Аккаунт «{acc['name']}» уже есть в группе «{seen[key] or 'по умолчанию'}»: "
+                    f"в группе «{gid or 'по умолчанию'}» пропускаю (ник должен быть уникальным).")
+                continue
+            seen[key] = gid
+            if not acc["primary"] and not secret(acc["token_env"]):
+                log(f"Аккаунт «{acc['name']}»: нет секрета {acc['token_env']}, пропускаю.")
+                continue
+            out.append(acc)
     ACTIVE_ACCOUNTS = out
     return out
+
+
+def acc_index(acc: dict) -> int:
+    """Номер аккаунта внутри его группы (для блоков подписей без имени: первый блок первому аккаунту и т. д.)."""
+    same = [x for x in ACTIVE_ACCOUNTS if x.get("group", "") == acc.get("group", "")]
+    return same.index(acc) if acc in same else 0
+
+
+# ---------------------------------------------------------------- groups (сетки аккаунтов для разных проектов)
+
+_BAD_GROUPS: set[str] = set()
+
+
+def groups(cfg: dict) -> list[dict]:
+    """Дополнительные группы из config.json (без группы по умолчанию): правильный id, без повторов."""
+    out, seen = [], set()
+    for g in cfg.get("groups") or []:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or "").strip()
+        if not GROUP_ID_RE.match(gid) or gid in RESERVED_GROUP_IDS or gid in seen:
+            bad = gid or str(g.get("name") or "?")
+            if bad not in _BAD_GROUPS:
+                _BAD_GROUPS.add(bad)
+                log(f"Группа «{bad}»: id должен быть латиницей (a-z, 0-9, - и _) и не повторяться, пропускаю.")
+            continue
+        seen.add(gid)
+        out.append({**g, "id": gid})
+    return out
+
+
+def group_cfg(cfg: dict, gid: str = "") -> dict:
+    """Настройки для группы: общие из config.json, поверх них то, что задала группа (окно, хэштеги, тексты, пауза)."""
+    if not gid:
+        return cfg
+    for g in groups(cfg):
+        if g["id"] != gid:
+            continue
+        merged = dict(cfg)
+        for k in GROUP_OVERRIDES:
+            v = g.get(k)
+            if v is None or (k in ("day_start", "day_end") and not HHMM_RE.match(str(v))):
+                continue
+            merged[k] = v
+        merged["texts"] = g.get("texts") or {}
+        merged["paused"] = g.get("paused") or []
+        merged["group"] = gid
+        return merged
+    return cfg
+
+
+def stage_group_dirs(cfg: dict) -> None:
+    """Workflow сохраняет только известные ему папки (queue*, posted*). Папки групп добавляем в коммит сами,
+    чтобы не менять .github/workflows/post.yml."""
+    if os.environ.get("GITHUB_ACTIONS") != "true" or not (ROOT / GROUPS_DIR).exists() or not (ROOT / ".git").exists():
+        return
+    res = subprocess.run(["git", "add", "-A", "--", GROUPS_DIR], cwd=ROOT, capture_output=True, text=True)
+    if res.returncode != 0:
+        log(f"Не удалось добавить папки групп в коммит: {res.stderr.strip()[:200]}")
 
 
 def secret_suffix(name: str) -> str:
@@ -369,8 +463,9 @@ def load_folder_texts(*dirs: pathlib.Path) -> dict:
 
 
 def resolve_texts(cfg: dict, item: dict, acc: dict) -> dict:
-    """Тексты для аккаунта: настройки сети в config.json → texts.json папки → texts.json для этой сети."""
+    """Тексты для аккаунта: настройки сети в config.json (или в группе аккаунта) → texts.json папки → texts.json для этой сети."""
     net = acc.get("platform") or "instagram"
+    cfg = group_cfg(cfg, acc.get("group", ""))
     out = {k: v for k, v in ((cfg.get("texts") or {}).get(net) or {}).items() if k in TEXT_KEYS}
     folder = item.get("texts") or {}
     out.update({k: v for k, v in folder.items() if k in TEXT_KEYS})
@@ -410,13 +505,14 @@ def find_cover(video: pathlib.Path, named: str) -> pathlib.Path | None:
     return None
 
 
-def match_account(name: str) -> dict | None:
+def match_account(name: str, accounts: list[dict] | None = None) -> dict | None:
     """Подпапка -> аккаунт: имя подпапки равно имени аккаунта (можно с @) или содержит его."""
     n = name.lower().lstrip("@")
-    for acc in ACTIVE_ACCOUNTS:
+    pool = ACTIVE_ACCOUNTS if accounts is None else accounts
+    for acc in pool:
         if acc["name"].lower() == n:
             return acc
-    hits = [acc for acc in ACTIVE_ACCOUNTS if acc["name"].lower() in n]
+    hits = [acc for acc in pool if acc["name"].lower() in n]
     return max(hits, key=lambda x: len(x["name"])) if hits else None
 
 
@@ -507,14 +603,21 @@ def _dir_items(d: pathlib.Path, prefix: str, state: dict, accounts: list[dict], 
 
 def lanes(cfg: dict) -> list[dict]:
     """Очереди: общая queue/ (во все аккаунты) и отдельные для каждой соцсети (только её аккаунты).
-    У каждой очереди своё расписание: своя папка дня, свой план."""
-    out = [{"name": "", "prefix": "", "queue_dir": cfg["queue_dir"], "posted_dir": cfg["posted_dir"]}]
+    У каждой очереди своё расписание: своя папка дня, свой план. У каждой группы такие же три очереди в groups/<id>/."""
+    out = [{"name": "", "net": "", "group": "", "prefix": "", "queue_dir": cfg["queue_dir"], "posted_dir": cfg["posted_dir"]}]
     conf = cfg.get("lanes") or {}
     for net in NETWORKS:
         c = conf.get(net) or {}
-        out.append({"name": net, "prefix": f"{net}:",
+        out.append({"name": net, "net": net, "group": "", "prefix": f"{net}:",
                     "queue_dir": c.get("queue_dir") or f"queue-{net}",
                     "posted_dir": c.get("posted_dir") or f"posted-{net}"})
+    for g in groups(cfg):
+        gid, base = g["id"], f"{GROUPS_DIR}/{g['id']}"
+        out.append({"name": gid, "net": "", "group": gid, "prefix": f"{gid}:",
+                    "queue_dir": f"{base}/queue", "posted_dir": f"{base}/posted"})
+        for net in NETWORKS:
+            out.append({"name": f"{gid}:{net}", "net": net, "group": gid, "prefix": f"{gid}:{net}:",
+                        "queue_dir": f"{base}/queue-{net}", "posted_dir": f"{base}/posted-{net}"})
     return out
 
 
@@ -522,32 +625,41 @@ def _lane(cfg: dict, lane: dict | None) -> dict:
     return lane if lane else lanes(cfg)[0]
 
 
+def _lane_net(lane: dict | None) -> str:
+    if not lane:
+        return ""
+    return lane["net"] if "net" in lane else lane.get("name", "")
+
+
 def lane_accounts(lane: dict | None) -> list[dict]:
-    if not lane or not lane.get("name"):
-        return ACTIVE_ACCOUNTS
-    return [a for a in ACTIVE_ACCOUNTS if (a.get("platform") or "instagram") == lane["name"]]
+    grp, net = (lane or {}).get("group", ""), _lane_net(lane)
+    return [a for a in ACTIVE_ACCOUNTS if a.get("group", "") == grp and (not net or (a.get("platform") or "instagram") == net)]
 
 
 def lane_slot(state: dict, lane: dict | None) -> dict:
-    """Где хранится расписание очереди: для общей прямо в state (как раньше), иначе state["lanes"][сеть]."""
+    """Где хранится расписание очереди: для общей прямо в state (как раньше), иначе state["lanes"][имя очереди]."""
     if not lane or not lane.get("name"):
         return state
     return state.setdefault("lanes", {}).setdefault(lane["name"], {})
 
 
 def lane_paused(cfg: dict, lane: dict | None) -> bool:
-    """Соцсеть на паузе: её очередь стоит. Общая очередь стоит, если на паузе любая сеть, у которой есть аккаунты."""
-    paused = {str(x).lower() for x in (cfg.get("paused") or [])}
+    """Соцсеть на паузе: её очередь стоит. Общая очередь стоит, если на паузе любая сеть, у которой есть аккаунты.
+    Пауза у каждой группы своя."""
+    grp = (lane or {}).get("group", "")
+    paused = {str(x).lower() for x in (group_cfg(cfg, grp).get("paused") or [])}
     if not paused:
         return False
-    if lane and lane.get("name"):
-        return lane["name"] in paused
-    nets = {(a.get("platform") or "instagram") for a in ACTIVE_ACCOUNTS}
+    net = _lane_net(lane)
+    if net:
+        return net in paused
+    nets = {(a.get("platform") or "instagram") for a in ACTIVE_ACCOUNTS if a.get("group", "") == grp}
     return bool(nets & paused)
 
 
 def lane_of_id(cfg: dict, item_id: str) -> dict:
-    for ln in lanes(cfg)[1:]:
+    """Очередь по id рилса или имени папки: самая длинная подходящая приставка (cars:instagram: раньше cars:)."""
+    for ln in sorted(lanes(cfg)[1:], key=lambda x: -len(x["prefix"])):
         if item_id.startswith(ln["prefix"]):
             return ln
     return lanes(cfg)[0]
@@ -563,8 +675,8 @@ def folder_items(folder: pathlib.Path, state: dict, lane: dict | None = None) ->
     prefix = (lane or {}).get("prefix", "") + folder.name
     items = _dir_items(folder, prefix, state, accounts, "", load_folder_texts(folder))
     for sub in _subdirs(folder):
-        acc = match_account(sub.name)
-        if acc is None or acc not in accounts:
+        acc = match_account(sub.name, accounts)
+        if acc is None:
             log(f"Подпапка {folder.name}/{sub.name}: нет такого аккаунта в этой очереди (или нет его токена), пропускаю.")
             continue
         items += _dir_items(sub, f"{prefix}/{sub.name}", state, [acc], acc["name"], load_folder_texts(folder, sub))
@@ -679,8 +791,9 @@ def schedule(cfg: dict, state: dict, now: dt.datetime,
     """Решить, какая папка сегодня в работе и какие рилсы пора публиковать (для одной очереди)."""
     tz = now.tzinfo
     today = now.date()
-    start, end = at_time(today, cfg["day_start"], tz), at_time(today, cfg["day_end"], tz)
     ln = _lane(cfg, lane)
+    gc = group_cfg(cfg, ln.get("group", ""))
+    start, end = at_time(today, gc["day_start"], tz), at_time(today, gc["day_end"], tz)
     slot = lane_slot(state, lane)
     if not lane_accounts(lane):
         return None, []
@@ -703,7 +816,7 @@ def schedule(cfg: dict, state: dict, now: dt.datetime,
             finish_folder(cfg, folder, lane)
             slot["active"] = active = folder = None
 
-    if active and active["date"] != today.isoformat() and not ln["name"]:
+    if active and active["date"] != today.isoformat() and not _lane_net(ln):
         # общая очередь: TikTok не должен её держать. Если рилс вчера вышел везде, кроме TikTok, пропускаем его там
         for it in items_of(folder):
             if all(a.get("platform") == "tiktok" for a in it["pending"]):
@@ -1092,16 +1205,18 @@ def cmd_post(args) -> int:
                 items = folder_items(folder, state, ln)
                 if not items:
                     continue
-                plan = build_plan(items, at_time(now.date(), cfg["day_start"], tz), at_time(now.date(), cfg["day_end"], tz))
+                gc = group_cfg(cfg, ln.get("group", ""))
+                plan = build_plan(items, at_time(now.date(), gc["day_start"], tz), at_time(now.date(), gc["day_end"], tz))
                 print(f"=== {ln['queue_dir']}/{folder.name}: {len(items)} рилсов")
                 for i in items:
                     cover = i["cover"].name if i["cover"] else f"кадр {cfg['thumb_offset_ms']} мс"
                     print(f"--- {plan[i['plan_key']][11:16]}  {i['plan_key']}  (обложка: {cover})")
-                    for n, acc in enumerate(ACTIVE_ACCOUNTS):
+                    for acc in ACTIVE_ACCOUNTS:
                         if acc not in i["pending"]:
                             continue
                         texts = resolve_texts(cfg, i, acc)
-                        print(f"[@{acc['name']}]\n{build_caption(cfg, caption_for(i, acc, n), texts)}")
+                        gc = group_cfg(cfg, acc.get("group", ""))
+                        print(f"[@{acc['name']}]\n{build_caption(gc, caption_for(i, acc, acc_index(acc)), texts)}")
                         com = comment_for(i, acc, texts)
                         print(f"(комментарий: {com})\n" if com else "")
         return 0
@@ -1144,6 +1259,7 @@ def cmd_post(args) -> int:
     if not state.get("lanes"):
         state.pop("lanes", None)
     save_state(state)
+    stage_group_dirs(cfg)
     if not due:
         log("Сейчас публиковать нечего.")
         return 0
@@ -1157,25 +1273,27 @@ def cmd_post(args) -> int:
         except RuntimeError as e:
             if note_token(state, acc, False, str(e)):
                 save_state(state)
-            if acc.get("platform") != "tiktok":
+            if acc.get("platform") != "tiktok" and not acc.get("group"):
                 raise
-            # TikTok не должен останавливать Instagram
-            log(f"TikTok @{acc['name']} сейчас недоступен, пропускаю в этом запуске: {e}")
+            # TikTok и аккаунты других групп не должны останавливать остальных
+            log(f"{'TikTok' if acc.get('platform') == 'tiktok' else 'Instagram'} @{acc['name']} сейчас недоступен, "
+                f"пропускаю в этом запуске: {e}")
             dead.add(acc["name"])
         else:
             if note_token(state, acc, True, expires=getattr(igs[acc["name"]], "refresh_expires", "")):
                 save_state(state)
     posted = failed = 0
     for item in due[: int(cfg["max_posts_per_run"])]:
-        for index, acc in enumerate(ACTIVE_ACCOUNTS):
+        for acc in ACTIVE_ACCOUNTS:
             if acc not in item["pending"] or acc["name"] in dead:
                 continue
+            index, gc = acc_index(acc), group_cfg(cfg, acc.get("group", ""))
             ig = igs[acc["name"]]
             fkey = acc_key(acc, item["id"])
             log(f"→ {item['id']} → @{acc['name']}")
             if acc.get("platform") == "tiktok":
                 try:
-                    res = ig.post(item["video"], build_caption(cfg, caption_for(item, acc, index), resolve_texts(cfg, item, acc)),
+                    res = ig.post(item["video"], build_caption(gc, caption_for(item, acc, index), resolve_texts(cfg, item, acc)),
                                   item.get("tiktok"))
                 except TikTokLimit as e:
                     log(f"TikTok @{acc['name']}: лимит, попробую в следующий раз. {e}")
@@ -1206,7 +1324,7 @@ def cmd_post(args) -> int:
                 continue
             texts = resolve_texts(cfg, item, acc)
             try:
-                caption = build_caption(cfg, caption_for(item, acc, index), texts)
+                caption = build_caption(gc, caption_for(item, acc, index), texts)
                 cover = item["cover"]
                 named = item.get("covers", {}).get(acc["name"].lower())
                 if named and (item["video"].parent / named).is_file():
@@ -1264,6 +1382,7 @@ def cmd_post(args) -> int:
     for ln in lanes(cfg):
         sweep_finished(cfg, state, ln)
     save_state(state)
+    stage_group_dirs(cfg)
     return 1 if failed and not posted else 0
 
 
@@ -1387,6 +1506,7 @@ def cmd_remove(args) -> int:
         log(f"Папка «{args.name}» не найдена в {ln['queue_dir']}/.")
         return 1
     shutil.rmtree(target)
+    stage_group_dirs(cfg)
     slot = lane_slot(state, ln)
     if (slot.get("active") or {}).get("folder") == name:
         slot["active"] = None
@@ -1470,9 +1590,11 @@ def cmd_refresh(args) -> int:
 
 def _tt_account(name: str) -> dict:
     cfg = load_config()
-    for i, a in enumerate(cfg.get("accounts") or []):
+    every = list(cfg.get("accounts") or []) + [x for g in groups(cfg) for x in (g.get("accounts") or [])]
+    for a in every:
         if (a.get("platform") or "").lower() == "tiktok" and (not name or a.get("name") == name):
-            accs = [x for x in configure_accounts({**cfg, "accounts": [cfg["accounts"][0], a]}) if x.get("platform") == "tiktok"]
+            accs = [x for x in configure_accounts({**cfg, "groups": [], "accounts": [(cfg.get("accounts") or [a])[0], a]})
+                    if x.get("platform") == "tiktok" and x["name"] == a.get("name")]
             if accs:
                 return accs[0]
             return {"name": a["name"], "token_env": a.get("token_env") or tt_secret_name(a["name"]),
@@ -1541,7 +1663,8 @@ def main() -> int:
     sub.add_parser("check").set_defaults(func=cmd_check)
     sub.add_parser("stats").set_defaults(func=cmd_stats)
     rp = sub.add_parser("remove")
-    rp.add_argument("name", help="имя папки в queue/, например 003_Metro; для отдельных очередей tiktok:005_x или instagram:005_x")
+    rp.add_argument("name", help="имя папки в queue/, например 003_Metro; для отдельных очередей tiktok:005_x или instagram:005_x; "
+                                 "для группы cars:005_x, cars:instagram:005_x")
     rp.set_defaults(func=cmd_remove)
     sub.add_parser("refresh-token").set_defaults(func=cmd_refresh)
     tu = sub.add_parser("tiktok-url", help="ссылка для входа в TikTok")

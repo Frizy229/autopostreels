@@ -1,4 +1,5 @@
 'use strict';
+const { groupLanes } = require('./core');
 // Экран подтверждения публикации в TikTok (требования Direct Post API): логика без интерфейса.
 
 const PRIVACY_LABEL = {
@@ -73,13 +74,14 @@ const stemOf = (p) => p.replace(/\.[^./]+$/, '');
  * queues: {shared:[...], tiktok:[...]} или массив (только общая queue/); элемент {name, videos, tiktok:[пути *.tiktok.json]}.
  * accounts: из config.json.
  */
-function pendingConfirm(queues, state, accounts) {
+function pendingConfirm(queues, state, accounts, group = '') {
   const Q = Array.isArray(queues) || !queues ? { shared: queues || [] } : queues;
   const posted = (state && state.posted_acc) || {};
   const skipped = (state && state.skipped) || {};
   const tts = (accounts || []).filter((a) => a && (a.platform || '').toLowerCase() === 'tiktok' && (a.mode || 'inbox') === 'direct');
   const out = [];
-  for (const [laneKey, dir, prefix] of [['shared', 'queue', ''], ['tiktok', 'queue-tiktok', 'tiktok:']]) {
+  const lanes = groupLanes(group).filter((l) => l.key === 'shared' || l.key === 'tiktok').map((l) => [l.key, l.dir, l.prefix]);
+  for (const [laneKey, dir, prefix] of lanes) {
     for (const f of Q[laneKey] || []) {
       const done = new Set(f.tiktok || []);
       for (const v of f.videos || []) {
