@@ -13,13 +13,20 @@
     <div class="top">
       <div class="clock"><b id="clockLocal">--:--</b><span id="clockSub" class="lbl"></span></div>
       <div class="btns no-drag">
+        <button id="btnHelp" class="ibtn" title="Инструкция: группы, аккаунты, ролики"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7M12 17h.01"/></svg></button>
         <button id="btnRefresh" class="ibtn" title="Обновить"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg></button>
         <button id="btnPin" class="ibtn" title="Поверх окон"><svg viewBox="0 0 24 24"><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6zM12 15v5"/></svg></button>
         <button id="btnSettings" class="ibtn" title="Настройки"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"/></svg></button>
         <button id="btnClose" class="ibtn" title="Свернуть в трей"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
     </div>
-    <div id="dateLine" class="date"></div>
+    <div class="hrow">
+      <button id="grpBtn" class="grp-btn no-drag" title="Группа аккаунтов: переключить или создать новую (Ctrl+G)">
+        <i class="gdot" id="grpDot"></i><span class="g-lbl">Группа</span><b id="grpName">Основная</b>
+        <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <span id="dateLine" class="date"></span>
+    </div>
   </header>
 
   <nav class="tabs no-drag" role="tablist">
@@ -36,6 +43,16 @@
 
   <main id="scroll">
     <div id="banner" class="banner" hidden></div>
+
+    <div id="startCard" class="start" hidden>
+      <b id="startTitle">С чего начать</b>
+      <ol>
+        <li id="stIg"><span>Подключи аккаунты Instagram этой группы</span><button class="btn small" data-start="instagram">+ Instagram</button></li>
+        <li id="stTt"><span>Подключи TikTok (если нужен)</span><button class="btn small" data-start="tiktok">+ TikTok</button></li>
+        <li id="stUp"><span>Перетащи папку с роликами в окно или нажми «+» внизу. Дальше всё выйдет само по расписанию группы.</span></li>
+      </ol>
+      <a class="lnk small" data-help="1">Пошаговая инструкция со ссылками</a>
+    </div>
 
     <div class="netbar" id="netbar">
       <div class="nb-top">
@@ -65,6 +82,7 @@
     <div class="sheet-card">
       <div class="grab"></div>
       <div id="pvTitle" class="pv-title"></div>
+      <p id="pvGroup" class="small pv-group"></p>
       <div class="seg" id="pvLane">
         <button data-v="instagram">Instagram</button><button data-v="tiktok">TikTok</button><button data-v="shared">Обе сети</button>
       </div>
@@ -203,6 +221,28 @@
           <div class="sheet-btns"><button id="accMore" class="btn primary">Добавить ещё</button><button id="accClose" class="btn">Готово</button></div>
         </div>
         <p id="accErr" class="small"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- группы: отдельные сетки аккаунтов для разных проектов -->
+  <div id="grpSheet" class="settings" hidden>
+    <div class="set-head drag"><button id="grpBack" class="ibtn no-drag" title="Назад"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button><b>Группы аккаунтов</b></div>
+    <div class="set-body">
+      <p class="small muted">Группа — отдельная сетка аккаунтов для своего проекта: свои аккаунты Instagram и TikTok, свои очереди, своё окно публикаций, тексты и пауза. Виджет показывает выбранную группу; ролики, загруженные в неё, выходят только в её аккаунты.</p>
+      <div id="grpList" class="grp-list"></div>
+      <div class="row wrap"><button id="grpNew" class="btn primary">+ Новая группа</button><button class="btn" data-help="1">Инструкция ↗</button></div>
+      <div id="grpForm" class="grp-form" hidden>
+        <h4 id="grpFormTitle">Новая группа</h4>
+        <label>Название<input id="gName" maxlength="40" spellcheck="false" autocomplete="off" placeholder="например, Машины или Кулинария"></label>
+        <div class="row">
+          <label class="grow">Первый ролик дня<input id="gStart" maxlength="5" spellcheck="false" placeholder="10:00"></label>
+          <label class="grow">Последний<input id="gEnd" maxlength="5" spellcheck="false" placeholder="22:00"></label>
+        </div>
+        <p id="gHint" class="hint"></p>
+        <p id="gErr" class="small bad"></p>
+        <div class="sheet-btns"><button id="gSave" class="btn primary">Создать</button><button id="gCancel" class="btn">Отмена</button></div>
+        <button id="gRemove" class="btn small danger" hidden>Убрать группу</button>
       </div>
     </div>
   </div>

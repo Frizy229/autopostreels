@@ -18,6 +18,7 @@ const TZ_NAME = { 'Europe/Moscow': 'Москва', 'Asia/Tomsk': 'Томск', '
 
 let cfg = {}, hasToken = false, version = '', data = null, timer = null, busy = false;
 let net = 'instagram';
+let group = ''; // выбранная группа аккаунтов ('' = основная)
 let pending = [], dragDepth = 0;
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
@@ -35,6 +36,14 @@ const nf = (v) => (v == null ? '—' : Number(v).toLocaleString('ru-RU'));
 const snap = () => (data && data.nets && data.nets[net]) || null;
 const netAccounts = (n = net) => ((data && data.accounts) || []).filter((a) => a.platform === n);
 const isPaused = (n = net) => ((data && data.paused) || []).includes(n);
+// ------------------------------------------------------------ группы
+const GROUP_COLORS = ['#8b5cf6', '#22c55e', '#f59e0b', '#06b6d4', '#ef4444', '#ec4899', '#84cc16', '#3b82f6'];
+const groupsList = () => (data && data.groups) || [{ id: '', name: 'Основная', instagram: 0, tiktok: 0, paused: [] }];
+const curGroup = () => groupsList().find((g) => g.id === group) || groupsList()[0];
+const groupColor = (id) => { const i = groupsList().findIndex((g) => g.id === id); return GROUP_COLORS[(i < 0 ? 0 : i) % GROUP_COLORS.length]; };
+const laneDir = (key) => (group ? `groups/${group}/` : '') + LANE_DIR[key];
+const multiGroups = () => groupsList().length > 1;
+const helpUrl = () => `https://github.com/${cfg.repo || 'Frizy229/autopostreels'}/blob/main/docs/groups.md`;
 
 function toast(text, ms = 3400) {
   const t = $('toast'); t.textContent = text; t.hidden = false;
@@ -68,6 +77,8 @@ document.querySelector('.tabs').addEventListener('click', (e) => { const b = e.t
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && (e.key === '1' || e.key === '2')) { setNet(e.key === '1' ? 'instagram' : 'tiktok'); e.preventDefault(); }
   if (e.key === 'F5') { refresh(); e.preventDefault(); }
+  if (e.ctrlKey && (e.key === 'g' || e.key === 'G' || e.key === 'п' || e.key === 'П')) { openGroups(); e.preventDefault(); }
+  if (e.altKey && /^[1-9]$/.test(e.key)) { const g = groupsList()[Number(e.key) - 1]; if (g) setGroup(g.id); e.preventDefault(); }
   if (e.key === 'Escape') closeTop();
 });
 
@@ -168,8 +179,22 @@ function renderTabs() {
   $('ttDot').hidden = !((data && data.tt && data.tt.pending) || []).length;
 }
 
+function renderGroup() {
+  const g = curGroup();
+  document.documentElement.style.setProperty('--g', groupColor(g.id));
+  $('grpName').textContent = g.name;
+  $('grpBtn').classList.toggle('solo', !multiGroups());
+  // новая (или пустая) группа: короткий план «с чего начать» вместо пустых списков
+  const accs = (data && data.accounts) || [];
+  const ig = accs.some((a) => a.platform === 'instagram'), tt = accs.some((a) => a.platform === 'tiktok');
+  const folders = ['instagram', 'tiktok'].some((n) => ((data && data.nets && data.nets[n] && data.nets[n].folders) || []).length);
+  $('startCard').hidden = !data || (accs.length > 0 && folders);
+  $('startTitle').textContent = accs.length ? `Группа «${g.name}»: осталось загрузить ролики` : `Группа «${g.name}»: с чего начать`;
+  $('stIg').classList.toggle('done', ig); $('stTt').classList.toggle('done', tt); $('stUp').classList.toggle('done', folders);
+}
+
 function render() {
-  renderTabs(); renderNetbar(); renderTt();
+  renderGroup(); renderTabs(); renderNetbar(); renderTt();
   const s0 = snap();
   if (!s0) return;
   const late = (s0.summary && s0.summary.late) || 0;
@@ -189,7 +214,7 @@ function render() {
   const queue = s0.folders.filter((f) => f.kind !== 'done'), done = s0.folders.filter((f) => f.kind === 'done');
   $('queueTitle').textContent = queue.length ? `Очередь · ${plural(queue.length, 'папка', 'папки', 'папок')}` : 'Очередь';
   $('queueList').innerHTML = queue.length ? queue.map(folderHtml).join('')
-    : empty(`Очередь ${NET_NAME[net]} пустая.<br>Нажми «+» или перетащи папку в окно.`);
+    : empty(`Очередь ${NET_NAME[net]}${multiGroups() ? ` в группе «${esc(curGroup().name)}»` : ''} пустая.<br>Нажми «+» или перетащи папку в окно.`);
   $('doneTitle').firstElementChild.textContent = `Готово · ${done.length}`;
   $('doneTitle').classList.toggle('open', doneOpen);
   $('doneList').hidden = !doneOpen;
@@ -231,18 +256,25 @@ function banner(text, info = false, url = '') {
 }
 $('banner').addEventListener('click', () => { const u = $('banner').dataset.url; if (u) bridge.openUrl(u); });
 async function refresh() {
-  if (refresh.running) return;
+  if (refresh.running) { refresh.again = true; return; }
   refresh.running = true;
   const btn = $('btnRefresh'); btn.classList.add('spin');
   try {
-    data = await bridge.refresh();
+    const asked = group;
+    const d = await bridge.refresh(group);
+    if (asked !== group) return; // пока грузилось, переключили группу: этот ответ уже не нужен
+    data = d;
+    if (data.group !== group) { group = data.group || ''; bridge.setConfig({ group }).then((c) => { cfg = c; }).catch(() => {}); }
     banner('');
     $('foot').textContent = `Обновлено ${timeOf(data.at)}`;
     render(); tick();
   } catch (e) {
     if (e.code === 'NO_TOKEN') { banner('Подключи GitHub: открой настройки (шестерёнка) и вставь токен.', true); if (!hasToken && !refresh.asked) { refresh.asked = true; openSettings(); } }
     else banner(`Не удалось обновить: ${e.message}`);
-  } finally { btn.classList.remove('spin'); refresh.running = false; }
+  } finally {
+    btn.classList.remove('spin'); refresh.running = false;
+    if (refresh.again) { refresh.again = false; refresh(); }
+  }
 }
 function schedule() {
   clearInterval(timer);
@@ -274,10 +306,10 @@ function askDelete(id) {
   if (!f) return;
   const left = f.videos.filter((v) => v.status !== 'done').length;
   ask({
-    title: `Убрать ${LANE_DIR[f.lane]}/${f.name}?`, go: 'Убрать', danger: true,
+    title: `Убрать ${laneDir(f.lane)}/${f.name}?`, go: 'Убрать', danger: true,
     text: `Не опубликовано рилсов: ${left} из ${f.total}. Они исчезнут из очереди и больше не выйдут${f.shared ? ' ни в одну сеть' : ''}. Уже опубликованное останется в соцсетях.`,
     action: async () => {
-      const n = await bridge.deleteFolder(f.name, f.lane);
+      const n = await bridge.deleteFolder(f.name, f.lane, group);
       openSet.delete(f.id); store.set('open', [...openSet]);
       toast(`Папка ${f.name} убрана из очереди (${plural(n, 'файл', 'файла', 'файлов')})`);
       refresh();
@@ -303,7 +335,7 @@ $('actPause').addEventListener('click', async () => {
   const on = !isPaused();
   const btn = $('actPause'); btn.disabled = true;
   try {
-    data.paused = await bridge.pauseNet(net, on);
+    data.paused = await bridge.pauseNet(net, on, group);
     toast(on ? `${NET_NAME[net]}: автозалив на паузе` : `${NET_NAME[net]}: автозалив продолжается`);
     render();
   } catch (e) { toast(e.message, 5000); } finally { btn.disabled = false; }
@@ -350,9 +382,9 @@ function openTexts(mode, opts) {
   tx = { mode, ...opts };
   const inherited = mode === 'folder' ? ((data && data.texts) || {})[net] || {} : null;
   const ig = mode === 'net' ? net === 'instagram' : (opts.folder.lane !== 'tiktok');
-  $('txTitle').textContent = mode === 'net' ? `Тексты ${NET_NAME[net]} по умолчанию` : `Тексты папки ${opts.folder.name}`;
+  $('txTitle').textContent = mode === 'net' ? `Тексты ${NET_NAME[net]}${multiGroups() ? ` · ${curGroup().name}` : ' по умолчанию'}` : `Тексты папки ${opts.folder.name}`;
   $('txIntro').textContent = mode === 'net'
-    ? `Прикрепляются сами к каждому ролику ${NET_NAME[net]} при заливе. Настройки папки (карандаш у папки) важнее этих.`
+    ? `Прикрепляются сами к каждому ролику ${NET_NAME[net]}${multiGroups() ? ` группы «${curGroup().name}» (у каждой группы свои)` : ''} при заливе. Настройки папки (карандаш у папки) важнее этих.`
     : `Действуют только на ролики этой папки${opts.folder.shared ? ' во всех сетях' : ''}. Пустое поле: как в настройках сети.`;
   $('txFields').innerHTML = fieldsHtml('tx', opts.values || {}, inherited, { ig, folder: mode === 'folder' });
   $('txErr').textContent = ''; $('txSave').disabled = false; $('txSave').textContent = 'Сохранить';
@@ -371,7 +403,7 @@ async function openFolderTexts(id) {
   openTexts('folder', { folder: f, values: {} });
   $('txSave').disabled = true; $('txSave').textContent = 'Загружаю…';
   try {
-    const t = await bridge.folderTexts(f.lane, f.name);
+    const t = await bridge.folderTexts(f.lane, f.name, group);
     if (!tx || tx.folder !== f) return;
     openTexts('folder', { folder: f, values: t || {} });
   } catch (e) { $('txErr').textContent = e.message; $('txSave').disabled = false; $('txSave').textContent = 'Сохранить'; }
@@ -382,8 +414,8 @@ $('txSave').addEventListener('click', async () => {
   const t = readFields('tx');
   $('txSave').disabled = true; $('txSave').textContent = 'Сохраняю…'; $('txErr').textContent = '';
   try {
-    if (tx.mode === 'net') { data.texts = await bridge.saveNetTexts(net, t); toast(`Тексты ${NET_NAME[net]} сохранены`); }
-    else { await bridge.saveFolderTexts(tx.folder.lane, tx.folder.name, t); toast(Object.keys(t).length ? 'Тексты папки сохранены' : 'Тексты папки сброшены'); }
+    if (tx.mode === 'net') { data.texts = await bridge.saveNetTexts(net, t, group); toast(`Тексты ${NET_NAME[net]} сохранены${multiGroups() ? ` (группа «${curGroup().name}»)` : ''}`); }
+    else { await bridge.saveFolderTexts(tx.folder.lane, tx.folder.name, t, group); toast(Object.keys(t).length ? 'Тексты папки сохранены' : 'Тексты папки сброшены'); }
     closeTexts(); refresh();
   } catch (e) { $('txErr').textContent = e.message; $('txSave').disabled = false; $('txSave').textContent = 'Повторить'; }
 });
@@ -480,19 +512,21 @@ function addFolders(paths) {
   if (!busy && $('sheet').hidden) { pvLane = net; showNext(); }
 }
 function laneHint() {
-  return { instagram: 'Папка попадёт в queue-instagram/: только аккаунты Instagram, своё расписание.',
-    tiktok: 'Папка попадёт в queue-tiktok/: только TikTok, своё расписание.',
-    shared: 'Папка попадёт в общую queue/: каждый рилс выйдет и в Instagram, и в TikTok.' }[pvLane];
+  return { instagram: `Папка попадёт в ${laneDir('instagram')}/: только аккаунты Instagram, своё расписание.`,
+    tiktok: `Папка попадёт в ${laneDir('tiktok')}/: только TikTok, своё расписание.`,
+    shared: `Папка попадёт в общую ${laneDir('shared')}/: каждый рилс выйдет и в Instagram, и в TikTok.` }[pvLane];
 }
 async function showNext() {
   if (!pending.length) { $('sheet').hidden = true; return; }
   for (const b of $('pvLane').children) b.classList.toggle('on', b.dataset.v === pvLane);
   $('pvLaneHint').textContent = laneHint();
   let info;
-  try { info = await bridge.inspect(pending[0], pvLane); } catch (e) { toast(e.message); pending.shift(); return showNext(); }
+  try { info = await bridge.inspect(pending[0], pvLane, group); } catch (e) { toast(e.message); pending.shift(); return showNext(); }
   pvInfo = info;
   const name = `${pad3((data && data.nextNum) || 1)}_${slug(info.name)}`;
-  $('pvTitle').textContent = `${LANE_DIR[pvLane]}/${name}`;
+  $('pvTitle').textContent = `${laneDir(pvLane)}/${name}`;
+  $('pvGroup').hidden = !multiGroups();
+  $('pvGroup').innerHTML = `Группа: <b>${esc(curGroup().name)}</b> · ролики выйдут только в её аккаунты. Другая группа: закрой окно и переключи её вверху.`;
   const more = pending.length > 1 ? ` · ещё ${pending.length - 1} в ожидании` : '';
   $('pvCounts').textContent = `${plural(info.videos, 'видео', 'видео', 'видео')} · описаний ${info.texts} · обложек ${info.covers} · ${(info.size / 1e6).toFixed(0)} МБ${more}`;
   const gl = (info.groups || []).map((g) => `<div class="g">${esc(g.name)}: ${plural(g.videos, 'видео', 'видео', 'видео')}, описаний ${g.texts}, обложек ${g.covers}</div>`);
@@ -520,7 +554,7 @@ async function upload() {
   $('pvGo').disabled = true; $('pvGo').textContent = 'Загружаю…'; $('pvCancel').disabled = true;
   $('pvBar').hidden = false; $('pvBar').firstElementChild.style.width = '0%';
   try {
-    const name = await bridge.upload(pending[0], { lane: pvLane, texts: readFields('pv') });
+    const name = await bridge.upload(pending[0], { lane: pvLane, texts: readFields('pv'), group });
     toast(`Готово: ${name}`);
     pending.shift(); busy = false; delete $('pvTexts').dataset.ready;
     if (pvLane !== 'shared' && pvLane !== net) setNet(pvLane);
@@ -544,7 +578,7 @@ $('fab').addEventListener('click', async () => { const p = await bridge.pickFold
 window.addEventListener('dragenter', (e) => {
   if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) {
     dragDepth++; $('dropOverlay').hidden = false;
-    $('dropHint').textContent = `в очередь ${NET_NAME[net]} (можно выбрать другую перед загрузкой)`;
+    $('dropHint').textContent = `в очередь ${NET_NAME[net]}${multiGroups() ? ` группы «${curGroup().name}»` : ''} (сеть можно выбрать перед загрузкой)`;
   }
 });
 window.addEventListener('dragover', (e) => e.preventDefault());
@@ -603,7 +637,7 @@ function renderFbGuide(open = false) {
 function openAddAccount(n = net, fixed = '', keysOnly = false) {
   accNet = n; accFixed = fixed; accLogin = null; accModeV = 'inbox';
   const nm = NET_NAME[accNet];
-  $('accTitle').textContent = fixed ? `Переподключить @${fixed}` : keysOnly ? `Ключ приложения ${nm}` : `Добавить аккаунт ${nm}`;
+  $('accTitle').textContent = fixed ? `Переподключить @${fixed}` : keysOnly ? `Ключ приложения ${nm}` : `Добавить аккаунт ${nm}${multiGroups() ? ` в «${curGroup().name}»` : ''}`;
   show('accView', false); show('accAdd', true); accStep(keysOnly ? '' : 'accStep1'); accErr('');
   $('accLogin').textContent = accNet === 'instagram' ? 'Войти через Instagram' : `Войти в ${nm}`;
   $('accLoginFb').textContent = 'Войти через Facebook';
@@ -630,7 +664,7 @@ function openAccount(name) {
   $('accRemove').onclick = () => ask({
     title: `Убрать @${a.name}?`, go: 'Убрать', danger: true,
     text: `Аккаунт пропадёт из автозалива ${NET_NAME[net]}, его токен удалится из секретов GitHub. Уже опубликованное и папки в очереди останутся. Вернуть можно кнопкой «+».`,
-    action: async () => { await bridge.accRemove({ name: a.name, platform: net }); $('accSheet').hidden = true; toast(`@${a.name} убран`); refresh(); },
+    action: async () => { await bridge.accRemove({ name: a.name, platform: net, group }); $('accSheet').hidden = true; toast(`@${a.name} убран`); refresh(); },
   });
   $('accSheet').hidden = false;
 }
@@ -648,11 +682,12 @@ function showLogin(r) {
       ? `Вход удался. Найдено аккаунтов Instagram: ${list.length}${r.days ? `, вход действует ~${r.days} дн. и продлевается сам` : ''}. Отметь, какие подключить.${r.missing && r.missing.length ? ` Внимание: не выдано разрешение ${r.missing.join(', ')}, при входе разреши всё.` : ''}`
       : 'Вход удался, но к твоим Страницам Facebook не привязан ни один профессиональный аккаунт Instagram. Привяжи аккаунт к Странице (Meta Business Suite → Настройки → Аккаунты Instagram) и войди ещё раз. Если Страницы в бизнес-портфолио, при входе отметь их все.';
     $('accMulti').innerHTML = list.map((x, i) => {
+      const other = x.existing && x.group !== undefined && x.group !== group; // подключён в другой группе
       const on = accFixed ? x.existing === accFixed : !x.existing;
       return `<div class="am-row"><input type="checkbox" id="am${i}" data-i="${i}"${on ? ' checked' : ''}>`
         + `<label for="am${i}">@${esc(x.username)}${x.page ? ` <span class="muted">(страница ${esc(x.page)})</span>` : ''}</label>`
         + `<input type="text" data-n="${i}" value="${esc(x.name)}" spellcheck="false" autocomplete="off"${x.existing ? ' disabled' : ''} title="ник в автозаливе">`
-        + `<span class="am-note">${x.main ? 'основной аккаунт (секрет IG_TOKEN, обычно бессрочный токен): не отмечай без нужды' : x.existing ? `уже подключён как @${esc(x.existing)}: отметь, только чтобы обновить ему вход` : 'новый'}</span></div>`;
+        + `<span class="am-note">${x.main ? 'основной аккаунт (секрет IG_TOKEN, обычно бессрочный токен): не отмечай без нужды' : other ? `в группе «${esc(x.groupName || x.group || 'Основная')}» как @${esc(x.existing)}: отметь, только чтобы обновить ему вход (останется в той группе)` : x.existing ? `уже подключён как @${esc(x.existing)}: отметь, только чтобы обновить ему вход` : multiGroups() ? `новый → в группу «${esc(curGroup().name)}»` : 'новый'}</span></div>`;
     }).join('');
     show('accMulti', list.length > 0); show('accNameBox', false); show('accModeBox', false);
     $('accSave').textContent = 'Сохранить отмеченные';
@@ -735,7 +770,7 @@ $('accSave').addEventListener('click', () => accRun($('accSave'), async () => {
       return { user_id: x.user_id, name: x.existing || $('accMulti').querySelector(`input[data-n="${c.dataset.i}"]`).value };
     });
     if (!picks.length) throw new Error('Отметь хотя бы один аккаунт.');
-    const m = await bridge.accSaveMany({ id: accLogin.id, picks });
+    const m = await bridge.accSaveMany({ id: accLogin.id, picks, group });
     const add = m.saved.filter((x) => !x.replaced).map((x) => '@' + x.name), upd = m.saved.filter((x) => x.replaced).map((x) => '@' + x.name);
     const extra = m.extra && m.extra.length ? ` Заодно сохранены общие секреты: ${m.extra.join(', ')}.` : '';
     $('accDoneText').textContent = `✓ ${add.length ? `Добавлены: ${add.join(', ')}.` : ''}${upd.length ? ` Обновлён вход: ${upd.join(', ')}.` : ''} Токены лежат в секретах GitHub.${extra} Рилсы для них пойдут с ближайшей публикации. Вход продлевается сам раз в неделю; если Meta откажет, точка аккаунта пожелтеет за месяц до конца, тогда просто войди через Facebook ещё раз.`.trim();
@@ -743,15 +778,96 @@ $('accSave').addEventListener('click', () => accRun($('accSave'), async () => {
     refresh();
     return;
   }
-  const r = await bridge.accSave({ id: accLogin.id, name: $('accName').value, mode: accModeV, userId: $('accPick').value });
+  const r = await bridge.accSave({ id: accLogin.id, name: $('accName').value, mode: accModeV, userId: $('accPick').value, group });
   const extra = r.extra && r.extra.length ? ` Заодно сохранены общие секреты: ${r.extra.join(', ')}.` : '';
   $('accDoneText').textContent = `✓ @${r.name} ${r.replaced ? 'переподключён' : 'добавлен'}. Токен лежит в секрете ${r.secret} на GitHub.${extra} Рилсы для него пойдут с ближайшей публикации${net === 'tiktok' || accNet === 'tiktok' ? ' (у папок с подпапками по аккаунтам нужна подпапка с этим ником)' : ''}.`;
   accStep('accDone'); show('accKeys', false);
   refresh();
 }));
 
+// ------------------------------------------------------------ группы: переключить, создать, настроить
+function setGroup(id) {
+  if (id === group) { $('grpSheet').hidden = true; return; }
+  group = id;
+  bridge.setConfig({ group: id }).then((c) => { cfg = c; }).catch(() => {});
+  // старые данные другой группы не показываем: пусто до ответа
+  if (data) { data = { ...data, group: id, accounts: [], nets: null, tt: { pending: [], creators: data.tt ? data.tt.creators : {} }, texts: {}, paused: [] }; }
+  const m = $('scroll'); m.classList.remove('fade'); void m.offsetWidth; m.classList.add('fade'); m.scrollTop = 0;
+  $('grpSheet').hidden = true;
+  render(); refresh();
+  toast(`Группа «${curGroup().name}»`, 1800);
+}
+let gEdit = null; // null: новая группа, иначе id группы, которую настраиваем
+function renderGroups() {
+  $('grpList').innerHTML = groupsList().map((g) => {
+    const parts = [`Instagram <b>${g.instagram}</b>`, `TikTok <b>${g.tiktok}</b>`, g.window ? `${g.window.start}–${g.window.end}` : ''].filter(Boolean);
+    const paused = (g.paused || []).length ? `<span class="chip wait">пауза: ${(g.paused || []).map((n) => NET_NAME[n] || n).join(', ')}</span>` : '';
+    return `<div class="grp-card${g.id === group ? ' on' : ''}" data-gid="${esc(g.id)}" style="--g:${groupColor(g.id)}">
+      <i class="gdot"></i><div class="gc-main"><div class="gc-name">${esc(g.name)}${g.id === group ? '<span class="chip today">открыта</span>' : ''}${paused}</div>
+      <div class="gc-sub">${parts.join(' · ')}${g.id ? ` · папки в groups/${esc(g.id)}/` : ' · папки queue…/'}</div></div>
+      <button class="ibtn" data-gedit="${esc(g.id)}" title="Настроить группу">${IC.pen}</button></div>`;
+  }).join('');
+}
+function openGroups() { renderGroups(); $('grpForm').hidden = true; $('grpNew').hidden = false; $('grpSheet').hidden = false; }
+function openGroupForm(id) {
+  gEdit = id;
+  const g = id == null ? null : groupsList().find((x) => x.id === id);
+  $('grpFormTitle').textContent = g ? `Настроить «${g.name}»` : 'Новая группа';
+  $('gName').value = g ? g.name : '';
+  $('gStart').value = g && g.window && (g.window.own || !g.id) ? g.window.start : '';
+  $('gEnd').value = g && g.window && (g.window.own || !g.id) ? g.window.end : '';
+  const main = groupsList()[0].window || { start: '10:00', end: '22:00' };
+  $('gStart').placeholder = main.start; $('gEnd').placeholder = main.end;
+  $('gHint').textContent = g && !g.id
+    ? 'Основная группа: окно публикаций общее (config.json → day_start, day_end). Группы без своего окна берут его же.'
+    : `Окно публикаций: с какого по какое время (часовой пояс ${TZ_NAME[(data && data.window && data.window.tz) || cfg.scheduleTz] || cfg.scheduleTz}) выходят ролики группы. Пусто: как в основной (${main.start}–${main.end}).`;
+  $('gSave').textContent = g ? 'Сохранить' : 'Создать'; $('gSave').disabled = false; $('gErr').textContent = '';
+  $('gRemove').hidden = !(g && g.id);
+  $('grpForm').hidden = false; $('grpNew').hidden = true; $('gName').focus();
+}
+$('grpBtn').addEventListener('click', openGroups);
+$('grpBack').addEventListener('click', () => { $('grpSheet').hidden = true; });
+$('grpNew').addEventListener('click', () => openGroupForm(null));
+$('gCancel').addEventListener('click', () => { $('grpForm').hidden = true; $('grpNew').hidden = false; });
+$('grpList').addEventListener('click', (e) => {
+  const ed = e.target.closest('[data-gedit]');
+  if (ed) { e.stopPropagation(); openGroupForm(ed.dataset.gedit); return; }
+  const c = e.target.closest('[data-gid]');
+  if (c) setGroup(c.dataset.gid);
+});
+$('gSave').addEventListener('click', async () => {
+  const name = $('gName').value.trim(), start = $('gStart').value.trim(), end = $('gEnd').value.trim();
+  $('gSave').disabled = true; $('gErr').textContent = '';
+  try {
+    if (gEdit == null) {
+      const g = await bridge.groupCreate({ name, day_start: start, day_end: end });
+      toast(`Группа «${g.name}» создана. Добавь в неё аккаунты.`, 4000);
+      setGroup(g.id);
+    } else {
+      await bridge.groupUpdate(gEdit, { name, day_start: start, day_end: end });
+      toast('Группа сохранена'); $('grpSheet').hidden = true; refresh();
+    }
+  } catch (e) { $('gErr').textContent = e.message; } finally { $('gSave').disabled = false; }
+});
+$('gRemove').addEventListener('click', () => {
+  const g = groupsList().find((x) => x.id === gEdit);
+  if (!g) return;
+  ask({
+    title: `Убрать группу «${g.name}»?`, go: 'Убрать', danger: true,
+    text: 'Можно убрать только пустую группу: без аккаунтов и без папок в очереди. Опубликованное и история останутся.',
+    action: async () => { await bridge.groupRemove(g.id); $('grpSheet').hidden = true; toast(`Группа «${g.name}» убрана`); if (group === g.id) setGroup(''); else refresh(); },
+  });
+});
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-help]')) { bridge.openUrl(helpUrl()); return; }
+  const st = e.target.closest('[data-start]');
+  if (st) openAddAccount(st.dataset.start);
+});
+$('btnHelp').addEventListener('click', () => bridge.openUrl(helpUrl()));
+
 function closeTop() {
   if (!$('accSheet').hidden) { $('accSheet').hidden = true; return; }
+  if (!$('grpSheet').hidden) { $('grpSheet').hidden = true; return; }
   if (!$('ttSheet').hidden) return ttClose();
   if (!$('txSheet').hidden) return closeTexts();
   if (!$('askSheet').hidden && !$('askCancel').disabled) { $('askSheet').hidden = true; return; }
@@ -777,7 +893,7 @@ function fillSettings() {
   $('keysState').textContent = `TikTok: ${cfg.hasTtSecret ? 'ключ сохранён' : 'ключа нет'} · Instagram: ${cfg.hasFbSecret ? 'вход через Facebook настроен' : cfg.hasIgSecret ? 'ключ сохранён' : 'ключа нет'}. Нужны только для кнопки «+» у аккаунтов.`;
   const original = String(cfg.repo || '').toLowerCase() === 'frizy229/autopostreels';
   $('resetBox').hidden = original;
-  $('about').textContent = `Reels Widget ${version}. Две очереди: Instagram и TikTok (и общая для обеих). Папка из одного длинного видео превращается в рилсы на день, автопостер на GitHub публикует их сам.`;
+  $('about').textContent = `Reels Widget ${version}. Группы аккаунтов для разных проектов, в каждой очереди Instagram и TikTok (и общая для обеих). Папка из одного длинного видео превращается в рилсы на день, автопостер на GitHub публикует их сам.`;
 }
 function openSettings() { fillSettings(); $('connResult').textContent = ''; $('settings').hidden = false; }
 const save = async (patch) => { cfg = await bridge.setConfig(patch); fillSettings(); schedule(); };
@@ -853,6 +969,7 @@ bridge.onConfig((c) => { cfg = c; fillSettings(); });
   cfg = r.cfg; hasToken = r.hasToken; version = r.version;
   tick(); setInterval(tick, 1000);
   applyAppearance(r.appearance); fillSettings(); schedule();
+  group = cfg.group || '';
   setNet(cfg.tab || 'instagram', false);
   refresh();
 })();

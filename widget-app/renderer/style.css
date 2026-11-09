@@ -208,3 +208,31 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin-top: 8px; }
 .guide li { font-size: 12px; line-height: 1.45; }
 .guide .g-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .guide code { display: block; margin-top: 4px; font-size: 11px; word-break: break-all; opacity: .8; }
+
+/* ---------------------------------------------------------- группы */
+.hrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.hrow .date { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grp-btn { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 62%; height: 30px; padding: 0 8px 0 10px; border: 1px solid var(--line);
+  border-radius: 999px; background: var(--field); cursor: pointer; font-size: 12.5px; transition: background .15s, border-color .15s; }
+.grp-btn:hover { background: var(--card-hover); border-color: var(--g, var(--accent)); }
+.grp-btn b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grp-btn .g-lbl { color: var(--muted); font-size: 11px; }
+.grp-btn svg { width: 14px; height: 14px; color: var(--muted); }
+.gdot { width: 9px; height: 9px; border-radius: 50%; background: var(--g, var(--accent)); flex: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--g, var(--accent)) 25%, transparent); }
+.grp-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 12px; }
+.grp-card { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 12px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); cursor: pointer; transition: background .15s, border-color .15s; }
+.grp-card:hover { background: var(--card-hover); }
+.grp-card.on { border-color: var(--g); box-shadow: inset 3px 0 0 var(--g); }
+.grp-card .gc-main { flex: 1; min-width: 0; }
+.grp-card .gc-name { font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.grp-card .gc-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.grp-card .gc-sub b { color: var(--text); font-weight: 600; }
+.grp-form { margin-top: 6px; padding: 12px; border-radius: 14px; background: var(--card); border: 1px solid var(--line); }
+.grp-form h4 { margin-top: 0; }
+.pv-group { margin: 2px 0 6px; } .pv-group b { color: var(--g, var(--accent)); }
+.start { margin-top: 6px; padding: 12px 14px; border-radius: 16px; background: var(--card); border: 1px solid var(--line); position: relative; overflow: hidden; }
+.start::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--g, var(--accent)); }
+.start ol { margin: 8px 0 8px; padding-left: 18px; display: flex; flex-direction: column; gap: 7px; }
+.start li { font-size: 12px; } .start li span { margin-right: 6px; }
+.start li .btn.small { height: 24px; padding: 0 9px; font-size: 11.5px; vertical-align: middle; }
+.start li.done span { color: var(--ok); } .start li.done span::after { content: " ✓"; } .start li.done .btn { display: none; }

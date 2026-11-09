@@ -2,7 +2,7 @@
 // Работа с GitHub через REST API: чтение очереди и загрузка папки одним коммитом.
 const fs = require('fs');
 const path = require('path');
-const { slug, inspectFolder, cleanTexts, LANES, laneByKey, VIDEO_EXT } = require('./core');
+const { slug, inspectFolder, cleanTexts, LANES, laneByKey, groupLanes, GROUPS_DIR, VIDEO_EXT } = require('./core');
 const { push } = require('./gitpush');
 const { seal } = require('./secrets');
 
@@ -71,10 +71,10 @@ class GitHub {
     return r.full_name;
   }
 
-  /** Все очереди: {shared, instagram, tiktok}. */
-  async queues() {
+  /** Все очереди группы: {shared, instagram, tiktok}. group '' = группа по умолчанию (queue/, queue-instagram/, …). */
+  async queues(group = '') {
     const out = {};
-    await Promise.all(LANES.map(async (l) => { out[l.key] = await this.queue(l.dir); }));
+    await Promise.all(groupLanes(group).map(async (l) => { out[l.key] = await this.queue(l.dir); }));
     return out;
   }
 
@@ -94,14 +94,14 @@ class GitHub {
 
   /** Записать подтверждённые настройки TikTok (<имя>.tiktok.json рядом с видео) одним коммитом. */
   async saveTiktokSettings(path, settings) {
-    if (!/^queue(?:-tiktok)?\/[^/]+\/(?:[^/]+\/)?[^/]+\.tiktok\.json$/.test(path) || path.includes('..')) throw new Error('Недопустимый путь.');
+    if (!/^(?:groups\/[a-z0-9][a-z0-9_-]*\/)?queue(?:-tiktok)?\/[^/]+\/(?:[^/]+\/)?[^/]+\.tiktok\.json$/.test(path) || path.includes('..')) throw new Error('Недопустимый путь.');
     const sha = await this.blob(Buffer.from(JSON.stringify(settings, null, 2) + '\n', 'utf8'));
     return this.commitFiles({ [path]: sha }, `Настройки TikTok подтверждены: ${path.split('/').slice(1).join('/')}`);
   }
 
   /** Скачать видео из очереди во временный файл для просмотра перед публикацией. */
   async downloadVideo(rel, dest) {
-    if (!/^queue(?:-instagram|-tiktok)?\/[^./]/.test(rel) || rel.includes('..')) throw new Error('Недопустимый путь.');
+    if (!/^(?:groups\/[a-z0-9][a-z0-9_-]*\/)?queue(?:-instagram|-tiktok)?\/[^./]/.test(rel) || rel.includes('..')) throw new Error('Недопустимый путь.');
     const res = await fetch(`${API}/repos/${this.repo}/contents/${rel.split('/').map(encodeURIComponent).join('/')}?ref=${encodeURIComponent(this.branch)}`, {
       headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/vnd.github.raw+json', 'User-Agent': 'reels-widget' },
     });
@@ -110,9 +110,9 @@ class GitHub {
     return dest;
   }
 
-  async nextNumber() {
+  async nextNumber(group = '') {
     let max = 0;
-    for (const dir of LANES.flatMap((l) => [l.dir, l.posted])) {
+    for (const dir of groupLanes(group).flatMap((l) => [l.dir, l.posted])) {
       for (const d of await this.listDir(dir)) {
         const m = /^(\d+)/.exec(d.name);
         if (d.type === 'dir' && m) max = Math.max(max, parseInt(m[1], 10));
@@ -148,13 +148,13 @@ class GitHub {
 
   /**
    * Загрузить папку в <очередь>/NNN_имя одним коммитом. progress(доля, текст).
-   * opts.lane: shared | instagram | tiktok; opts.texts: тексты папки (texts.json).
+   * opts.lane: shared | instagram | tiktok; opts.group: id группы ('' = по умолчанию); opts.texts: тексты папки (texts.json).
    */
   async uploadFolder(dir, progress = () => {}, accounts = [], opts = {}) {
     const info = inspectFolder(dir, accounts);
     if (info.errors.length) throw new Error(info.errors.join(' '));
-    const lane = laneByKey(opts.lane || 'shared');
-    const name = `${String(await this.nextNumber()).padStart(3, '0')}_${slug(path.basename(dir))}`;
+    const lane = laneByKey(opts.lane || 'shared', opts.group || '');
+    const name = `${String(await this.nextNumber(opts.group || '')).padStart(3, '0')}_${slug(path.basename(dir))}`;
     const files = {};
     const texts = cleanTexts(opts.texts);
     let done = 0;
@@ -180,15 +180,18 @@ class GitHub {
   }
 
   /** Убрать папку из очереди одним коммитом (файлы удаляются из репозитория; в истории git они остаются). */
-  async deleteFolder(name, laneKey = 'shared') {
+  async deleteFolder(name, laneKey = 'shared', group = '') {
     if (!name || /[\\/]/.test(name) || name.startsWith('.') || name.includes('..')) throw new Error('Недопустимое имя папки.');
-    const qdir = laneByKey(laneKey).dir;
+    const qdir = laneByKey(laneKey, group).dir;
     for (let i = 0; i < 5; i++) {
       const ref = await this.req('GET', `/git/ref/heads/${this.branch}`);
       const head = ref.object.sha;
       const base = (await this.req('GET', `/git/commits/${head}`)).tree.sha;
-      const root = (await this.req('GET', `/git/trees/${base}`)).tree;
-      const q = root.find((e) => e.path === qdir && e.type === 'tree');
+      // очередь может лежать глубже (groups/<id>/queue): идём по частям пути
+      let q = { sha: base };
+      for (const part of qdir.split('/')) {
+        q = q && ((await this.req('GET', `/git/trees/${q.sha}`)).tree || []).find((e) => e.path === part && e.type === 'tree');
+      }
       const dir = q && (await this.req('GET', `/git/trees/${q.sha}`)).tree.find((e) => e.path === name && e.type === 'tree');
       if (!dir) throw new Error(`Папки ${name} нет в очереди (возможно, её уже удалили или она опубликована).`);
       const all = (await this.req('GET', `/git/trees/${dir.sha}?recursive=1`)).tree.filter((e) => e.type === 'blob');
@@ -214,16 +217,16 @@ class GitHub {
   }
 
   /** Тексты папки (texts.json). */
-  async folderTexts(laneKey, name) {
+  async folderTexts(laneKey, name, group = '') {
     if (!name || /[\\/]/.test(name) || name.includes('..')) throw new Error('Недопустимое имя папки.');
-    const t = await this.readText(`${laneByKey(laneKey).dir}/${name}/texts.json`);
+    const t = await this.readText(`${laneByKey(laneKey, group).dir}/${name}/texts.json`);
     try { return t ? JSON.parse(t) : {}; } catch { return {}; }
   }
 
   /** Записать тексты папки; пустые тексты удаляют texts.json. */
-  async saveFolderTexts(laneKey, name, texts) {
+  async saveFolderTexts(laneKey, name, texts, group = '') {
     if (!name || /[\\/]/.test(name) || name.includes('..')) throw new Error('Недопустимое имя папки.');
-    const p = `${laneByKey(laneKey).dir}/${name}/texts.json`;
+    const p = `${laneByKey(laneKey, group).dir}/${name}/texts.json`;
     const clean = cleanTexts(texts);
     if (!Object.keys(clean).length) {
       if ((await this.readText(p)) == null) return null;
@@ -303,6 +306,7 @@ class GitHub {
     for (const e of all) {
       const top = e.path.split('/')[0];
       if (dirs.includes(top) && e.path.includes('/') && !e.path.endsWith('/.gitkeep')) files[e.path] = null;
+      if (top === GROUPS_DIR) files[e.path] = null; // группы Alex (их очереди и опубликованное) в копии не нужны
     }
     for (const d of dirs) files[`${d}/.gitkeep`] = await this.blob(Buffer.from(''));
     if (all.some((e) => e.path === 'tiktok_creator.json')) files['tiktok_creator.json'] = null;
@@ -310,7 +314,7 @@ class GitHub {
     files['stats.json'] = await this.blob(Buffer.from('{}\n'));
     const cfgText = await this.readText('config.json');
     const cfg = cfgText ? JSON.parse(cfgText) : {};
-    cfg.accounts = []; cfg.paused = [];
+    cfg.accounts = []; cfg.paused = []; cfg.groups = [];
     files['config.json'] = await this.blob(Buffer.from(JSON.stringify(cfg, null, 2) + '\n'));
     const removed = Object.values(files).filter((v) => v === null).length;
     await this.commitFiles(files, 'Чистый старт копии автопостера: без чужих аккаунтов и очередей (виджет)');

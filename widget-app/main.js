@@ -3,7 +3,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, nativeTheme, shell, safeStorage, nativeImage } = require('electron');
-const { buildSnapshot, inspectFolder, captionFor, laneByKey, runHealth, NETS } = require('./lib/core');
+const { buildSnapshot, inspectFolder, captionFor, laneByKey, groupLanes, validGroupId, runHealth, NETS } = require('./lib/core');
 const { GitHub } = require('./lib/github');
 const tiktok = require('./lib/tiktok');
 const accounts = require('./lib/accounts');
@@ -12,7 +12,7 @@ const handoff = require('./lib/handoff');
 
 const DEFAULTS = {
   repo: 'Frizy229/autopostreels', branch: 'main', theme: 'system', material: 'acrylic', tint: 55,
-  alwaysOnTop: false, autostart: true, refreshMin: 5, scheduleTz: 'Asia/Tomsk', autoUpload: false, tab: 'instagram',
+  alwaysOnTop: false, autostart: true, refreshMin: 5, scheduleTz: 'Asia/Tomsk', autoUpload: false, tab: 'instagram', group: '',
   bounds: null, tokenEnc: '', tokenPlain: '',
   // ключи приложений соцсетей (нужны только для входа при добавлении аккаунта), хранятся зашифрованными
   ttSecretEnc: '', igSecretEnc: '', igAppId: '',
@@ -138,69 +138,115 @@ handle('cfg:set', (patch) => {
 });
 handle('token:set', (t) => { setToken(String(t || '').trim()); return true; });
 handle('conn:check', async () => gh().check());
-// данные репозитория для обоих разделов (Instagram и TikTok)
+// данные репозитория для обоих разделов (Instagram и TikTok) выбранной группы
 let repoCfg = {};
-handle('data:refresh', async () => {
+const groupOf = (gid) => (gid && validGroupId(gid) ? gid : '');
+/** Аккаунты группы из config.json репозитория. */
+const groupAccs = (rc, gid) => { try { return ((accounts.groupNode(rc, gid) || {}).accounts || []).filter((a) => a && a.name); } catch { return []; } };
+handle('data:refresh', async (wanted) => {
   const g = gh();
-  const [queues, state, stats, rc, creators, runs, secretNames] = await Promise.all([g.queues(), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('config.json'), g.readJson('tiktok_creator.json'), g.postRuns().catch(() => null), g.secretNames().catch(() => null)]);
-  repoCfg = rc || {};
-  const accList = (repoCfg.accounts || []).filter((a) => a && a.name);
+  repoCfg = (await g.readJson('config.json')) || {};
+  const list = accounts.groupList(repoCfg);
+  // выбранной группы уже нет (её убрали): показываем основную
+  const gid = list.some((x) => x.id === groupOf(wanted)) ? groupOf(wanted) : '';
+  const node = accounts.groupNode(repoCfg, gid);
+  const [queues, state, stats, creators, runs, secretNames] = await Promise.all([g.queues(gid), g.readJson('state.json'), g.readJson('stats.json'), g.readJson('tiktok_creator.json'), g.postRuns().catch(() => null), g.secretNames().catch(() => null)]);
+  const accList = groupAccs(repoCfg, gid);
   const accNames = accList.map((a) => a.name);
   const platforms = Object.fromEntries(accList.map((a) => [a.name, (a.platform || 'instagram').toLowerCase()]));
   const now = new Date();
   const nets = {};
-  for (const net of NETS) nets[net] = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts: accNames, platforms, net });
-  const all = buildSnapshot(state, stats, queues, now, { scheduleTz: cfg.scheduleTz, accounts: accNames, platforms });
-  const tt = { pending: tiktok.pendingConfirm(queues, state, accList), creators: creators || {} };
+  const base = { scheduleTz: cfg.scheduleTz, accounts: accNames, platforms, group: gid };
+  for (const net of NETS) nets[net] = buildSnapshot(state, stats, queues, now, { ...base, net });
+  const all = buildSnapshot(state, stats, queues, now, base);
+  const tt = { pending: tiktok.pendingConfirm(queues, state, accList, gid), creators: creators || {} };
+  const win0 = { start: repoCfg.day_start || '10:00', end: repoCfg.day_end || '22:00' };
   return {
-    nets, nextNum: all.nextNum, tt, at: now.toISOString(), health: runs ? runHealth(runs, now) : null,
-    accounts: (repoCfg.accounts || []).map((a, i) => a && a.name && ({
+    group: gid, nets, nextNum: all.nextNum, tt, at: now.toISOString(), health: runs ? runHealth(runs, now) : null,
+    groups: list.map((x) => {
+      const accs = (x.node.accounts || []).filter((a) => a && a.name);
+      const count = (n) => accs.filter((a) => (a.platform || 'instagram').toLowerCase() === n).length;
+      return { id: x.id, name: x.name, instagram: count('instagram'), tiktok: count('tiktok'), paused: x.node.paused || [],
+        window: { start: x.node.day_start || win0.start, end: x.node.day_end || win0.end, own: !!(x.id && (x.node.day_start || x.node.day_end)) } };
+    }),
+    accounts: accList.map((a, i) => ({
       name: a.name, platform: platforms[a.name], mode: a.platform === 'tiktok' ? (a.mode || 'inbox') : '',
-      health: accounts.accountHealth(a, i, secretNames, (state || {}).tokens, now),
-    })).filter(Boolean),
+      // индекс нужен только старой схеме имён секретов группы по умолчанию (IG_TOKEN, IG_TOKEN_2…)
+      health: accounts.accountHealth(a.token_env || !gid ? a : { ...a, token_env: accounts.secretNameFor(platforms[a.name], a.name) }, gid ? -1 : i, secretNames, (state || {}).tokens, now),
+    })),
     canSecrets: Array.isArray(secretNames), repoSetup: { ttClientKey: !!repoCfg.tiktok_client_key, redirect: repoCfg.tiktok_redirect_uri || '', igAppId: repoCfg.instagram_app_id || cfg.igAppId || '', fbAppId: repoCfg.facebook_app_id || cfg.fbAppId || '' },
     fbGuide: fbGuideNow(),
-    texts: repoCfg.texts || {}, paused: repoCfg.paused || [], hashtags: repoCfg.hashtags || '',
-    window: { start: repoCfg.day_start || '10:00', end: repoCfg.day_end || '22:00', tz: repoCfg.timezone || cfg.scheduleTz },
+    texts: node.texts || {}, paused: node.paused || [], hashtags: node.hashtags != null ? node.hashtags : (repoCfg.hashtags || ''),
+    window: { start: node.day_start || win0.start, end: node.day_end || win0.end, tz: repoCfg.timezone || cfg.scheduleTz },
   };
+});
+// группы: создать, переименовать / сменить окно, убрать (только пустую)
+handle('group:create', async (o = {}) => {
+  let made = null;
+  const c = await gh().updateConfig((rc) => { made = accounts.createGroup(rc, o); }, `Новая группа «${String(o.name || '').trim()}» (виджет)`);
+  repoCfg = c; cfg.group = made.id; saveCfg();
+  return { id: made.id, name: made.name };
+});
+handle('group:update', async (gid, patch = {}) => {
+  const id = groupOf(gid);
+  const c = await gh().updateConfig((rc) => { accounts.updateGroup(rc, id, patch); }, `Группа «${patch.name || id || 'основная'}»: настройки (виджет)`);
+  repoCfg = c; return true;
+});
+handle('group:remove', async (gid) => {
+  const id = groupOf(gid);
+  if (!id) throw new Error('Основную группу убрать нельзя.');
+  const g = gh();
+  const q = await g.queues(id);
+  const left = Object.values(q).reduce((n, l) => n + l.length, 0);
+  if (left) throw new Error(`В очередях группы ещё ${left} папок: убери их (корзина у папки) или дождись публикации.`);
+  const c = await g.updateConfig((rc) => { accounts.removeGroup(rc, id); }, `Убрана группа ${id} (виджет)`);
+  repoCfg = c;
+  if (cfg.group === id) { cfg.group = ''; saveCfg(); }
+  return true;
 });
 handle('folder:pick', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'multiSelections'], title: 'Папка с рилсами' });
   return r.canceled ? [] : r.filePaths;
 });
 // имена аккаунтов из config.json репозитория (для проверки подпапок); если не прочиталось, не проверяем
-const accountNames = async (lane = 'shared') => {
+const accountNames = async (lane = 'shared', group = '') => {
   try {
-    const accs = (((await gh().readJson('config.json')).accounts) || []).filter((a) => a && a.name);
+    const accs = groupAccs(await gh().readJson('config.json'), groupOf(group));
     const net = laneByKey(lane).net;
     return accs.filter((a) => !net || (a.platform || 'instagram').toLowerCase() === net).map((a) => a.name);
   } catch { return []; }
 };
-handle('folder:inspect', async (p, lane) => {
+handle('folder:inspect', async (p, lane, group) => {
   if (!fs.statSync(p).isDirectory()) throw new Error('Перетащи именно папку, а не отдельные файлы.');
-  const { files, ...info } = inspectFolder(p, await accountNames(lane));
+  const { files, ...info } = inspectFolder(p, await accountNames(lane, group));
   return info;
 });
 handle('folder:upload', async (p, opts = {}) => gh().uploadFolder(p, (frac, text) => win && win.webContents.send('upload:progress', { frac, text }),
-  await accountNames(opts.lane), { lane: opts.lane, texts: opts.texts }));
-handle('folder:delete', async (name, lane) => gh().deleteFolder(String(name), lane));
-handle('folder:texts', async (lane, name) => gh().folderTexts(lane, String(name)));
-handle('folder:saveTexts', async (lane, name, texts) => { await gh().saveFolderTexts(lane, String(name), texts); return true; });
-// тексты по умолчанию и пауза соцсети: в config.json репозитория (их читает автопостер)
-handle('net:saveTexts', async (net, texts) => {
+  await accountNames(opts.lane, opts.group), { lane: opts.lane, texts: opts.texts, group: groupOf(opts.group) }));
+handle('folder:delete', async (name, lane, group) => gh().deleteFolder(String(name), lane, groupOf(group)));
+handle('folder:texts', async (lane, name, group) => gh().folderTexts(lane, String(name), groupOf(group)));
+handle('folder:saveTexts', async (lane, name, texts, group) => { await gh().saveFolderTexts(lane, String(name), texts, groupOf(group)); return true; });
+// тексты по умолчанию и пауза соцсети: в config.json репозитория (их читает автопостер), у каждой группы свои
+const groupLabel = (gid) => (gid ? ` в группе ${gid}` : '');
+handle('net:saveTexts', async (net, texts, group) => {
   if (!NETS.includes(net)) throw new Error('Неизвестная соцсеть.');
   const { cleanTexts } = require('./lib/core');
-  const c = await gh().updateConfig((rc) => { rc.texts = rc.texts || {}; rc.texts[net] = cleanTexts(texts); }, `Тексты ${net} по умолчанию (виджет)`);
-  repoCfg = c; return c.texts;
+  const gid = groupOf(group);
+  let out = {};
+  const c = await gh().updateConfig((rc) => { const n = accounts.groupNode(rc, gid); n.texts = n.texts || {}; n.texts[net] = cleanTexts(texts); out = n.texts; }, `Тексты ${net} по умолчанию${groupLabel(gid)} (виджет)`);
+  repoCfg = c; return out;
 });
-handle('net:pause', async (net, on) => {
+handle('net:pause', async (net, on, group) => {
   if (!NETS.includes(net)) throw new Error('Неизвестная соцсеть.');
+  const gid = groupOf(group);
+  let out = [];
   const c = await gh().updateConfig((rc) => {
-    const s = new Set(rc.paused || []);
+    const n = accounts.groupNode(rc, gid);
+    const s = new Set(n.paused || []);
     if (on) s.add(net); else s.delete(net);
-    rc.paused = [...s];
-  }, `${on ? 'Пауза' : 'Снята пауза'}: ${net} (виджет)`);
-  repoCfg = c; return c.paused;
+    n.paused = [...s]; out = n.paused;
+  }, `${on ? 'Пауза' : 'Снята пауза'}: ${net}${groupLabel(gid)} (виджет)`);
+  repoCfg = c; return out;
 });
 // запуск автопостера на GitHub: post (сейчас по расписанию), check (проверить токены), один рилс сразу
 handle('run', async (inputs) => {
@@ -393,7 +439,7 @@ async function finishLogin(platform, code, redirect) {
     const { token, days, missing } = await fbExchange(code);
     const list = await igAccountsByToken(token);
     return keepLogin('instagram', token, { platform: 'instagram', via: 'facebook', days, missing,
-      list: accounts.instagramChoices(list, (repoCfg && repoCfg.accounts) || []), suggested: (list[0] && list[0].username) || '' });
+      list: accounts.instagramChoices(list, accounts.allAccounts(repoCfg || {})), suggested: (list[0] && list[0].username) || '' });
   }
   const token = await igExchange(code);
   const list = await igAccountsByToken(token);
@@ -428,16 +474,17 @@ handle('acc:token', async (token) => {
   const list = await igAccountsByToken(t);
   if (!list.length) throw new Error('Токен рабочий, но к нему не привязан ни один аккаунт Instagram.');
   return keepLogin('instagram', t, { platform: 'instagram', via: /^EAA/.test(t) ? 'facebook' : 'instagram', suggested: list[0].username || '',
-    list: accounts.instagramChoices(list, (repoCfg && repoCfg.accounts) || []) });
+    list: accounts.instagramChoices(list, accounts.allAccounts(repoCfg || {})) });
 });
 // сохранить: токен в секрет GitHub, аккаунт в config.json, недостающие общие секреты (ключ TikTok, GH_PAT) тоже
-handle('acc:save', async ({ id, name, mode, userId } = {}) => {
+handle('acc:save', async ({ id, name, mode, userId, group } = {}) => {
   const l = logins.get(id);
   if (!l) throw new Error('Вход устарел: войди в аккаунт ещё раз.');
   const g = gh();
   const nick = accounts.cleanName(name);
   const rc = await g.readJson('config.json');
-  const err = accounts.nameError(nick, rc.accounts || [], l.platform);
+  const gid = groupOf(group);
+  const err = accounts.nameError(nick, accounts.allAccounts(rc), l.platform, '', gid);
   if (err) throw new Error(err);
   const names = await g.secretNames();
   if (names === null) throw g.secretsError({ status: 403 });
@@ -450,22 +497,22 @@ handle('acc:save', async ({ id, name, mode, userId } = {}) => {
   }
   // имя секрета: прежнее, если аккаунт уже был (переподключение)
   const probe = JSON.parse(JSON.stringify(rc));
-  const { account, replaced } = accounts.upsertAccount(probe, entry);
+  const { account, replaced } = accounts.upsertAccount(accounts.groupNode(probe, gid), entry, { legacy: !gid });
   const extra = [];
   await g.setSecret(account.token_env, l.secret);
   if (l.platform === 'tiktok' && !names.includes('TT_CLIENT_SECRET')) { await g.setSecret('TT_CLIENT_SECRET', ttSecret()); extra.push('TT_CLIENT_SECRET'); }
   // GH_PAT нужен автопостеру, чтобы самому сохранять обновлённые токены (TikTok меняет их при продлении, Instagram раз в 60 дней)
   if (!names.includes('GH_PAT')) { await g.setSecret('GH_PAT', getToken()); extra.push('GH_PAT'); }
   const c = await g.updateConfig((x) => {
-    accounts.upsertAccount(x, entry);
+    accounts.upsertAccount(accounts.groupNode(x, gid), entry, { legacy: !gid });
     if (l.platform === 'instagram' && igAppId() && !x.instagram_app_id) x.instagram_app_id = igAppId();
-  }, `${replaced ? 'Переподключён' : 'Добавлен'} аккаунт ${l.platform === 'tiktok' ? 'TikTok' : 'Instagram'} @${account.name} (виджет)`);
+  }, `${replaced ? 'Переподключён' : 'Добавлен'} аккаунт ${l.platform === 'tiktok' ? 'TikTok' : 'Instagram'} @${account.name}${groupLabel(gid)} (виджет)`);
   repoCfg = c;
   logins.delete(id);
   return { name: account.name, secret: account.token_env, replaced, extra };
 });
 // Instagram пачкой (вход через Facebook): один токен на все выбранные аккаунты, у каждого свой секрет, один коммит config.json
-handle('acc:saveMany', async ({ id, picks } = {}) => {
+handle('acc:saveMany', async ({ id, picks, group } = {}) => {
   const l = logins.get(id);
   if (!l || l.platform !== 'instagram') throw new Error('Вход устарел: войди ещё раз.');
   const g = gh();
@@ -473,15 +520,18 @@ handle('acc:saveMany', async ({ id, picks } = {}) => {
   const known = new Set((l.info.list || []).map((x) => String(x.user_id)));
   const chosen = (picks || []).filter((p) => known.has(String(p.user_id)));
   if (!chosen.length) throw new Error('Отметь хотя бы один аккаунт.');
-  const { entries, errors } = accounts.planInstagramBatch(chosen, rc.accounts || []);
+  const gid = groupOf(group);
+  // уже подключённые аккаунты обновляются в своей группе, новые идут в выбранную
+  const { entries, errors } = accounts.planInstagramBatch(chosen, accounts.allAccounts(rc), gid);
   if (errors.length) throw new Error(errors.join(' '));
   const names = await g.secretNames();
   if (names === null) throw g.secretsError({ status: 403 });
   const at = new Date().toISOString().slice(0, 16) + 'Z';
   const probe = JSON.parse(JSON.stringify(rc));
   const saved = [];
+  const put = (x, e) => { const { group: eg, ...rest } = e; return accounts.upsertAccount(accounts.groupNode(x, eg || ''), { ...rest, platform: 'instagram', connected: at }, { legacy: !eg }); };
   for (const e of entries) {
-    const { account, replaced } = accounts.upsertAccount(probe, { ...e, platform: 'instagram', connected: at });
+    const { account, replaced } = put(probe, e);
     await g.setSecret(account.token_env, l.secret);
     saved.push({ name: account.name, secret: account.token_env, replaced });
   }
@@ -494,22 +544,23 @@ handle('acc:saveMany', async ({ id, picks } = {}) => {
   }
   const added = saved.filter((x) => !x.replaced).map((x) => '@' + x.name), again = saved.filter((x) => x.replaced).map((x) => '@' + x.name);
   const c = await g.updateConfig((x) => {
-    for (const e of entries) accounts.upsertAccount(x, { ...e, platform: 'instagram', connected: at });
+    for (const e of entries) put(x, e);
     if (l.info.via === 'facebook' && fbAppId() && !x.facebook_app_id) x.facebook_app_id = fbAppId();
   }, `Instagram через Facebook: ${[added.length ? `добавлены ${added.join(', ')}` : '', again.length ? `обновлён вход ${again.join(', ')}` : ''].filter(Boolean).join('; ')} (виджет)`);
   repoCfg = c;
   logins.delete(id);
   return { saved, extra, days: l.info.days || 0 };
 });
-handle('acc:remove', async ({ name, platform } = {}) => {
+handle('acc:remove', async ({ name, platform, group } = {}) => {
   const g = gh();
+  const gid = groupOf(group);
   let gone = null;
-  const c = await g.updateConfig((x) => { gone = accounts.removeAccount(x, name, platform); }, `Убран аккаунт @${name} (виджет)`);
+  const c = await g.updateConfig((x) => { gone = accounts.removeAccount(accounts.groupNode(x, gid), name, platform); }, `Убран аккаунт @${name}${groupLabel(gid)} (виджет)`);
   repoCfg = c;
   if (!gone) throw new Error(`Аккаунта @${name} уже нет в config.json.`);
-  // секрет удаляем, только если его больше никто не использует
+  // секрет удаляем, только если его больше никто не использует (ни в одной группе)
   const env = gone.token_env;
-  const used = (c.accounts || []).some((a, i) => accounts.tokenEnvOf(a, i) === env);
+  const used = accounts.groupList(c).some((gr) => (gr.node.accounts || []).some((a, i) => accounts.tokenEnvOf(a, gr.id ? -1 : i) === env));
   let secretGone = false;
   if (env && !used) secretGone = await g.deleteSecret(env).catch(() => false);
   return { secretGone, env };
@@ -547,7 +598,7 @@ async function pollHandoff() {
     const dest = await gh().uploadFolder(job.folder, (frac, text) => {
       handoff.progress(dir, job.id, frac, text);
       if (win) win.webContents.send('upload:progress', { frac, text });
-    }, await accountNames(job.lane), { lane: job.lane });
+    }, await accountNames(job.lane, job.group), { lane: job.lane, group: groupOf(job.group) });
     let posted = false;
     if (job.postNow) {
       // «Выложить сразу»: запускаем публикацию первого ролика каждого выбранного аккаунта, остальные — по расписанию

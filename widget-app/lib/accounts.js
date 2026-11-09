@@ -1,4 +1,5 @@
 'use strict';
+const { validGroupId } = require('./core');
 // Аккаунты соцсетей: добавление кнопкой в виджете (вход, токен в секрет GitHub, запись в config.json) и их состояние.
 // Логика без Electron, чтобы её можно было проверить тестами.
 
@@ -22,10 +23,17 @@ function cleanName(s) {
 function suggestName(displayName) {
   return cleanName(String(displayName || '').normalize('NFKD').replace(/[̀-ͯ]/g, '')).replace(/[^A-Za-z0-9._-]/g, '').replace(/^[._-]+|[._-]+$/g, '').toLowerCase();
 }
-function nameError(name, accounts = [], platform = '', keep = '') {
+/**
+ * Что не так с ником. accounts: аккаунты всех групп (allAccounts) или одной; group: группа, куда добавляем.
+ * Ник уникален во всех группах: по нему автопостер хранит, что уже вышло, и ищет подпапки.
+ */
+function nameError(name, accounts = [], platform = '', keep = '', group) {
   if (!name) return 'Впиши ник аккаунта.';
   if (/^\./.test(name)) return 'Ник не может начинаться с точки.';
   const clash = accounts.find((a) => a && a.name && a.name.toLowerCase() === name.toLowerCase() && a.name !== keep);
+  if (clash && group !== undefined && clash._group !== undefined && clash._group !== group) {
+    return `Ник @${name} уже есть в группе «${clash._groupName || clash._group || DEFAULT_GROUP_NAME}». Один ник может быть только в одной группе: убери его там или впиши другой.`;
+  }
   if (clash && (clash.platform || 'instagram') !== platform) return `Ник @${name} уже занят аккаунтом ${clash.platform === 'tiktok' ? 'TikTok' : 'Instagram'}: впиши другой (например, ${name}_${platform === 'tiktok' ? 'tt' : 'ig'}).`;
   return '';
 }
@@ -35,7 +43,7 @@ function nameError(name, accounts = [], platform = '', keep = '') {
  * Тот же ник или тот же аккаунт соцсети (open_id / user_id) = переподключение: имя и секрет остаются прежними.
  * Возвращает { account, replaced }.
  */
-function upsertAccount(cfg, entry) {
+function upsertAccount(cfg, entry, { legacy = true } = {}) {
   cfg.accounts = Array.isArray(cfg.accounts) ? cfg.accounts : [];
   const platform = entry.platform === 'tiktok' ? 'tiktok' : 'instagram';
   const samePlatform = (a) => (a.platform || 'instagram').toLowerCase() === platform;
@@ -44,7 +52,7 @@ function upsertAccount(cfg, entry) {
   if (i < 0) i = cfg.accounts.findIndex((a) => a && samePlatform(a) && a.name.toLowerCase() === String(entry.name).toLowerCase());
   const old = i >= 0 ? cfg.accounts[i] : null;
   // первый аккаунт Instagram по старой схеме мог работать без token_env (IG_TOKEN): сохраняем как было
-  const legacyEnv = old && i === 0 && platform === 'instagram' && !old.token_env ? 'IG_TOKEN' : '';
+  const legacyEnv = legacy && old && i === 0 && platform === 'instagram' && !old.token_env ? 'IG_TOKEN' : '';
   const account = { ...(old || {}), ...entry, platform: undefined };
   account.name = old ? old.name : entry.name;
   account.token_env = (old && old.token_env) || legacyEnv || secretNameFor(platform, account.name);
@@ -103,7 +111,9 @@ function instagramChoices(list, accounts = []) {
   return (list || []).map((x) => {
     const same = ig.find((a) => String(a.user_id || '') === String(x.user_id))
       || ig.find((a) => x.username && a.name.toLowerCase() === String(x.username).toLowerCase());
-    return { ...x, existing: same ? same.name : '', main: !!same && (same.token_env || 'IG_TOKEN') === 'IG_TOKEN', name: same ? same.name : cleanName(x.username || '') };
+    const out = { ...x, existing: same ? same.name : '', main: !!same && !same._group && (same.token_env || 'IG_TOKEN') === 'IG_TOKEN', name: same ? same.name : cleanName(x.username || '') };
+    if (same && same._group !== undefined) { out.group = same._group; out.groupName = same._groupName || ''; }
+    return out;
   });
 }
 
@@ -111,17 +121,18 @@ function instagramChoices(list, accounts = []) {
  * Проверить выбранные аккаунты перед сохранением. picks: [{ user_id, name }].
  * Возвращает { entries: [{ name, user_id }], errors: ['@ник: что не так'] }.
  */
-function planInstagramBatch(picks, accounts = []) {
+function planInstagramBatch(picks, accounts = [], group) {
   const entries = [], errors = [], seen = new Set();
   for (const p of picks || []) {
     const name = cleanName(p.name);
     const keep = (accounts || []).find((a) => a && (a.platform || 'instagram') === 'instagram' && String(a.user_id || '') === String(p.user_id));
-    const err = nameError(name, accounts, 'instagram', keep ? keep.name : '');
+    // уже подключённый аккаунт обновляем в его же группе, новый идёт в выбранную
+    const err = nameError(name, accounts, 'instagram', keep ? keep.name : '', keep && keep._group !== undefined ? keep._group : group);
     if (err) { errors.push(`@${name || p.user_id}: ${err}`); continue; }
     if (!p.user_id) { errors.push(`@${name}: нет ID аккаунта Instagram`); continue; }
     if (seen.has(name.toLowerCase())) { errors.push(`@${name}: этот ник выбран дважды`); continue; }
     seen.add(name.toLowerCase());
-    entries.push({ name, user_id: String(p.user_id) });
+    entries.push({ name, user_id: String(p.user_id), ...(keep && keep._group !== undefined ? { group: keep._group } : group !== undefined ? { group } : {}) });
   }
   return { entries, errors };
 }
@@ -217,7 +228,89 @@ function accountHealth(acc, index, secretNames, tokens, now = new Date()) {
   return { level: 'unknown', text: acc.connected ? 'подключён, проверится при ближайшей публикации' : 'ещё не проверялся' };
 }
 
+// ---------------------------------------------------------------- группы (сетки аккаунтов для разных проектов)
+const DEFAULT_GROUP_NAME = 'Основная';
+const TRANSLIT = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o',
+  п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' };
+const HHMM = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
+/** Группы из config.json: первая всегда «по умолчанию» (id ''), её аккаунты и тексты лежат прямо в config.json. */
+function groupList(cfg) {
+  const out = [{ id: '', name: (cfg && cfg.group_name) || DEFAULT_GROUP_NAME, node: cfg || {} }];
+  for (const g of (cfg && cfg.groups) || []) {
+    if (g && validGroupId(g.id) && !out.some((x) => x.id === g.id)) out.push({ id: g.id, name: g.name || g.id, node: g });
+  }
+  return out;
+}
+/** Объект группы, в котором лежат её accounts, texts, paused (для группы по умолчанию это сам config.json). */
+function groupNode(cfg, gid = '') {
+  if (!gid) return cfg;
+  const g = (cfg.groups || []).find((x) => x && x.id === gid);
+  if (!g) throw new Error('Такой группы уже нет: обнови виджет.');
+  return g;
+}
+/** Аккаунты всех групп, у каждого _group (id) и _groupName. */
+function allAccounts(cfg) {
+  return groupList(cfg).flatMap((g) => (g.node.accounts || []).filter((a) => a && a.name).map((a) => ({ ...a, _group: g.id, _groupName: g.name })));
+}
+/** id группы из названия: латиница, цифры, - и _ (кириллица переводится), без повторов. */
+function groupIdFor(name, taken = []) {
+  const lat = String(name || '').toLowerCase().split('').map((c) => (c in TRANSLIT ? TRANSLIT[c] : c)).join('')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'group';
+  let id = validGroupId(lat) ? lat : `g-${lat}`.slice(0, 32);
+  for (let n = 2; taken.includes(id); n++) id = `${validGroupId(lat) ? lat : `g-${lat}`.slice(0, 28)}-${n}`;
+  return id;
+}
+function checkWindow(start, end) {
+  if (start != null && !HHMM.test(start)) return 'Начало окна: время в виде 10:00.';
+  if (end != null && !HHMM.test(end)) return 'Конец окна: время в виде 22:00.';
+  if (start && end && start.padStart(5, '0') >= end.padStart(5, '0')) return 'Окно публикаций: начало должно быть раньше конца.';
+  return '';
+}
+/** Новая группа в config.json (объект меняется на месте). Возвращает группу. */
+function createGroup(cfg, { name, day_start: ds = '', day_end: de = '' } = {}) {
+  const title = String(name || '').trim().slice(0, 40);
+  if (!title) throw new Error('Впиши название группы.');
+  const list = groupList(cfg);
+  if (list.some((g) => g.name.toLowerCase() === title.toLowerCase())) throw new Error(`Группа «${title}» уже есть.`);
+  const err = checkWindow(ds || null, de || null);
+  if (err) throw new Error(err);
+  cfg.groups = Array.isArray(cfg.groups) ? cfg.groups : [];
+  const g = { id: groupIdFor(title, [...list.map((x) => x.id), ...cfg.groups.map((x) => x && x.id)]), name: title, accounts: [], paused: [], texts: {} };
+  if (ds) g.day_start = ds;
+  if (de) g.day_end = de;
+  cfg.groups.push(g);
+  return g;
+}
+/** Переименовать группу, поменять её окно публикаций. Для группы по умолчанию окно = общее окно config.json. */
+function updateGroup(cfg, gid, { name, day_start: ds, day_end: de } = {}) {
+  const node = groupNode(cfg, gid);
+  if (name !== undefined) {
+    const title = String(name || '').trim().slice(0, 40);
+    if (!title) throw new Error('Впиши название группы.');
+    if (groupList(cfg).some((g) => g.id !== gid && g.name.toLowerCase() === title.toLowerCase())) throw new Error(`Группа «${title}» уже есть.`);
+    if (gid) node.name = title; else if (title === DEFAULT_GROUP_NAME) delete cfg.group_name; else cfg.group_name = title;
+  }
+  const err = checkWindow(ds === undefined || ds === '' ? null : ds, de === undefined || de === '' ? null : de)
+    || checkWindow(ds || node.day_start || cfg.day_start || '10:00', de || node.day_end || cfg.day_end || '22:00');
+  if (err) throw new Error(err);
+  for (const [k, v] of [['day_start', ds], ['day_end', de]]) {
+    if (v === undefined) continue;
+    if (v) node[k] = v; else if (gid) delete node[k]; // пусто: как в основной группе
+  }
+  return node;
+}
+/** Убрать группу: только пустую (без аккаунтов). Папки очередей проверяет вызывающий. */
+function removeGroup(cfg, gid) {
+  if (!gid) throw new Error('Основную группу убрать нельзя.');
+  const g = groupNode(cfg, gid);
+  if ((g.accounts || []).length) throw new Error(`В группе «${g.name || gid}» ещё есть аккаунты: сначала убери их.`);
+  cfg.groups = cfg.groups.filter((x) => x !== g);
+  return g;
+}
+
 module.exports = {
+  DEFAULT_GROUP_NAME, groupList, groupNode, allAccounts, groupIdFor, createGroup, updateGroup, removeGroup, checkWindow,
   TT_SCOPES, IG_SCOPES, FB_SCOPES, facebookAuthUrl, facebookGuide, instagramChoices, planInstagramBatch, secretSuffix, secretNameFor, cleanName, suggestName, nameError, upsertAccount, removeAccount, tokenEnvOf,
   tiktokAuthUrl, instagramAuthUrl, isRedirect, parseRedirect, needsBrowser, accountHealth,
 };
