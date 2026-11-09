@@ -34,6 +34,8 @@ const timeOf = (iso) => (iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour:
 const plural = (n, a, b, c) => { const m10 = n % 10, m100 = n % 100; return `${n} ${m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c}`; };
 const nf = (v) => (v == null ? '—' : Number(v).toLocaleString('ru-RU'));
 const snap = () => (data && data.nets && data.nets[net]) || null;
+// во вкладке «Сводка» загрузка папки и «+ аккаунт» идут в Instagram
+const workNet = () => (net === 'summary' ? 'instagram' : net);
 const netAccounts = (n = net) => ((data && data.accounts) || []).filter((a) => a.platform === n);
 const isPaused = (n = net) => ((data && data.paused) || []).includes(n);
 // ------------------------------------------------------------ группы
@@ -64,7 +66,7 @@ function tick() {
 
 // ------------------------------------------------------------ вкладки
 function setNet(n, save = true) {
-  if (!NET_NAME[n]) n = 'instagram';
+  if (!NET_NAME[n] && n !== 'summary') n = 'instagram';
   const changed = n !== net;
   net = n;
   document.body.dataset.net = n;
@@ -75,7 +77,7 @@ function setNet(n, save = true) {
 }
 document.querySelector('.tabs').addEventListener('click', (e) => { const b = e.target.closest('.tab'); if (b) setNet(b.dataset.net); });
 document.addEventListener('keydown', (e) => {
-  if (e.ctrlKey && (e.key === '1' || e.key === '2')) { setNet(e.key === '1' ? 'instagram' : 'tiktok'); e.preventDefault(); }
+  if (e.ctrlKey && /^[123]$/.test(e.key)) { setNet(['instagram', 'tiktok', 'summary'][Number(e.key) - 1]); e.preventDefault(); }
   if (e.key === 'F5') { refresh(); e.preventDefault(); }
   if (e.ctrlKey && (e.key === 'g' || e.key === 'G' || e.key === 'п' || e.key === 'П')) { openGroups(); e.preventDefault(); }
   if (e.altKey && /^[1-9]$/.test(e.key)) { const g = groupsList()[Number(e.key) - 1]; if (g) setGroup(g.id); e.preventDefault(); }
@@ -194,7 +196,9 @@ function renderGroup() {
 }
 
 function render() {
-  renderGroup(); renderTabs(); renderNetbar(); renderTt();
+  renderGroup(); renderTabs();
+  if (net === 'summary') { renderDigest(); return; }
+  renderNetbar(); renderTt();
   const s0 = snap();
   if (!s0) return;
   const late = (s0.summary && s0.summary.late) || 0;
@@ -221,6 +225,56 @@ function render() {
   $('doneList').innerHTML = done.length ? done.map(folderHtml).join('') : empty('Пока нет полностью опубликованных папок.');
 }
 
+// ------------------------------------------------------------ сводка (все группы)
+const dayShort = (d) => (d ? `${String(d).slice(8, 10)}.${String(d).slice(5, 7)}` : '');
+const shortId = (id) => String(id).replace(/^repost:/, '').split(':').pop();
+function renderDigest() {
+  const d = data && data.digest;
+  const box = $('digestView');
+  if (!d) { box.innerHTML = empty('Загружаю сводку…'); return; }
+  const t = d.totals;
+  const multi = d.groups.length > 1;
+  const gchip = (g, name) => (multi ? `<span class="chip grp" style="--gc:${groupColor(g)}">${esc(name)}</span>` : '');
+  const tiles = `<div class="dg-tiles">
+    <div><b>${nf(t.today)}</b><span>вышло сегодня</span></div><div><b>${nf(t.week)}</b><span>за 7 дней</span></div>
+    <div><b>${nf(t.views)}</b><span>просмотров за 7 дней</span></div><div><b>${nf(t.likes)}</b><span>лайков за 7 дней</span></div></div>`;
+  const best = d.best.length ? d.best.map((b) => {
+    const rp = b.reposts.map((r) => `<span class="rp ${r.status}"${r.permalink ? ` data-url="${esc(r.permalink)}"` : ''}>@${esc(r.acc)}: ${r.status === 'done' ? 'повтор вышел' : r.status === 'skipped' ? esc(r.note || 'пропущен') : `повтор ${dayShort(r.due)} в ${timeOf(r.due)}`}</span>`).join('');
+    return `<div class="dg-best">
+      <div class="dg-row"><span class="star">★</span><div class="nm">${esc(shortId(b.id))}<span class="sub">${gchip(b.group, b.groupName)}${b.times ? `в ${b.times} раза больше обычного` : ''} · ${nf(b.score)} просм. · ${dayShort(b.day)}</span></div>
+      ${b.video ? `<button class="btn small" data-save="${esc(b.video)}">Скачать</button>` : ''}</div>
+      ${rp ? `<div class="rps">${rp}</div>` : ''}</div>`;
+  }).join('') : empty('Лучших пока нет. Ролик попадает сюда, когда наберёт в 2 раза больше просмотров, чем обычно в его группе (нужно хотя бы 5 роликов с цифрами).');
+  const top = d.top.length ? d.top.map((v, i) => `<div class="row-card done${v.links.length ? ' link' : ''}"${v.links[0] ? ` data-url="${esc(v.links[0].url)}"` : ''}>
+      <span class="t">${i + 1}</span><div class="nm">${v.best ? '<span class="star">★</span> ' : ''}${esc(shortId(v.id))}<span class="sub">${gchip(v.group, v.groupName)}${plural(v.n, 'аккаунт', 'аккаунта', 'аккаунтов')} · ${timeOf(v.at)} ${new Date(v.at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}</span>
+      <div class="m"><span title="просмотры в среднем на аккаунт">${IC.v}<b>${nf(v.avg)}</b></span><span title="лайки во всех аккаунтах">${IC.l}<b>${nf(v.likes)}</b></span></div></div></div>`).join('')
+    : empty('За 7 дней нет роликов с цифрами. Просмотры и лайки обновляются после каждого запуска.');
+  const accs = d.accounts.length ? d.accounts.map((a) => {
+    const lim = a.limit && a.limit.total ? `<span class="lim${a.limit.used >= a.limit.total ? ' full' : ''}" title="лимит Meta за 24 часа">${a.limit.used}/${a.limit.total}</span>` : '';
+    return `<div class="dg-acc"><span class="an">@${esc(a.name)}${a.platform === 'tiktok' ? ' <i class="muted">TT</i>' : ''}</span>${multi ? gchip(a.group, a.groupName) : ''}
+      <span class="n" title="сегодня / за 7 дней">${a.today} / ${a.week}</span><span class="n" title="просмотры за 7 дней">${IC.v}${nf(a.platform === 'tiktok' ? null : a.views)}</span>${lim}</div>`;
+  }).join('') : empty('Нет аккаунтов.');
+  const ab = d.groups.filter((g) => g.ab).map((g) => {
+    const side = (v) => `<div class="ab-side${g.ab.winner === v ? ' win' : ''}"><b>${v}</b><span>${nf(g.ab[v].views)} просм.</span><span class="muted">${nf(g.ab[v].likes)} лайков · ${plural(g.ab[v].n, 'публикация', 'публикации', 'публикаций')}</span></div>`;
+    return `<div class="dg-ab">${multi ? `<div class="small">${esc(g.name)}</div>` : ''}<div class="ab-pair">${side('A')}${side('B')}</div>
+      <div class="small muted">${g.ab.winner ? `Пока лучше вариант ${g.ab.winner}. Если разница держится неделю, оставь его.` : 'Мало данных: нужно хотя бы по 3 публикации с цифрами у каждого варианта.'}</div></div>`;
+  }).join('') || empty('A/B не включён. Вкладка Instagram → «Тексты» → «вариант B», или блоки REELS CAPTION A: и REELS CAPTION B: в .txt ролика.');
+  const groups = multi ? `<section><h3>Группы</h3>${d.groups.map((g) => `<div class="dg-acc"><span class="an">${gchip(g.id, g.name)}</span><span class="n">${plural(g.accounts, 'аккаунт', 'аккаунта', 'аккаунтов')}</span><span class="n" title="сегодня / за 7 дней">${g.today} / ${g.week}</span><span class="n">${IC.v}${nf(g.views)}</span></div>`).join('')}</section>` : '';
+  box.innerHTML = `${tiles}
+    <section><h3>Лучшие ролики</h3><p class="small muted">Видео лучших не удаляется 30 дней: скачай, переделай и загрузи как новую папку. Повтор в аккаунты группы, где его ещё не было, выйдет сам.</p>${best}</section>
+    <section><h3>Топ за 7 дней</h3>${top}</section>
+    <section><h3>Аккаунты · сегодня / 7 дней</h3>${accs}</section>
+    <section><h3>A/B подписи · 7 дней</h3>${ab}</section>${groups}`;
+}
+$('digestView').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-save]');
+  if (!b) return;
+  e.stopPropagation();
+  b.disabled = true; const was = b.textContent; b.textContent = 'Скачиваю…';
+  try { const f = await bridge.saveVideo(b.dataset.save); if (f) toast(`Сохранено: ${f}`); } catch (err) { toast(err.message, 6000); }
+  b.disabled = false; b.textContent = was;
+});
+
 const findFolder = (id) => { const s = snap(); return s && s.folders.find((x) => x.id === id); };
 const findVideo = (id) => { const s = snap(); if (!s) return null; for (const f of s.folders) { const v = f.videos.find((x) => x.id === id); if (v) return v; } return s.todayRows.find((r) => r.id === id) || null; };
 
@@ -243,6 +297,8 @@ document.addEventListener('click', (e) => {
   }
   const line = e.target.closest('.m[data-url]');
   if (line) { bridge.openUrl(line.dataset.url); return; }
+  const rp = e.target.closest('.rp[data-url]');
+  if (rp) { bridge.openUrl(rp.dataset.url); return; }
   const row = e.target.closest('.row-card[data-url]');
   if (row) bridge.openUrl(row.dataset.url);
 });
@@ -346,6 +402,8 @@ const FIELDS = [
   { k: 'caption', label: 'Подпись по умолчанию', rows: 3, hint: 'Ставится, если у видео нет своего описания (.txt).' },
   { k: 'footer', label: 'Добавлять в конец каждой подписи', rows: 2, hint: 'Например призыв подписаться или ссылка на полное видео.' },
   { k: 'hashtags', label: 'Хэштеги', input: true, hint: 'Через пробел: #shorts #survival. В Instagram не больше 30.' },
+  { k: 'caption_b', label: 'A/B: вариант B подписи по умолчанию', rows: 2, hint: 'Если заполнено, половина публикаций выходит с вариантом B (по очереди по роликам и аккаунтам). Итог во вкладке «Сводка». Для одного ролика: блоки REELS CAPTION A: и REELS CAPTION B: в его .txt.' },
+  { k: 'footer_b', label: 'A/B: вариант B хвоста подписи', rows: 2, hint: 'Сравнить два призыва в конце подписи: вариант A выше, B здесь.' },
   { k: 'comment', label: 'Первый комментарий под рилсом', rows: 2, ig: true, hint: 'Instagram: автопостер сам оставит комментарий сразу после публикации.' },
 ];
 function fieldsHtml(prefix, values, inherited, { ig, folder }) {
@@ -509,7 +567,7 @@ $('ttGo').addEventListener('click', async () => {
 let pvLane = 'instagram', pvInfo = null;
 function addFolders(paths) {
   pending.push(...paths.filter(Boolean));
-  if (!busy && $('sheet').hidden) { pvLane = net; showNext(); }
+  if (!busy && $('sheet').hidden) { pvLane = workNet(); showNext(); }
 }
 function laneHint() {
   return { instagram: `Папка попадёт в ${laneDir('instagram')}/: только аккаунты Instagram, своё расписание.`,
@@ -578,7 +636,7 @@ $('fab').addEventListener('click', async () => { const p = await bridge.pickFold
 window.addEventListener('dragenter', (e) => {
   if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) {
     dragDepth++; $('dropOverlay').hidden = false;
-    $('dropHint').textContent = `в очередь ${NET_NAME[net]}${multiGroups() ? ` группы «${curGroup().name}»` : ''} (сеть можно выбрать перед загрузкой)`;
+    $('dropHint').textContent = `в очередь ${NET_NAME[workNet()]}${multiGroups() ? ` группы «${curGroup().name}»` : ''} (сеть можно выбрать перед загрузкой)`;
   }
 });
 window.addEventListener('dragover', (e) => e.preventDefault());
@@ -634,7 +692,7 @@ function renderFbGuide(open = false) {
   $('fbGuide').open = open;
   if (open) show('accKeys', true); // поля ключей нужны по ходу шагов
 }
-function openAddAccount(n = net, fixed = '', keysOnly = false) {
+function openAddAccount(n = workNet(), fixed = '', keysOnly = false) {
   accNet = n; accFixed = fixed; accLogin = null; accModeV = 'inbox';
   const nm = NET_NAME[accNet];
   $('accTitle').textContent = fixed ? `Переподключить @${fixed}` : keysOnly ? `Ключ приложения ${nm}` : `Добавить аккаунт ${nm}${multiGroups() ? ` в «${curGroup().name}»` : ''}`;

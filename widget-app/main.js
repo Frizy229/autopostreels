@@ -3,7 +3,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow, Tray, Menu, ipcMain, dialog, nativeTheme, shell, safeStorage, nativeImage } = require('electron');
-const { buildSnapshot, inspectFolder, captionFor, laneByKey, groupLanes, validGroupId, runHealth, NETS } = require('./lib/core');
+const { buildSnapshot, buildDigest, inspectFolder, captionFor, laneByKey, groupLanes, validGroupId, runHealth, NETS } = require('./lib/core');
 const { GitHub } = require('./lib/github');
 const tiktok = require('./lib/tiktok');
 const accounts = require('./lib/accounts');
@@ -160,9 +160,11 @@ handle('data:refresh', async (wanted) => {
   for (const net of NETS) nets[net] = buildSnapshot(state, stats, queues, now, { ...base, net });
   const all = buildSnapshot(state, stats, queues, now, base);
   const tt = { pending: tiktok.pendingConfirm(queues, state, accList, gid), creators: creators || {} };
+  const digest = buildDigest(state, stats, accounts.allAccounts(repoCfg), now,
+    { scheduleTz: cfg.scheduleTz, groupNames: Object.fromEntries(list.map((x) => [x.id, x.name])) });
   const win0 = { start: repoCfg.day_start || '10:00', end: repoCfg.day_end || '22:00' };
   return {
-    group: gid, nets, nextNum: all.nextNum, tt, at: now.toISOString(), health: runs ? runHealth(runs, now) : null,
+    group: gid, nets, nextNum: all.nextNum, tt, digest, at: now.toISOString(), health: runs ? runHealth(runs, now) : null,
     groups: list.map((x) => {
       const accs = (x.node.accounts || []).filter((a) => a && a.name);
       const count = (n) => accs.filter((a) => (a.platform || 'instagram').toLowerCase() === n).length;
@@ -218,11 +220,11 @@ const accountNames = async (lane = 'shared', group = '') => {
 };
 handle('folder:inspect', async (p, lane, group) => {
   if (!fs.statSync(p).isDirectory()) throw new Error('Перетащи именно папку, а не отдельные файлы.');
-  const { files, ...info } = inspectFolder(p, await accountNames(lane, group));
+  const { files, ...info } = inspectFolder(p, await accountNames(lane, group), { remote: (repoCfg.media_storage || 'release') !== 'git' });
   return info;
 });
 handle('folder:upload', async (p, opts = {}) => gh().uploadFolder(p, (frac, text) => win && win.webContents.send('upload:progress', { frac, text }),
-  await accountNames(opts.lane, opts.group), { lane: opts.lane, texts: opts.texts, group: groupOf(opts.group) }));
+  await accountNames(opts.lane, opts.group), { lane: opts.lane, texts: opts.texts, group: groupOf(opts.group), storage: repoCfg.media_storage || 'release' }));
 handle('folder:delete', async (name, lane, group) => gh().deleteFolder(String(name), lane, groupOf(group)));
 handle('folder:texts', async (lane, name, group) => gh().folderTexts(lane, String(name), groupOf(group)));
 handle('folder:saveTexts', async (lane, name, texts, group) => { await gh().saveFolderTexts(lane, String(name), texts, groupOf(group)); return true; });
@@ -261,6 +263,16 @@ handle('tt:preview', async (rel) => {
   for (const f of fs.readdirSync(app.getPath('temp')).filter((n) => /^reels-preview/.test(n))) { try { fs.unlinkSync(path.join(app.getPath('temp'), f)); } catch { /* занято */ } }
   await gh().downloadVideo(rel, dest);
   return dest;
+});
+// «Сводка»: скачать лучший ролик (из хранилища релиза или из git), чтобы переделать его
+handle('video:save', async (rel) => {
+  rel = String(rel || '');
+  if (!rel || /^\/|[\\:*?"<>|]/.test(rel) || rel.split('/').includes('..')) throw new Error('Недопустимый путь ролика.');
+  const name = rel.split('/').slice(-3).join('_');
+  const r = await dialog.showSaveDialog(win, { title: 'Сохранить ролик', defaultPath: path.join(app.getPath('downloads'), name) });
+  if (r.canceled || !r.filePath) return '';
+  await gh().downloadVideo(rel, r.filePath);
+  return r.filePath;
 });
 handle('tt:caption', async (rel, account) => {
   const t = await gh().readText(rel.replace(/\.[^./]+$/, '') + '.txt');
@@ -598,7 +610,7 @@ async function pollHandoff() {
     const dest = await gh().uploadFolder(job.folder, (frac, text) => {
       handoff.progress(dir, job.id, frac, text);
       if (win) win.webContents.send('upload:progress', { frac, text });
-    }, await accountNames(job.lane, job.group), { lane: job.lane, group: groupOf(job.group) });
+    }, await accountNames(job.lane, job.group), { lane: job.lane, group: groupOf(job.group), storage: repoCfg.media_storage || 'release' });
     let posted = false;
     if (job.postNow) {
       // «Выложить сразу»: запускаем публикацию первого ролика каждого выбранного аккаунта, остальные — по расписанию

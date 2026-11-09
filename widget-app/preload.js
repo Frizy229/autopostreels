@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('api', {
   groupRemove: (id) => call('group:remove', id),
   run: (inputs) => call('run', inputs),
   ttPreview: (rel) => call('tt:preview', rel),
+  saveVideo: (rel) => call('video:save', rel),
   ttCaption: (rel, account) => call('tt:caption', rel, account),
   ttConfirm: (p) => call('tt:confirm', p),
   setKeys: (k) => call('keys:set', k),
