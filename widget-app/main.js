@@ -598,7 +598,10 @@ async function pollHandoff() {
   // раз в 5 минут — список аккаунтов для Studio (каналы = аккаунты автопостера)
   if (Date.now() - accountsAt > 5 * 60e3 && getToken()) {
     accountsAt = Date.now();
-    try { handoff.writeAccounts(dir, (await gh().readJson('config.json')).accounts); } catch { /* нет сети — в следующий раз */ }
+    try {
+      const rc = await gh().readJson('config.json');
+      handoff.writeAccounts(dir, accounts.allAccounts(rc).map((a) => ({ name: a.name, platform: a.platform, group: a._group })), Date.now(), accounts.groupList(rc).map((g) => ({ id: g.id, name: g.name })));
+    } catch { /* нет сети — в следующий раз */ }
   }
   const job = handoff.take(dir);
   if (!job) return;

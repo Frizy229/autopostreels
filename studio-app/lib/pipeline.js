@@ -17,6 +17,8 @@ const { searchInstagram } = require('./igsearch');
 const { whisperArgs, wavArgs, parseWhisperJson, whisperTags, MODELS } = require('./transcribe');
 const { judgeMoment, excerpt, parseVisual, visualArgs } = require('./judge');
 const { LLM_MODELS, LlmServer, momentText, llmBonus } = require('./llm');
+const Z = require('./zanos');
+const { OcrReader, ocrAvailable } = require('./ocr');
 
 const hasEntries = (r, out) => { if (!out) return false; try { return parseList(out).length > 0; } catch { return false; } };
 const uid = () => crypto.randomBytes(5).toString('hex');
@@ -289,7 +291,7 @@ class Pipeline {
   }
 
   /** Найти моменты. Возвращает обновлённый проект. */
-  async analyze(id, onProgress, signal) {
+  async analyze(id, onProgress, signal, opts = {}) {
     const pr = this.get(id);
     const s = this.settings();
     const audio = await this.audioSource(pr, (p, t) => onProgress && onProgress(p * 0.3, t), signal);
@@ -308,13 +310,18 @@ class Pipeline {
     // короткое видео (рилс, клип) — один момент на всю длину, обрезать можно вручную
     const whole = dur <= Math.max(60, s.maxLen) * 1.3;
     // умный отбор: берём вдвое больше кандидатов, смотрим картинку и слушаем речь, мусор убираем, смешное поднимаем
-    const smart = s.smartPick !== false && !whole;
+    // режим «заносы»: кандидатов втрое больше, дальше их читает zanosMoments (слова, экран, нейросеть)
+    const zanos = opts.mode === 'zanos' && !whole;
+    const smart = !zanos && s.smartPick !== false && !whole;
     const found = whole ? [{ start: 0, end: Math.round(dur * 100) / 100, peak: dur / 2, score: 0, whole: true }]
-      : findMoments(values, { winSec: env.winSec, minLen: s.minLen, maxLen: s.maxLen, count: smart ? Math.min(60, need * 2) : need, chat });
+      : zanos ? findMoments(values, { winSec: env.winSec, minLen: Math.min(s.minLen, 15), maxLen: s.maxLen, count: Math.min(50, need * 3), chat, threshold: 0.6, gap: -30 })
+        : findMoments(values, { winSec: env.winSec, minLen: s.minLen, maxLen: s.maxLen, count: smart ? Math.min(60, need * 2) : need, chat });
     const old = new Map((pr.moments || []).map((m) => [`${m.start}-${m.end}`, m]));
     pr.moments = found.map((m, i) => old.get(`${m.start}-${m.end}`) || { id: uid(), ...m, title: '', selected: i < need });
     pr.judgeNote = '';
-    if (smart) pr.judgeNote = await this.judgeMoments(pr, { env: values, winSec: env.winSec, need }, (p, t) => onProgress && onProgress(0.65 + p * 0.35, t), signal);
+    pr.mode = zanos ? 'zanos' : 'funny';
+    if (zanos) pr.judgeNote = await this.zanosMoments(pr, { env: values, winSec: env.winSec, need, chat, total: dur }, (p, t) => onProgress && onProgress(0.65 + p * 0.35, t), signal);
+    else if (smart) pr.judgeNote = await this.judgeMoments(pr, { env: values, winSec: env.winSec, need }, (p, t) => onProgress && onProgress(0.65 + p * 0.35, t), signal);
     pr.envelope = downsample(values, 600);
     pr.chatCount = chat.length;
     pr.analyzed = Date.now();
@@ -377,6 +384,132 @@ class Pipeline {
     if (visualFails >= todo.length && todo.length) notes.push('Картинку проверить не удалось (видео не скачалось): чёрный экран не отсеивается.');
     if (junk) notes.push(`Отсеяно мусора: ${junk}.`);
     if (llmNote) notes.push(llmNote);
+    return notes.join(' ');
+  }
+
+  /**
+   * Кадры отрезка [a, b] раз в 2 секунды для чтения экрана. Ссылки: качается только этот отрезок в 720p.
+   * Возвращает {frames: [{t, file}], done()} — done() убирает временные файлы.
+   */
+  async ocrFrames(pr, a, b, signal) {
+    const dir = this.cache(pr, `ocr_${Math.round(a)}_${Math.round(b)}`);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    let input, ss = a, offset = a, tmp = null, len = b - a;
+    if (pr.source.kind === 'file') input = pr.source.path;
+    else if (isShortSource(pr.source)) input = await this.wholeVideo(pr, null, signal);
+    else {
+      const fa = Math.max(0, Math.floor(a)), fb = Math.ceil(b);
+      tmp = this.cache(pr, `hi_${fa}_${fb}.mp4`);
+      if (!fs.existsSync(tmp)) await this.ytdlp(downloadArgs(pr.source.url, { sections: [[fa, fb]], videoOnly: true, maxHeight: 720, out: tmp, ffmpeg: this.tools.ffmpeg }), pr.source.url, { signal });
+      input = tmp; ss = 0; offset = fa; len = fb - fa;
+    }
+    await this.tools.run(this.tools.ffmpeg, ['-hide_banner', '-y', '-nostdin', '-ss', String(ss), '-t', String(len), '-i', input, '-an',
+      '-vf', 'fps=1/2,scale=1280:-2', '-q:v', '4', path.join(dir, 'f_%03d.jpg')], { signal, allowFail: true });
+    const files = fs.readdirSync(dir).filter((n) => /\.jpg$/.test(n)).sort();
+    return { frames: files.map((n, i) => ({ t: offset + i * 2, file: path.join(dir, n) })), done: () => { fs.rmSync(dir, { recursive: true, force: true }); if (tmp) fs.rmSync(tmp, { force: true }); } };
+  }
+
+  /**
+   * Заносы: каждого кандидата (всплеск громкости/чата) проверяют слова, форма громкости, чат, нейросеть и, у лучших, текст
+   * на экране (иксы, суммы, плашка WIN). Пустые вращения и дубли снимаются с выбора с причиной; границы момента
+   * ставятся с подводкой и концовкой по паузам речи. Возвращает заметку для экрана.
+   */
+  async zanosMoments(pr, o, onProgress, signal) {
+    const s = this.settings();
+    const prog = (p, t) => { if (onProgress) onProgress(p, t); };
+    const notes = [];
+    const model = this.tools.modelPath((MODELS[s.whisperModel] || MODELS.small).file);
+    const canSpeak = !!this.tools.whisper && fs.existsSync(model);
+    const cand = pr.moments.slice(0, 50);
+    const items = [];
+    let speechErr = '';
+    for (const [i, m] of cand.entries()) {
+      prog(0.4 * i / Math.max(1, cand.length), `Слушаю кандидатов: ${i + 1} из ${cand.length}`);
+      const a = Math.max(0, m.peak - 22), b = Math.min(o.total, m.peak + 45);
+      let words = null;
+      try { words = await this.words(pr, { id: `${m.id}z`, start: a, end: b }, signal); } catch (e) { if (e.code === 'ABORT') throw e; speechErr = speechErr || String(e.message).split('\n')[0]; }
+      const loud = Z.loudShape(o.env, o.winSec, a, b, [m.peak - 6, m.peak + 6]);
+      items.push({ m, a, b, words, loud, speech: Z.speechSignals(words, loud.peakT - 14, loud.peakT + 25), chat: Z.chatBurst(o.chat, loud.peakT, o.total), llm: null, screen: null });
+    }
+    // нейросеть читает слова вокруг пика: настоящий занос или нет
+    const llmFile = (LLM_MODELS[s.llmModel] || LLM_MODELS['7b']).file;
+    const llmBin = this.tools.llamaServer, llmModel = this.tools.llmPath(llmFile);
+    if (s.llm !== false && llmBin && fs.existsSync(llmModel)) {
+      const server = this.llmFactory ? this.llmFactory({ bin: llmBin, model: llmModel, gpu: s.gpu }) : new LlmServer({ bin: llmBin, model: llmModel, gpu: s.gpu });
+      try {
+        prog(0.42, 'Запускаю нейросеть');
+        await server.start(signal);
+        let k = 0;
+        for (const it of items) {
+          prog(0.42 + 0.1 * (k++ / items.length), `Нейросеть читает: ${k} из ${items.length}`);
+          if (!it.words || it.speech.words < 8) continue;
+          try { it.llm = await server.score(momentText(it.words, it.loud.peakT - 14, it.loud.peakT + 25), 'zanos'); } catch (e) { if (e.code === 'ABORT') throw e; }
+        }
+      } catch (e) {
+        if (e.code === 'ABORT') throw e;
+        notes.push(`Нейросеть не сработала: ${String(e.message).split('\n')[0]}`);
+      } finally { server.stop(); }
+    } else if (s.llm !== false) notes.push('Нейросеть не установлена (Настройки → Компоненты): оценка заносов без неё.');
+    const sig = (it) => ({ screen: it.screen, speech: it.speech, loud: it.loud, chat: it.chat, llm: it.llm });
+    // экран читаем у лучших по остальным признакам
+    let reader = null, ocrFails = 0;
+    if (s.ocr !== false) {
+      reader = this.ocrFactory ? this.ocrFactory() : (ocrAvailable() ? new OcrReader() : null);
+      if (!reader) notes.push('Чтение экрана недоступно: иксы и суммы не распознаются, занос определяется по словам и громкости.');
+    }
+    if (reader) {
+      const top = items.slice().sort((x, y) => Z.zanosScore(sig(y)).score - Z.zanosScore(sig(x)).score).slice(0, Math.max(10, Math.min(16, o.need)));
+      try {
+        for (const [i, it] of top.entries()) {
+          prog(0.55 + 0.4 * i / top.length, `Читаю экран: ${i + 1} из ${top.length}`);
+          let fr = null;
+          try {
+            fr = await this.ocrFrames(pr, it.loud.peakT - 20, it.loud.peakT + 30, signal);
+            const read = [];
+            for (const f of fr.frames) {
+              if (signal && signal.aborted) { const e = new Error('Остановлено'); e.code = 'ABORT'; throw e; }
+              read.push({ t: f.t, text: await reader.read(f.file) });
+            }
+            it.screen = Z.screenSummary(read);
+          } catch (e) { if (e.code === 'ABORT') throw e; ocrFails++; } finally { if (fr) fr.done(); }
+        }
+      } finally { await reader.close(); }
+      if (ocrFails && ocrFails >= Math.min(3, items.length)) notes.push(`Экран прочитать не удалось у ${ocrFails} кандидатов (видео не скачалось?): иксы на них не учтены.`);
+    }
+    // итог по каждому кандидату и границы
+    prog(0.96, 'Собираю заносы');
+    const out = [];
+    for (const it of items) {
+      const zs = Z.zanosScore(sig(it));
+      const scr = it.screen;
+      const peakT = scr && scr.firstBigT != null ? scr.firstBigT : it.loud.peakT;
+      const bnd = Z.bounds(it.words, { peakT, endT: it.loud.endT, lastBigT: scr ? scr.lastBigT : null, total: o.total, minLen: s.minLen, maxLen: s.maxLen });
+      const m = it.m;
+      Object.assign(m, { start: bnd.start, end: bnd.end, peak: Math.round(peakT * 10) / 10, score: zs.score, kind: 'zanos', title: m.title || '' });
+      m.words = it.words ? it.words.filter((w) => w.e >= bnd.start - 0.5 && w.s <= bnd.end + 0.5) : null;
+      // выдержка — речь вокруг пика (что кричал стример), а не вступление
+      m.excerpt = it.words ? excerpt(it.words, Math.max(bnd.start, peakT - 3), bnd.end) : '';
+      m.why = zs.why;
+      m.zanos = { score: zs.score, mult: zs.mult, amount: scr ? scr.amount : 0, banner: scr ? scr.bannerWord : '', rising: scr ? scr.rising : false, llm: it.llm, rise: it.loud.rise, chat: it.chat, screen: !!scr };
+      m.judge = { junk: '', warn: [], why: zs.why, bonus: 0 };
+      m.junk = zs.qualifies ? '' : zs.reject;
+      out.push(m);
+    }
+    const good = out.filter((m) => !m.junk);
+    const { dups } = Z.dedupe(good);
+    for (const d of dups) d.m.junk = `дубль: тот же занос, что в ${fmtTime(d.of.start)}`;
+    out.sort((x, y) => (!!x.junk - !!y.junk) || y.score - x.score);
+    let n = 0;
+    for (const m of out) { m.selected = !m.junk && n < o.need; if (m.selected) n++; }
+    pr.moments = out;
+    const real = out.filter((m) => !m.junk).length;
+    const empty = out.filter((m) => /пустое вращение|слабый/.test(m.junk)).length;
+    if (!canSpeak) notes.unshift('Распознавание речи не установлено (Настройки → Компоненты): слова («занос», «иксы») не слышны, занос определяется по экрану и громкости.');
+    else if (speechErr) notes.unshift(`Речь проверить не удалось: ${speechErr}`);
+    notes.push(real ? `Найдено заносов: ${real}.` : 'Заносов не нашлось: в кандидатах только громкие моменты без больших иксов.');
+    if (empty) notes.push(`Отсеяно пустых вращений и слабых: ${empty}.`);
+    if (dups.length) notes.push(`Убрано дублей: ${dups.length}.`);
     return notes.join(' ');
   }
 

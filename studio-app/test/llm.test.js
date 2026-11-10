@@ -23,6 +23,8 @@ assert.throws(() => L.pickLlamaAssets([{ assets: [a('x.txt')] }], true), /нет
 // ---- промпт и ответ
 const p = L.buildPrompt('привет чат');
 assert.ok(p.includes('<|im_start|>assistant') && p.includes('привет чат') && p.includes('от 0 до 10'));
+assert.ok(L.buildPrompt('текст', 'zanos').includes('настоящий занос') && L.buildPrompt('текст', 'zanos').includes('текст'), 'промпт заноса');
+assert.ok(!L.buildPrompt('текст').includes('настоящий занос'));
 assert.strictEqual(L.parseScore(' 8'), 8);
 assert.strictEqual(L.parseScore('Оценка: 7.5'), 7.5);
 assert.strictEqual(L.parseScore('6,5/10'), 6.5);

@@ -1,7 +1,7 @@
 {
   "name": "reels-studio",
   "productName": "Reels Studio",
-  "version": "0.6.1",
+  "version": "0.8.0",
   "description": "Нарезки стримов в вертикаль: поиск моментов, раскладки, субтитры, монтаж под несколько каналов, папки для автозалива",
   "main": "main.js",
   "author": "Alex",
@@ -15,8 +15,11 @@
   "dependencies": {
     "@ffprobe-installer/ffprobe": "2.1.2",
     "@fontsource-variable/onest": "5.3.1",
+    "@tesseract.js-data/eng": "1.0.0",
     "adm-zip": "0.6.1",
-    "ffmpeg-static": "5.3.0"
+    "ffmpeg-static": "5.3.0",
+    "tesseract.js": "5.1.1",
+    "wasm-feature-detect": "1.6.2"
   },
   "devDependencies": {
     "electron": "33.4.11",
@@ -37,7 +40,10 @@
     "asarUnpack": [
       "assets/fonts/**",
       "node_modules/ffmpeg-static/**",
-      "node_modules/@ffprobe-installer/**"
+      "node_modules/@ffprobe-installer/**",
+      "node_modules/tesseract.js/**",
+      "node_modules/tesseract.js-core/**",
+      "node_modules/@tesseract.js-data/**"
     ],
     "directories": {
       "output": "dist"
@@ -54,5 +60,8 @@
       "artifactName": "ReelsStudio-Setup.exe",
       "shortcutName": "Reels Studio"
     }
+  },
+  "overrides": {
+    "wasm-feature-detect": "1.6.2"
   }
 }
