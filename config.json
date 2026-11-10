@@ -16,10 +16,41 @@
       "name": "evelon185",
       "platform": "tiktok",
       "mode": "inbox"
+    },
+    {
+      "name": "mell012911",
+      "token_env": "IG_TOKEN_MELL012911",
+      "user_id": "17841421936657629",
+      "connected": "2026-11-10T14:06Z"
+    },
+    {
+      "name": "mell01844",
+      "token_env": "IG_TOKEN_MELL01844",
+      "user_id": "17841443319486776",
+      "connected": "2026-11-10T14:06Z"
+    },
+    {
+      "name": "mell00175",
+      "token_env": "IG_TOKEN_MELL00175",
+      "user_id": "17841480912650715",
+      "connected": "2026-11-10T14:06Z"
+    },
+    {
+      "name": "mell01836",
+      "token_env": "IG_TOKEN_MELL01836",
+      "user_id": "17841458965259020",
+      "connected": "2026-11-10T14:06Z"
+    },
+    {
+      "name": "mell01873",
+      "token_env": "IG_TOKEN_MELL01873",
+      "user_id": "17841419436575150",
+      "connected": "2026-11-10T14:06Z"
     }
   ],
   "paused": [
     "instagram"
   ],
-  "group_name": "Гемблинг"
+  "group_name": "Гемблинг",
+  "facebook_app_id": "1644910107648438"
 }
