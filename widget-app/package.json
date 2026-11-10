@@ -1,14 +1,14 @@
 {
   "name": "reels-widget",
   "productName": "Reels Widget",
-  "version": "4.7.0",
+  "version": "4.7.1",
   "description": "Виджет автозалива: группы аккаунтов, разделы Instagram и TikTok, очереди, план дня, тексты и результаты",
   "main": "main.js",
   "author": "Alex",
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "test": "node test/core.test.js && node test/github.test.js && node test/tiktok.test.js && node test/lanes.test.js && node test/ui.test.js && node test/health.test.js && node test/accounts.test.js && node test/handoff.test.js && node test/groups.test.js && node test/digest.test.js",
+    "test": "node test/core.test.js && node test/github.test.js && node test/tiktok.test.js && node test/lanes.test.js && node test/ui.test.js && node test/health.test.js && node test/accounts.test.js && node test/handoff.test.js && node test/groups.test.js && node test/digest.test.js && node test/batches.test.js",
     "dist": "electron-builder --win nsis --publish never"
   },
   "devDependencies": {
