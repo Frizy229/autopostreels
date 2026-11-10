@@ -520,6 +520,14 @@ class Pipeline {
    * PNG для наложения: текст и плашка рисуются ffmpeg один раз (кэш по виду), для картинок и видео — сам файл.
    * Возвращает путь к файлу или null, если файла нет или он не нарисовался.
    */
+  /** Есть ли в ffmpeg декодер libvpx-vp9 (нужен для WebM с прозрачностью). Проверяется один раз. */
+  async hasLibvpx() {
+    if (this._libvpx == null) {
+      try { const r = await this.tools.run(this.tools.ffmpeg, ['-hide_banner', '-decoders']); this._libvpx = /libvpx-vp9/.test(String(r.stdout || '') + String(r.stderr || '')); } catch { this._libvpx = false; }
+    }
+    return this._libvpx;
+  }
+
   async overlayFile(o, signal) {
     if (o.kind === 'image' || o.kind === 'video') return fs.existsSync(o.path) ? o.path : null;
     const dir = path.join(this.dataDir, 'overlay-cache');
@@ -538,13 +546,13 @@ class Pipeline {
     for (const o of items) {
       let file = null;
       try { file = await this.overlayFile(o, signal); } catch (e) { if (e.code === 'ABORT') throw e; }
-      if (file) ready.push({ ...o, file }); else if (warn) warn(`Наложение пропущено: ${o.path ? path.basename(o.path) : `«${String(o.text).slice(0, 20)}»`} не готово`);
+      if (file) ready.push({ ...o, file, libvpx: await this.hasLibvpx() }); else if (warn) warn(`Наложение пропущено: ${o.path ? path.basename(o.path) : `«${String(o.text).slice(0, 20)}»`} не готово`);
     }
     return OV.overlayGraph(ready, { firstInput });
   }
 
   /** Картинка наложения для предпросмотра в окне: data URL (текст и плашки — как в рендере; у видео первый кадр). */
-  async overlayPreview(raw) {
+  async overlayPreview(raw, opts = {}) {
     const o = OV.normItem(raw);
     if (!o) throw new Error('Наложение не заполнено');
     let file;
@@ -552,11 +560,25 @@ class Pipeline {
       if (!fs.existsSync(o.path)) throw new Error('Файл не найден');
       const dir = path.join(this.dataDir, 'overlay-cache');
       fs.mkdirSync(dir, { recursive: true });
-      file = path.join(dir, `p_${OV.visualKey(o)}.png`);
-      if (!fs.existsSync(file)) await this.tools.run(this.tools.ffmpeg, OV.mediaPngArgs(o, file));
+      file = path.join(dir, `p${opts.raw ? 'r' : ''}_${OV.visualKey(opts.raw ? { ...o, keyColor: '' } : o)}.png`);
+      if (!fs.existsSync(file)) await this.tools.run(this.tools.ffmpeg, OV.mediaPngArgs(o, file, { raw: !!opts.raw, libvpx: await this.hasLibvpx() }));
     } else file = await this.overlayFile(o);
     if (!file) throw new Error('Не удалось нарисовать наложение');
     return { src: `data:image/png;base64,${fs.readFileSync(file).toString('base64')}`, item: o };
+  }
+
+  /** Цвет фона наложения по углам первого кадра: {color, same, transparent}. */
+  async overlayBg(raw) {
+    const o = OV.normItem(raw);
+    if (!o || (o.kind !== 'image' && o.kind !== 'video')) throw new Error('Фон убирают у картинки или видео');
+    if (!fs.existsSync(o.path)) throw new Error('Файл не найден');
+    const dir = path.join(this.dataDir, 'overlay-cache');
+    fs.mkdirSync(dir, { recursive: true });
+    const out = path.join(dir, `bg_${Date.now().toString(36)}.raw`);
+    try {
+      await this.tools.run(this.tools.ffmpeg, OV.rawFrameArgs(o, out, await this.hasLibvpx()));
+      return OV.cornerColor(fs.readFileSync(out));
+    } finally { fs.rmSync(out, { force: true }); }
   }
 
   /**

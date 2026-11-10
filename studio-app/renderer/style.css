@@ -303,3 +303,5 @@ select.input option { background: #1a1d24; }
 .ovrow.sel { border-color: var(--accent); }
 .ovprops { display: flex; flex-direction: column; gap: 8px; }
 .ovprops textarea { resize: vertical; min-height: 44px; }
+.ovi.pick { cursor: crosshair; outline: 2px dashed var(--accent); background: repeating-conic-gradient(#555 0 25%, #777 0 50%) 0 0 / 14px 14px; }
+.ovi.keyed { background: repeating-conic-gradient(rgba(255,255,255,.07) 0 25%, rgba(0,0,0,0) 0 50%) 0 0 / 14px 14px; }
