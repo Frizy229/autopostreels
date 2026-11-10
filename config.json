@@ -1,7 +1,7 @@
 {
   "timezone": "Asia/Tomsk",
-  "day_start": "10:00",
-  "day_end": "22:00",
+  "day_start": "08:00",
+  "day_end": "23:00",
   "max_posts_per_run": 6,
   "caption_template": "{text}\n\n{hashtags}",
   "hashtags": "",
@@ -35,5 +35,6 @@
   ],
   "paused": [
     "instagram"
-  ]
+  ],
+  "group_name": "Гемблинг"
 }
