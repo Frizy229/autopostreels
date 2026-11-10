@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { slug, inspectFolder, cleanTexts, LANES, laneByKey, groupLanes, GROUPS_DIR, VIDEO_EXT, REMOTE_SUFFIX, videoOfPath } = require('./core');
 const MEDIA_TAG = 'media'; // релиз-хранилище видео очереди
-const { push } = require('./gitpush');
+const { push, splitBatches, explainPushError } = require('./gitpush');
 const { seal } = require('./secrets');
 
 const API = 'https://api.github.com';
@@ -248,15 +248,55 @@ class GitHub {
     }
     if (Object.keys(texts).length) files[`${lane.dir}/${name}/texts.json`] = Buffer.from(JSON.stringify(texts, null, 2) + '\n', 'utf8');
     progress(remote ? 0.92 : 0.4, remote ? 'Записываю папку в очередь…' : `Отправляю на GitHub: ${(info.size / 1e6).toFixed(0)} МБ, это может занять несколько минут…`);
-    await push({
-      repo: this.repo, token: this.token, branch: this.branch, files,
-      message: `Новая папка рилсов: ${lane.dir}/${name} (${info.videos} видео)`,
-      getHeadTree: async (commit) => (await this.req('GET', `/git/commits/${commit}`)).tree.sha,
-      getTree: async (sha) => (await this.req('GET', `/git/trees/${sha}`)).tree.map((e) => ({
-        mode: e.mode === '040000' ? '40000' : e.mode, name: e.path, sha: e.sha })),
-    });
+    await this.pushBatches(files, `Новая папка рилсов: ${lane.dir}/${name}`, info.videos, progress, remote ? 0.92 : 0.4);
     progress(1, 'Готово');
     return `${lane.dir}/${name}`;
+  }
+
+  /**
+   * Отправить файлы порциями (каждая — отдельный коммит), каждую порцию повторять при сбое;
+   * если GitHub отклонил порцию, делить её пополам. Мелкие файлы (тексты) идут последними.
+   */
+  async pushBatches(files, title, videos, progress = () => {}, from = 0.4) {
+    const batches = splitBatches(files, this.batchBytes || 40e6, this.batchFiles || 6);
+    const queue = [...batches];
+    const totalBytes = Math.max(Object.values(files).reduce((a, b) => a + b.length, 0), 1);
+    let sent = 0; let part = 0; const parts = () => part + queue.length;
+    while (queue.length) {
+      const batch = queue.shift();
+      const keys = Object.keys(batch);
+      const bytes = keys.reduce((a, k) => a + batch[k].length, 0);
+      part++;
+      progress(from + (1 - from) * 0.95 * sent / totalBytes, `Отправляю на GitHub: часть ${part} из ${parts()}, ${(bytes / 1e6).toFixed(0)} МБ`);
+      let err = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await (this.pushFn || push)({
+            repo: this.repo, token: this.token, branch: this.branch, files: batch,
+            message: `${title} (${videos} видео, часть ${part})`,
+            getHeadTree: async (commit) => (await this.req('GET', `/git/commits/${commit}`)).tree.sha,
+            getTree: async (sha) => (await this.req('GET', `/git/trees/${sha}`)).tree.map((e) => ({
+              mode: e.mode === '040000' ? '40000' : e.mode, name: e.path, sha: e.sha })),
+          });
+          err = null; break;
+        } catch (e) {
+          err = e;
+          if (/не принял токен|не найдена/.test(e.message)) throw e; // повтор не поможет
+          await new Promise((r) => setTimeout(r, (this.retryMs ?? 2000) * (attempt + 1)));
+        }
+      }
+      if (err) {
+        if (keys.length > 1) { // слишком большая порция: делим пополам и пробуем снова
+          const half = Math.ceil(keys.length / 2);
+          const a = {}; const b = {};
+          keys.forEach((k, i) => { (i < half ? a : b)[k] = batch[k]; });
+          queue.unshift(a, b); part--; continue;
+        }
+        const e = new Error(`${explainPushError(err.message)} (файл ${keys[0]}, ${(bytes / 1e6).toFixed(0)} МБ; часть ${part}, уже отправлено ${sent ? (sent / 1e6).toFixed(0) + ' МБ' : 'ничего'})`);
+        e.cause = err; throw e;
+      }
+      sent += bytes;
+    }
   }
 
   /** Убрать папку из очереди одним коммитом (файлы удаляются из репозитория; в истории git они остаются). */

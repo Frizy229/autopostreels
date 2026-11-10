@@ -118,4 +118,29 @@ async function push({ repo, token, branch, files, message, getTree, getHeadTree,
   throw new Error('Не удалось отправить: репозиторий постоянно меняется, попробуй ещё раз.');
 }
 
-module.exports = { push, planCommit, buildPack, objId, treeBody };
+/**
+ * Разбить файлы на порции для отдельных коммитов: GitHub отклоняет слишком большой пакет
+ * («unpack index-pack failed»). Большие файлы идут первыми, мелкие (тексты, обложки) — в последней порции.
+ * Возвращает массив объектов { 'путь': Buffer }.
+ */
+function splitBatches(files, maxBytes = 40e6, maxFiles = 6) {
+  const entries = Object.entries(files).sort((a, b) => b[1].length - a[1].length);
+  const batches = []; let cur = {}; let size = 0; let n = 0;
+  for (const [p, buf] of entries) {
+    if (n && (size + buf.length > maxBytes || n >= maxFiles)) { batches.push(cur); cur = {}; size = 0; n = 0; }
+    cur[p] = buf; size += buf.length; n++;
+  }
+  if (n) batches.push(cur);
+  return batches;
+}
+
+/** Понятный текст для сбоя приёма пакета GitHub. */
+function explainPushError(msg) {
+  const m = String(msg || '');
+  if (/index-pack|unpack|too large|too big|timeout|timed out|\b50[0-9]\b|fetch failed|ECONN|ETIMEDOUT/i.test(m)) {
+    return 'GitHub не принял слишком большую порцию видео или связь оборвалась. Повтори загрузку: уже отправленные файлы не потеряются, остаток будет отправлен меньшими порциями.';
+  }
+  return m;
+}
+
+module.exports = { push, planCommit, buildPack, objId, treeBody, splitBatches, explainPushError };
