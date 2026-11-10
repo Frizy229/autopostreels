@@ -983,7 +983,12 @@ function renderBuildProgress() {
 function pageInstagram(el) {
   const s = S.settings, ig = s.ig;
   const known = S.igAcc || [];
-  const names = [...new Set([...known.map((a) => a.name), ...ig.accounts])];
+  // группы аккаунтов автопостера (у старого виджета групп нет — одна основная)
+  const groups = S.igGroups || [];
+  const grp = groups.length && !groups.some((g) => g.id === ig.group) ? '' : ig.group;
+  const inGroup = known.filter((a) => (a.group || '') === grp).map((a) => a.name);
+  const stray = ig.accounts.filter((n) => !known.some((a) => a.name === n));
+  const names = [...new Set([...inGroup, ...(known.length ? stray : ig.accounts)])];
   const ready = S.projects.filter((p) => p.analyzed);
   if (!buildSel) buildSel = new Set(ready.map((p) => p.id));
   const selCount = ready.filter((p) => buildSel.has(p.id)).reduce((n, p) => n + p.moments.filter((m) => m.selected).length, 0);
@@ -993,8 +998,12 @@ function pageInstagram(el) {
   el.innerHTML = `
     <div class="grid g2">
       <div class="card">
-        <div class="row"><div class="grow"><h3>Аккаунты Instagram</h3><p class="hint" style="margin:0">Список берётся из автопостера (виджет Reels Widget). У каждого отмеченного аккаунта свои ролики.</p></div>
+        <div class="row"><div class="grow"><h3>Аккаунты Instagram</h3><p class="hint" style="margin:0">Список берётся из автопостера (виджет Reels Widget, обновляется раз в 5 минут). У каждого отмеченного аккаунта свои ролики.</p></div>
           <button class="btn sm" id="igLoad">${ic('refresh-cw', 'sm')}Обновить</button></div>
+        ${groups.length > 1 ? `<div class="field" style="margin-top:10px"><span>Группа аккаунтов</span><div class="row wrap">${groups.map((g) => {
+    const n = known.filter((a) => (a.group || '') === g.id).length;
+    return `<button class="chip ${g.id === grp ? 'on' : ''}" data-igg="${esc(g.id)}">${esc(g.name)} · ${n}</button>`;
+  }).join('')}</div></div>` : ''}
         <div class="stack" style="margin-top:10px">${names.length ? names.map((n) => `
           <label class="switch"><div><b>@${esc(n)}</b>${known.length && !known.some((a) => a.name === n) ? '<small class="warnc">нет в автопостере: виджет не примет папку</small>' : ''}</div><input type="checkbox" data-iga="${esc(n)}" ${ig.accounts.includes(n) ? 'checked' : ''}></label>`).join('')
     : `<div class="muted">Аккаунтов пока нет. Запусти Reels Widget (он должен быть подключён к GitHub) и нажми «Обновить».</div>`}</div>
@@ -1031,10 +1040,11 @@ function pageInstagram(el) {
     try {
       const r = await call('handoffIgAccounts');
       if (!r) { toast('Виджет ещё не передал аккаунты: запусти Reels Widget и подожди минуту', 6000); return; }
-      S.igAcc = r.accounts; render();
-      toast(r.accounts.length ? `Аккаунтов Instagram: ${r.accounts.length}` : 'В автопостере нет аккаунтов Instagram', 4000);
+      S.igAcc = r.accounts; S.igGroups = r.groups || []; render();
+      toast(r.accounts.length ? `Аккаунтов Instagram: ${r.accounts.length}${S.igGroups.length > 1 ? `, групп: ${S.igGroups.length}` : ''}` : 'В автопостере нет аккаунтов Instagram', 4000);
     } catch (e) { fail(e); }
   };
+  $$('[data-igg]').forEach((b) => { b.onclick = () => saveIg({ group: b.dataset.igg, accounts: known.filter((a) => (a.group || '') === b.dataset.igg).map((a) => a.name) }); });
   $$('[data-iga]').forEach((i) => { i.onchange = () => saveIg({ accounts: i.checked ? [...ig.accounts, i.dataset.iga] : ig.accounts.filter((x) => x !== i.dataset.iga) }); });
   if ($('#igAll')) $('#igAll').onclick = () => saveIg({ accounts: names });
   if ($('#igNone')) $('#igNone').onclick = () => saveIg({ accounts: [] });
@@ -1052,7 +1062,7 @@ function pageInstagram(el) {
     } catch (e) { fail(e); }
   };
   if ($('#stop')) $('#stop').onclick = () => call('cancel', S.build.id);
-  if (!S.igAcc) call('handoffIgAccounts').then((r) => { S.igAcc = r ? r.accounts : []; if (S.page === 'instagram' && r && r.accounts.length) render(); }).catch(() => { S.igAcc = []; });
+  if (!S.igAcc) call('handoffIgAccounts').then((r) => { S.igAcc = r ? r.accounts : []; S.igGroups = r ? (r.groups || []) : []; if (S.page === 'instagram' && r && r.accounts.length) render(); }).catch(() => { S.igAcc = []; });
   renderBuildProgress();
 }
 
@@ -1061,7 +1071,7 @@ async function sendToAutoposter(b) {
   try {
     b.ap = { state: 'prep', since: Date.now() };
     if (S.page === 'build' || S.page === 'instagram') renderBuildProgress();
-    const id = await call('handoffSend', b.result.folder, b.mode === 'instagram' ? { postNow: S.settings.ig.postNow, accounts: S.settings.ig.accounts } : {});
+    const id = await call('handoffSend', b.result.folder, b.mode === 'instagram' ? { postNow: S.settings.ig.postNow, accounts: S.settings.ig.accounts, group: S.settings.ig.group } : {});
     b.ap = { id, state: 'waiting', since: Date.now() };
     if (S.page === 'build' || S.page === 'instagram') renderBuildProgress();
     const tick = async () => {

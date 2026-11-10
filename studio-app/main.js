@@ -271,12 +271,12 @@ function registerIpc() {
     // GitHub не принимает файлы больше ~95 МБ: тяжёлые ролики (старая версия, ручная папка) сжимаем перед отправкой
     const sh = await pipeline.shrinkLarge(folder);
     if (sh.failed.length) throw new Error(`Не удалось сжать до лимита GitHub (95 МБ):\n${sh.failed.slice(0, 3).join('\n')}`);
-    return handoff.request(hoDir(), { folder, lane: handoff.laneOfQueue(path.basename(path.dirname(folder))), name: path.basename(folder),
+    return handoff.request(hoDir(), { folder, lane: handoff.laneOfQueue(path.basename(path.dirname(folder))), group: opts.group || '', name: path.basename(folder),
       postNow: !!opts.postNow, accounts: Array.isArray(opts.accounts) ? opts.accounts : [] });
   });
   handle('handoff:igAccounts', () => handoff.readAccounts(hoDir(), 'instagram'));
   handle('handoff:status', (id) => handoff.status(hoDir(), id));
-  handle('handoff:accounts', () => handoff.readAccounts(hoDir(), handoff.laneOfQueue(settings.lane) === 'shared' ? '' : handoff.laneOfQueue(settings.lane)));
+  handle('handoff:accounts', () => handoff.readAccounts(hoDir(), handoff.laneOfQueue(settings.lane) === 'shared' ? '' : handoff.laneOfQueue(settings.lane), ''));   // «Сборка»: основная группа
   handle('open:path', (p) => shell.openPath(p));
   handle('open:show', (p) => shell.showItemInFolder(p));
   handle('open:url', (u) => { if (/^https?:\/\//.test(u)) shell.openExternal(u); });

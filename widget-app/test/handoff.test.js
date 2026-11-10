@@ -42,6 +42,16 @@ assert.strictEqual(H.writeAccounts(dir, [...many, null, { platform: 'tiktok' }])
 assert.strictEqual(H.readAccounts(dir).accounts.length, 40);
 assert.strictEqual(H.readAccounts(dir, 'tiktok').accounts.length, 20);
 assert.strictEqual(H.readAccounts(dir, 'instagram').accounts[0].name, 'acc0');
+// группы: аккаунты помечены группой, список групп лежит рядом; без групп всё как раньше
+assert.deepStrictEqual(H.readAccounts(dir).groups, [], 'старый файл без групп читается');
+H.writeAccounts(dir, [{ name: 'main1' }, { name: 'g1', group: 'gamble' }, { name: 'g2tt', platform: 'tiktok', group: 'gamble' }], 5, [{ id: '', name: 'Основная' }, { id: 'gamble', name: 'Гемблинг' }]);
+const gr = H.readAccounts(dir);
+assert.deepStrictEqual(gr.groups, [{ id: '', name: 'Основная' }, { id: 'gamble', name: 'Гемблинг' }]);
+assert.deepStrictEqual(gr.accounts.map((a) => a.group), ['', 'gamble', 'gamble']);
+assert.deepStrictEqual(H.readAccounts(dir, 'instagram', 'gamble').accounts.map((a) => a.name), ['g1']);
+assert.deepStrictEqual(H.readAccounts(dir, 'instagram', '').accounts.map((a) => a.name), ['main1'], 'группа «» — основная');
+assert.strictEqual(H.readAccounts(dir, '', null).accounts.length, 3, 'null — все группы');
+assert.strictEqual(H.request(dir, { folder: 'C:/o/1', lane: 'instagram', group: 'gamble' }) && H.take(dir).group, 'gamble', 'заявка несёт группу');
 assert.deepStrictEqual(['queue', 'queue-instagram', 'queue-tiktok', '?'].map(H.laneOfQueue), ['shared', 'instagram', 'tiktok', 'shared']);
 
 

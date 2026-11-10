@@ -77,18 +77,27 @@ function cleanup(dir, now = Date.now(), maxAgeMs = 24 * 3600e3) {
   return n;
 }
 
-/** Виджет: список аккаунтов автопостера [{name, platform}] — Studio берёт из него каналы. */
-function writeAccounts(dir, accounts, now = Date.now()) {
+/**
+ * Виджет: список аккаунтов автопостера [{name, platform, group}] и групп [{id, name}] — Studio берёт из него каналы.
+ * group — id группы ('' — основная). Без groups файл читается и старой Studio.
+ */
+function writeAccounts(dir, accounts, now = Date.now(), groups = []) {
   fs.mkdirSync(dir, { recursive: true });
-  const list = (accounts || []).filter((a) => a && a.name).map((a) => ({ name: String(a.name), platform: String(a.platform || 'instagram').toLowerCase() }));
-  writeJson(path.join(dir, 'accounts.json'), { at: new Date(now).toISOString(), accounts: list });
+  const list = (accounts || []).filter((a) => a && a.name).map((a) => ({ name: String(a.name), platform: String(a.platform || 'instagram').toLowerCase(), group: String(a.group || '') }));
+  const gl = (groups || []).filter((g) => g && g.id != null).map((g) => ({ id: String(g.id), name: String(g.name || g.id) }));
+  writeJson(path.join(dir, 'accounts.json'), { at: new Date(now).toISOString(), accounts: list, groups: gl });
   return list.length;
 }
-/** Studio: аккаунты из виджета или null, если виджет их ещё не записал. platform: 'instagram' | 'tiktok' | '' (все). */
-function readAccounts(dir, platform = '') {
+/**
+ * Studio: аккаунты из виджета или null, если виджет их ещё не записал. platform: 'instagram' | 'tiktok' | '' (все).
+ * group: id группы ('' — основная) или null — все группы. groups — список групп из файла (у старого виджета пусто).
+ */
+function readAccounts(dir, platform = '', group = null) {
   const o = readJson(path.join(dir, 'accounts.json'));
   if (!o || !Array.isArray(o.accounts)) return null;
-  return { at: o.at, accounts: o.accounts.filter((a) => !platform || a.platform === platform) };
+  const accounts = o.accounts.map((a) => ({ ...a, group: String(a.group || '') }))
+    .filter((a) => (!platform || a.platform === platform) && (group == null || a.group === String(group)));
+  return { at: o.at, accounts, groups: Array.isArray(o.groups) ? o.groups : [] };
 }
 
 /**

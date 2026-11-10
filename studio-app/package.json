@@ -1,7 +1,7 @@
 {
   "name": "reels-studio",
   "productName": "Reels Studio",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Нарезки стримов в вертикаль: поиск моментов, раскладки, субтитры, монтаж под несколько каналов, папки для автозалива",
   "main": "main.js",
   "author": "Alex",
