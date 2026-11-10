@@ -13,11 +13,6 @@
   "tiktok_client_key": "sbawcfw5v6nqpfbf6w",
   "accounts": [
     {
-      "name": "survivelzerorule",
-      "token_env": "IG_TOKEN_SURVIVELZERORULE",
-      "user_id": "17841458959352503"
-    },
-    {
       "name": "evelon185",
       "platform": "tiktok",
       "mode": "inbox"
