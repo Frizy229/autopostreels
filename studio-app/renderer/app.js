@@ -80,7 +80,7 @@ function jobUpdate(j) {
     if (j.error) { if (!j.aborted) toast(`${cur.label}: ${j.error}`, 6000); }
     else if (cur.kind === 'analyze' || cur.kind === 'check') {
       refreshProjects().then(() => { if (S.current) loadProject(S.current); });
-      toast(cur.kind === 'analyze' ? `Найдено моментов: ${j.result.moments.length}` : 'Проверка закончена');
+      toast(cur.kind === 'analyze' ? (j.result.mode === 'zanos' ? `Заносов: ${j.result.moments.filter((m) => !m.junk).length} из ${j.result.moments.length} кандидатов` : `Найдено моментов: ${j.result.moments.length}`) : 'Проверка закончена');
     } else if (cur.kind === 'install') { refreshTools(); toast(`${cur.label}: готово${typeof j.result === 'string' && !j.result.includes('\\') && !j.result.includes('/') ? ` — ${j.result}` : ''}`); }
     else if (cur.kind === 'filler') {
       const r = j.result || {};
@@ -400,7 +400,7 @@ function checkBadges(m) {
   const out = [];
   if (m.junk) out.push(`<span class="badge err">${ic('trash-2', 'sm')}мусор: ${esc(m.junk)}</span>`);
   for (const w of (m.judge && m.judge.warn) || []) out.push(`<span class="badge warn">${esc(w)}</span>`);
-  for (const w of (!m.junk && m.why) || []) out.push(`<span class="badge acc">${ic('sparkle', 'sm')}${esc(w)}</span>`);
+  for (const w of ((!m.junk || m.kind === 'zanos') && m.why) || []) out.push(`<span class="badge acc">${ic('sparkle', 'sm')}${esc(w)}</span>`);
   if (m.wordCount != null || (m.words && m.words.length)) out.push(`<span class="badge">${ic('captions', 'sm')}${m.wordCount ?? m.words.length} слов</span>`);
   if (c) {
     for (const i of c.issues) out.push(`<span class="badge err">${ic('triangle-alert', 'sm')}${esc(i)}</span>`);
@@ -425,6 +425,7 @@ function projectMain(pr) {
         <div class="grow"><h3>${esc(pr.title)}</h3><p class="hint" style="margin:0">${esc(pr.streamer || pr.source.platform)} · ${fmtTime(pr.source.duration)} · ${pr.source.width}×${pr.source.height}${pr.chatCount ? ` · чат: ${pr.chatCount} сообщений` : ''}${(pr.blurs || []).length ? ` · блюр: ${pr.blurs.length}` : ''}</p></div>
         <button class="btn ${!pr.frame && needCam ? 'primary' : ''}" id="frameBtn">${ic('scan-face')}${pr.frame ? (nCams > 1 ? `Вебки: ${nCams} ✓` : nCams ? 'Рамка вебки ✓' : 'Без вебки ✓') : 'Рамка вебки'}</button>
         <button class="btn ${pr.analyzed ? '' : 'primary'}" id="anBtn" ${job ? 'disabled' : ''}>${ic('audio-lines')}${pr.analyzed ? 'Искать заново' : 'Найти моменты'}</button>
+        <button class="btn" id="znBtn" ${job ? 'disabled' : ''} title="Большие выигрыши в казино: иксы на экране, слова, крик, подводка и концовка">${ic('sparkle')}Найти заносы</button>
         <button class="btn" id="chkBtn" ${job || !sel ? 'disabled' : ''}>${ic('shield-check')}Проверить</button>
         <button class="btn ghost danger icon" id="delBtn" title="Убрать источник">${ic('trash-2')}</button>
       </div>
@@ -434,7 +435,7 @@ function projectMain(pr) {
     ${pr.analyzed ? `
     <div class="card">
       <div class="row wrap">
-        <h3 class="grow">Моменты <span class="muted num" style="font-weight:400">· выбрано ${sel} из ${pr.moments.length}</span></h3>
+        <h3 class="grow">${pr.mode === 'zanos' ? 'Заносы' : 'Моменты'} <span class="muted num" style="font-weight:400">· выбрано ${sel} из ${pr.moments.length}</span></h3>
         <button class="btn sm ghost" id="selAll">Выбрать все</button><button class="btn sm ghost" id="selNone">Снять все</button>
         <span class="faint">|</span>
         <input id="mStart" class="input num" style="width:86px;height:30px" placeholder="12:30"><span class="faint">–</span><input id="mEnd" class="input num" style="width:86px;height:30px" placeholder="13:05">
@@ -461,6 +462,7 @@ function projectMain(pr) {
 }
 
 function bindProject(pr) {
+  $('#znBtn').onclick = async () => { try { const id = await call('analyze', pr.id, { mode: 'zanos' }); S.jobs.set(id, { id, kind: 'analyze', label: 'Поиск заносов', progress: 0 }); render(); } catch (e) { fail(e); } };
   $('#anBtn').onclick = async () => { try { const id = await call('analyze', pr.id); S.jobs.set(id, { id, kind: 'analyze', label: 'Поиск моментов', progress: 0 }); render(); } catch (e) { fail(e); } };
   $('#chkBtn').onclick = async () => { try { const id = await call('check', pr.id); S.jobs.set(id, { id, kind: 'check', label: 'Проверка правил', progress: 0 }); render(); } catch (e) { fail(e); } };
   $('#delBtn').onclick = async () => {
@@ -1142,6 +1144,7 @@ function pageSettings(el) {
           <div class="row"><select class="input" id="llmModel" style="width:170px;height:30px">${Object.keys(t.llmModels).map((k) => `<option>${k}</option>`).join('')}</select>${state(!!t.llmModel)}
           <button class="btn sm" data-inst="llm">${ic('download', 'sm')}</button></div></div>
         <label class="switch"><div><b>Нейросеть оценивает смешное</b><small>после отбора читает текст каждого момента и ставит 0–10. Нужны программа и модель выше, поиск дольше на пару минут</small></div><input type="checkbox" id="llm" ${s.llm !== false ? 'checked' : ''}></label>
+        <label class="switch"><div><b>Читать экран в заносах</b><small>«Найти заносы» читает иксы и суммы на кадрах (локально, без ключей). Дольше на несколько минут, зато видно x1250 и MEGA WIN</small></div><input type="checkbox" id="ocr" ${s.ocr !== false ? 'checked' : ''}></label>
         <label class="switch"><div><b>Умный отбор моментов</b><small>смотрит картинку и слушает речь: убирает чёрный экран, музыку без слов, ищет смех. Поиск дольше на несколько минут</small></div><input type="checkbox" id="smartPick" ${s.smartPick !== false ? 'checked' : ''}></label>
         <label class="switch"><div><b>Видеокарта для речи</b><small>RTX 3070: да</small></div><input type="checkbox" id="gpu" ${s.gpu ? 'checked' : ''}></label>
       </div>
@@ -1201,6 +1204,7 @@ function pageSettings(el) {
   $('#model').value = s.whisperModel; $('#enc').value = s.encoder; $('#q').value = s.quality; $('#fps').value = String(s.fps); $('#mat').value = s.material;
   $$('[data-inst]').forEach((b) => { b.onclick = async () => { try { const id = await call('install', b.dataset.inst); S.jobs.set(id, { id, kind: 'install', label: b.dataset.inst, progress: 0 }); renderDock(); } catch (e) { fail(e); } }; });
   $('#model').onchange = async (e) => { await saveSettings({ whisperModel: e.target.value }, true); refreshTools(); };
+  $('#ocr').onchange = (e) => saveSettings({ ocr: e.target.checked }, true);
   $('#llm').onchange = (e) => saveSettings({ llm: e.target.checked }, true);
   $('#llmModel').value = s.llmModel;
   $('#llmModel').onchange = async (e) => { await saveSettings({ llmModel: e.target.value }, true); refreshTools(); };

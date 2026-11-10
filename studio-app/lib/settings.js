@@ -43,6 +43,7 @@ const DEFAULTS = {
   rules: { ...DEFAULT_RULES },
   presets: {},           // рамки вебки/контента по стримерам: { "evelone2004": {cam, content, layout} }
   searchMinMin: 20,      // поиск лонгов: от N минут
+  ocr: true,             // заносы: читать текст на экране (иксы, суммы), локально
   llm: true,             // нейросеть оценивает смешное по тексту (если установлена)
   llmModel: '7b',
   smartPick: true,       // поиск моментов: отсев мусора (чёрный экран, музыка) и поиск смешного
@@ -111,7 +112,7 @@ function normalize(raw) {
   if (!s.twitchChannels.length) s.twitchChannels = [...DEFAULTS.twitchChannels];
   const igs = (raw && raw.igSearch && typeof raw.igSearch === 'object') ? raw.igSearch : {};
   s.igSearch = { token: String(igs.token || '').trim().slice(0, 600), userId: /^\d{5,25}$/.test(String(igs.userId || '').trim()) ? String(igs.userId).trim() : '', username: String(igs.username || '').slice(0, 60) };
-  for (const k of ['vary', 'allowMirror', 'allowSpeed', 'gpu', 'loudnorm', 'subsOn', 'autoSend', 'smartPick', 'llm']) s[k] = !!s[k];
+  for (const k of ['vary', 'allowMirror', 'allowSpeed', 'gpu', 'loudnorm', 'subsOn', 'autoSend', 'smartPick', 'llm', 'ocr']) s[k] = !!s[k];
   const ck = { ...DEFAULTS.cookies, ...((raw && raw.cookies && typeof raw.cookies === 'object') ? raw.cookies : {}) };
   s.cookies = { mode: pick(ck.mode, COOKIE_MODES, 'auto'), browser: pick(ck.browser, BROWSERS, 'firefox'), file: typeof ck.file === 'string' ? ck.file : '' };
   if (s.cookies.mode === 'file' && !s.cookies.file) s.cookies.mode = 'auto';

@@ -232,7 +232,7 @@ function registerIpc() {
   handle('filler:list', () => pipeline.fillerLibrary());
   handle('filler:add', (list) => startJob('filler', 'Фон: скачиваю', (p, signal) => pipeline.addFillers(Array.isArray(list) ? list.slice(0, 50) : [], p, signal)));
   handle('filler:remove', (file) => pipeline.removeFiller(file));
-  handle('project:analyze', (id) => startJob('analyze', 'Поиск моментов', (p, signal) => pipeline.analyze(id, p, signal).then(slim)));
+  handle('project:analyze', (id, opts = {}) => startJob('analyze', opts.mode === 'zanos' ? 'Поиск заносов' : 'Поиск моментов', (p, signal) => pipeline.analyze(id, p, signal, { mode: opts.mode === 'zanos' ? 'zanos' : 'funny' }).then(slim)));
   handle('project:check', (id) => startJob('check', 'Проверка правил', (p, signal) => pipeline.check(id, p, signal).then(slim)));
   handle('project:clip', async (id, mid, margin = 0) => {
     // кусок для предпросмотра в окне (файл — как есть, ссылка — скачанный кусок); margin — запас вокруг для обрезки

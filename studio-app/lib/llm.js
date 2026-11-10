@@ -53,8 +53,15 @@ function momentText(words, start, end) {
   return t.slice(from, from + MAX_TEXT);
 }
 
-/** Промпт в формате ChatML (Qwen). Ответ — одно число 0–10. */
-function buildPrompt(text) {
+/** Промпт в формате ChatML (Qwen). Ответ — одно число 0–10. kind: 'funny' (смешной момент) или 'zanos' (занос в казино). */
+function buildPrompt(text, kind = 'funny') {
+  if (kind === 'zanos') {
+    const sysZ = 'Ты редактор коротких видео по казино-стримам. Отбираешь настоящие заносы: огромный выигрыш по ставке, когда стример кричит от радости.';
+    const userZ = `Это расшифровка фрагмента стрима Эвелона (в ней бывают ошибки распознавания):\n"""\n${text}\n"""\n\n`
+      + 'Оцени от 0 до 10, насколько это настоящий занос: большой выигрыш (иксы, макс вин, миллионы), бурная реакция стримера, ожидание перед выигрышем. '
+      + 'Обычные вращения, мелкие выигрыши, разговор про казино без выигрыша, настройка ставки, смех над чем-то другим: 0–3. Ответь одним числом.';
+    return `<|im_start|>system\n${sysZ}<|im_end|>\n<|im_start|>user\n${userZ}<|im_end|>\n<|im_start|>assistant\n`;
+  }
   const sys = 'Ты редактор коротких вертикальных видео по стримам. Отбираешь самые смешные и цепляющие моменты.';
   const user = `Это расшифровка фрагмента стрима Эвелона (в ней бывают ошибки распознавания):\n"""\n${text}\n"""\n\n`
     + 'Оцени от 0 до 10, насколько это хороший момент для рилса: шутка, неожиданный поворот, фейл, яркая эмоциональная реакция, смех. '
@@ -117,10 +124,10 @@ class LlmServer {
   tail() { return this.log.split(/\r?\n/).filter(Boolean).slice(-3).join(' | ').slice(0, 300) || 'без сообщения'; }
 
   /** Оценка текста 0–10 или null, если ответ не разобрать. */
-  async score(text) {
+  async score(text, kind = 'funny') {
     const r = await this.fetchImpl(`http://127.0.0.1:${this.port}/completion`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: buildPrompt(text), n_predict: 6, temperature: 0, cache_prompt: false, stop: ['<|im_end|>'] }),
+      body: JSON.stringify({ prompt: buildPrompt(text, kind), n_predict: 6, temperature: 0, cache_prompt: false, stop: ['<|im_end|>'] }),
     });
     if (!r.ok) throw new Error(`Нейросеть ответила HTTP ${r.status}`);
     const j = await r.json();
