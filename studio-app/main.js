@@ -228,7 +228,8 @@ function registerIpc() {
   handle('project:update', (id, patch) => slim(pipeline.update(id, patch)));
   handle('project:remove', (id) => pipeline.remove(id));
   handle('project:addMoment', (id, s, e) => pipeline.addMoment(id, s, e));
-  handle('overlay:preview', (item) => pipeline.overlayPreview(item));
+  handle('overlay:preview', (item, opts) => pipeline.overlayPreview(item, opts || {}));
+  handle('overlay:bg', (item) => pipeline.overlayBg(item));
   handle('overlay:meta', () => ({ fonts: Object.fromEntries(Object.entries(OV.FONTS).map(([k, v]) => [k, v.name])), aligns: OV.ALIGNS }));
   handle('project:frame', async (id, t) => `data:image/jpeg;base64,${(await pipeline.frame(id, t)).toString('base64')}`);
   handle('filler:search', (q, o = {}) => pipeline.searchFillers(q, { cc: !!o.cc, limit: o.limit || 30 }));

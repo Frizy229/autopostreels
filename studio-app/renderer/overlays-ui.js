@@ -11,9 +11,9 @@ function ovNew(kind, extra = {}) {
   const id = `o${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
   if (kind === 'text') return { id, kind, text: 'Текст', x: 0.1, y: 0.62, w: 0.8, h: 0.1, size: 90, color: '#ffffff', bg: '', bgAlpha: 0.9, radius: 0, outline: true, align: 'center', font: 'montserrat', start: null, end: null, fade: 0, opacity: 1, ...extra };
   if (kind === 'plate') return { id, kind, text: 'Плашка', x: 0.15, y: 0.08, w: 0.7, h: 0.07, size: 56, color: '#ffffff', bg: '#c8102e', bgAlpha: 0.9, radius: 24, outline: false, align: 'center', font: 'montserrat', start: null, end: null, fade: 0, opacity: 1, ...extra };
-  return { id, kind: 'image', x: 0.62, y: 0.1, w: 0.3, start: null, end: null, fade: 0, opacity: 1, ...extra };
+  return { id, kind: 'image', x: 0.62, y: 0.1, w: 0.3, start: null, end: null, fade: 0, opacity: 1, keyColor: '', keyTol: 0.15, keySoft: 0.08, ...extra };
 }
-const ovKey = (o) => JSON.stringify([o.kind, o.w, o.h, o.text, o.font, o.size, o.color, o.align, o.outline, o.bg, o.bgAlpha, o.radius, o.path]);
+const ovKey = (o, raw) => JSON.stringify([o.kind, o.w, o.h, o.text, o.font, o.size, o.color, o.align, o.outline, o.bg, o.bgAlpha, o.radius, o.path, raw ? '' : o.keyColor, raw ? 0 : o.keyTol, raw ? 0 : o.keySoft, !!raw]);
 const ovLabel = (o) => (o.kind === 'text' || o.kind === 'plate' ? `${o.kind === 'plate' ? 'Плашка' : 'Текст'}: ${String(o.text).split('\n')[0].slice(0, 22)}` : `${o.kind === 'video' ? 'Видео' : 'Картинка'}: ${String(o.path).split(/[\\/]/).pop().slice(0, 22)}`);
 
 /**
@@ -23,7 +23,7 @@ async function openOverlays(opts) {
   if (!OVMETA) OVMETA = await call('overlayMeta');
   const m = $('#modal');
   const tf = (t) => H.fmtTimeP(t);
-  const ed = { items: opts.items.map((o) => ({ ...o })), sel: 0, cache: new Map() };
+  const ed = { items: opts.items.map((o) => ({ ...o })), sel: 0, cache: new Map(), pick: false };
   m.hidden = false;
   m.innerHTML = `<div class="dlg ovdlg">
     <div class="row"><div class="grow"><h2>${esc(opts.title)}</h2><p class="hint">${esc(opts.hint || '')}</p></div><button class="btn ghost icon" id="ox">${ic('x')}</button></div>
@@ -48,16 +48,31 @@ async function openOverlays(opts) {
 
   // картинка наложения: из кэша или от ffmpeg (с задержкой, чтобы не рисовать на каждую букву)
   const timers = new Map();
-  const preview = (o) => {
-    const key = ovKey(o);
+  const preview = (o, raw = false) => {
+    const key = ovKey(o, raw);
     if (ed.cache.has(key)) return ed.cache.get(key);
     ed.cache.set(key, '');
-    clearTimeout(timers.get(o.id));
-    timers.set(o.id, setTimeout(async () => {
-      try { const r = await call('overlayPreview', o); ed.cache.set(key, r.src); } catch { ed.cache.set(key, 'x'); }
+    clearTimeout(timers.get(o.id + (raw ? 'r' : '')));
+    timers.set(o.id + (raw ? 'r' : ''), setTimeout(async () => {
+      try { const r = await call('overlayPreview', o, { raw }); ed.cache.set(key, r.src); } catch { ed.cache.set(key, 'x'); }
       drawStage();
     }, 250));
     return '';
+  };
+  // пипетка: цвет пикселя «сырой» картинки (без удаления фона) под курсором
+  const pickColor = (o, ev, el) => {
+    const src = ed.cache.get(ovKey(o, true));
+    if (!src || src === 'x') { toast('Картинка ещё не загрузилась'); return; }
+    const img = new Image();
+    img.onload = () => {
+      const B = el.getBoundingClientRect(), u = (ev.clientX - B.left) / B.width, v = (ev.clientY - B.top) / B.height;
+      const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+      const d = ctx.getImageData(Math.min(c.width - 1, Math.max(0, Math.round(u * c.width))), Math.min(c.height - 1, Math.max(0, Math.round(v * c.height))), 1, 1).data;
+      if (d[3] < 40) toast('Здесь уже прозрачно: выбери цвет фона'); else { o.keyColor = '#' + [d[0], d[1], d[2]].map((x) => x.toString(16).padStart(2, '0')).join(''); toast(`Фон ${o.keyColor} стал прозрачным`); }
+      ed.pick = false; drawAll();
+    };
+    img.src = src;
   };
 
   const drawStage = () => {
@@ -65,14 +80,16 @@ async function openOverlays(opts) {
     if (!ov) return;
     const t = rel();
     ov.innerHTML = ed.items.map((o, i) => {
-      const src = preview(o);
+      const picking = ed.pick && i === ed.sel;
+      const src = picking ? preview(o, true) : preview(o);
       const live = !opts.clip || active(o, t);
-      return `<div class="ovi ${i === ed.sel ? 'sel' : ''} ${live ? '' : 'off'}" data-i="${i}" style="left:${o.x * 100}%;top:${o.y * 100}%;width:${o.w * 100}%;${o.h && (o.kind === 'text' || o.kind === 'plate') ? `height:${o.h * 100}%;` : ''}opacity:${o.opacity}">
+      return `<div class="ovi ${i === ed.sel ? 'sel' : ''} ${live ? '' : 'off'} ${picking ? 'pick' : ''} ${o.keyColor && !picking ? 'keyed' : ''}" data-i="${i}" style="left:${o.x * 100}%;top:${o.y * 100}%;width:${o.w * 100}%;${o.h && (o.kind === 'text' || o.kind === 'plate') ? `height:${o.h * 100}%;` : ''}opacity:${o.opacity}">
         ${src && src !== 'x' ? `<img src="${src}" draggable="false">` : `<span class="ovwait">${src === 'x' ? 'нет картинки' : '…'}</span>`}<span class="h"></span></div>`;
     }).join('');
     $$('.ovi', ov).forEach((el) => {
       el.onpointerdown = (e) => {
         const i = +el.dataset.i, o = ed.items[i], B = st(), resize = e.target.classList.contains('h');
+        if (ed.pick && i === ed.sel) { pickColor(o, e, el); e.preventDefault(); return; }
         const s0 = { ...o }, x0 = e.clientX, y0 = e.clientY, moved = ed.sel !== i;
         ed.sel = i;
         el.setPointerCapture(e.pointerId);
@@ -111,7 +128,13 @@ async function openOverlays(opts) {
           <label class="row muted"><input type="checkbox" id="pOut" ${o.outline ? 'checked' : ''}> чёрная обводка</label>
           <label class="row muted"><input type="checkbox" id="pBgOn" ${o.bg ? 'checked' : ''}> фон</label>${o.bg ? `<input type="color" id="pBg" value="${o.bg}">` : ''}</div>
         ${o.bg ? `${num('pBgA', 'Прозрачность фона', 0.1, 1, 0.05, o.bgAlpha, (v) => `${Math.round(v * 100)}%`)}${num('pRad', 'Скругление углов', 0, 120, 2, o.radius, (v) => `${v} px`)}` : ''}`
-        : `<div class="field"><span>Файл</span><div class="row"><input class="input grow" readonly value="${esc(o.path || '')}"><button class="btn sm" id="pFile">Заменить…</button></div></div>`}
+        : `<div class="field"><span>Файл</span><div class="row"><input class="input grow" readonly value="${esc(o.path || '')}"><button class="btn sm" id="pFile">Заменить…</button></div></div>
+        <div class="field"><span>Задний фон (серый, белый, зелёный и т. п.)</span>
+          <div class="row wrap"><label class="row muted"><input type="checkbox" id="kOn" ${o.keyColor ? 'checked' : ''}> убрать фон</label>
+            <button class="btn sm ${ed.pick ? 'primary' : ''}" id="kPick" title="Нажми и кликни по фону на кадре слева">${ic('eye', 'sm')}${ed.pick ? 'Кликни по фону слева…' : 'Пипетка'}</button>
+            <button class="btn sm ghost" id="kAuto" title="Цвет фона берётся по углам картинки">Авто по углам</button>
+            ${o.keyColor ? `<input type="color" id="kColor" value="${o.keyColor}" title="Цвет, который станет прозрачным">` : ''}</div>
+          ${o.keyColor ? `${num('kTol', 'Допуск (насколько похожие цвета тоже убрать)', 0.02, 0.6, 0.01, o.keyTol, (v) => `${Math.round(v * 100)}%`)}${num('kSoft', 'Мягкость краёв', 0, 0.4, 0.01, o.keySoft, (v) => `${Math.round(v * 100)}%`)}` : '<small class="muted">Если у файла прозрачный фон (png, webm, mov), он и так прозрачный. Серый или цветной фон убирается здесь.</small>'}</div>`}
       ${num('pOp', 'Непрозрачность', 0.1, 1, 0.05, o.opacity, (v) => `${Math.round(v * 100)}%`)}
       ${num('pFade', 'Плавное появление и исчезновение', 0, 2, 0.1, o.fade, (v) => (v ? `${v} с` : 'нет'))}
       <div class="field"><span>Когда показывать</span>
@@ -130,6 +153,19 @@ async function openOverlays(opts) {
     bind('pBg', (el) => { el.oninput = () => set({ bg: el.value }); });
     bind('pOut', (el) => { el.onchange = () => set({ outline: el.checked }); });
     bind('pBgOn', (el) => { el.onchange = () => { set(el.checked ? { bg: o.kind === 'plate' ? '#c8102e' : '#000000', bgAlpha: 0.7, radius: o.radius || 20 } : { bg: '' }); drawProps(); }; });
+    const keyOn = async () => {
+      try {
+        const r = await call('overlayBg', o);
+        if (r.transparent) { toast('Фон у файла уже прозрачный: убирать нечего'); drawProps(); return; }
+        o.keyColor = r.color; if (!r.same) toast('Углы разного цвета: проверь результат, цвет можно выбрать пипеткой', 5000);
+        drawAll();
+      } catch (e) { fail(e); }
+    };
+    bind('kOn', (el) => { el.onchange = () => { if (el.checked) keyOn(); else { o.keyColor = ''; ed.pick = false; drawAll(); } }; });
+    bind('kAuto', (el) => { el.onclick = keyOn; });
+    bind('kPick', (el) => { el.onclick = () => { ed.pick = !ed.pick; if (ed.pick) toast('Кликни по фону на кадре слева'); drawProps(); drawStage(); }; });
+    bind('kColor', (el) => { el.oninput = () => set({ keyColor: el.value }); });
+    rng('kTol', 'keyTol', (v) => `${Math.round(v * 100)}%`); rng('kSoft', 'keySoft', (v) => `${Math.round(v * 100)}%`);
     bind('pFile', (el) => { el.onclick = async () => { const f = await call('pickFile', 'Картинка, гифка или видео', OV_MEDIA_FILTERS); if (f) { set({ path: f, kind: /\.(png|jpe?g|webp|bmp)$/i.test(f) ? 'image' : 'video' }); drawProps(); } }; });
     bind('pAll', (el) => { el.onchange = () => { if (el.checked) set({ start: null, end: null }); else set({ start: opts.clip ? Math.round(rel() * 10) / 10 : 0, end: opts.clip ? Math.round((rel() + 3) * 10) / 10 : 3 }); drawProps(); drawStage(); }; });
     const tm = (id, key) => bind(id, (el) => { el.onchange = () => { const v = el.value.trim() === '' ? null : H.parseTime(el.value); if (v === null || Number.isFinite(v)) set({ [key]: v }); drawStage(); }; });

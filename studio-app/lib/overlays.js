@@ -69,6 +69,10 @@ function normItem(raw) {
     o.path = String(r.path || '');
     if (!o.path || mediaKind(o.path) === '') return null;
     o.kind = mediaKind(o.path);   // вид по файлу: гифка — всегда «видео»
+    // удаление фона: цвет (#rrggbb) становится прозрачным; допуск — насколько похожие цвета тоже, мягкость — края
+    o.keyColor = color(r.keyColor, '');
+    o.keyTol = Math.round(num(r.keyTol, 0.01, 0.8, 0.15) * 100) / 100;
+    o.keySoft = Math.round(num(r.keySoft, 0, 0.6, 0.08) * 100) / 100;
   }
   return o;
 }
@@ -105,7 +109,7 @@ function itemsFor(template, own, dur) {
 function visualKey(o) {
   const pick = o.kind === 'text' || o.kind === 'plate'
     ? [o.kind, o.w, o.h, o.text, o.font, o.size, o.color, o.align, o.outline, o.bg, o.bgAlpha, o.radius]
-    : [o.kind, o.path, o.w];
+    : [o.kind, o.path, o.w, o.keyColor, o.keyTol, o.keySoft];
   let h = 2166136261;
   for (const c of JSON.stringify(pick)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
   return (h >>> 0).toString(16);
@@ -139,10 +143,51 @@ function textPngArgs(o, { fontsDir, textFile, out }) {
   return ['-hide_banner', '-y', '-nostdin', '-f', 'lavfi', '-i', `color=c=${base}:s=${w}x${h}:r=1,format=rgba`, '-vf', vf, '-frames:v', '1', out];
 }
 
-/** Первый кадр медиа как PNG нужной ширины (для предпросмотра). */
-function mediaPngArgs(o, out, maxW = 540) {
+/** Фильтр «сделать цвет прозрачным» (у наложения с keyColor); '' — фон не убирают. */
+function keyFilter(o) {
+  return o && o.keyColor ? `colorkey=${hex(o.keyColor)}:${o.keyTol}:${o.keySoft}` : '';
+}
+
+/**
+ * WebM с прозрачностью штатный декодер ffmpeg читает без альфа-канала (фон выходит чёрным/серым): нужен libvpx-vp9.
+ * libvpx — true, если такой декодер есть в сборке ffmpeg.
+ */
+function decoderArgs(o, libvpx) {
+  return libvpx && /\.webm$/i.test(o.path || '') ? ['-c:v', 'libvpx-vp9'] : [];
+}
+
+/**
+ * Первый кадр медиа как PNG нужной ширины (для предпросмотра). raw — без удаления фона (для пипетки: надо видеть,
+ * какой цвет у фона на самом деле).
+ */
+function mediaPngArgs(o, out, { maxW = 540, raw = false, libvpx = false } = {}) {
   const w = Math.min(maxW, Math.max(8, Math.round(o.w * OUT_W)));
-  return ['-hide_banner', '-y', '-nostdin', '-i', o.path, '-frames:v', '1', '-vf', `scale=${w}:-2,format=rgba`, out];
+  const key = raw ? '' : keyFilter(o);
+  return ['-hide_banner', '-y', '-nostdin', ...decoderArgs(o, libvpx), '-i', o.path, '-frames:v', '1', '-vf', `scale=${w}:-2,format=rgba${key ? `,${key}` : ''}`, out];
+}
+
+/** Первый кадр 64×64 как сырые RGBA-байты (для автоопределения цвета фона по углам). */
+function rawFrameArgs(o, out, libvpx = false) {
+  return ['-hide_banner', '-y', '-nostdin', ...decoderArgs(o, libvpx), '-i', o.path, '-frames:v', '1', '-vf', 'scale=64:64,format=rgba', '-f', 'rawvideo', out];
+}
+
+/**
+ * Цвет фона по углам кадра 64×64 RGBA: среднее по четырём углам (по 3×3 пикселя).
+ * Возвращает {color, same, transparent}: same — углы одного цвета (похоже на однотонный фон),
+ * transparent — углы уже прозрачные (убирать нечего).
+ */
+function cornerColor(buf, w = 64, h = 64) {
+  const at = (x, y) => { const i = (y * w + x) * 4; return [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]; };
+  const avg = (x0, y0) => {
+    const s = [0, 0, 0, 0];
+    for (let y = y0; y < y0 + 3; y++) for (let x = x0; x < x0 + 3; x++) at(x, y).forEach((v, k) => { s[k] += v; });
+    return s.map((v) => v / 9);
+  };
+  const cs = [avg(0, 0), avg(w - 3, 0), avg(0, h - 3), avg(w - 3, h - 3)];
+  const mean = [0, 1, 2, 3].map((k) => cs.reduce((a, c) => a + c[k], 0) / 4);
+  const dist = Math.max(...cs.map((c) => Math.max(Math.abs(c[0] - mean[0]), Math.abs(c[1] - mean[1]), Math.abs(c[2] - mean[2]))));
+  const h2 = (v) => Math.round(v).toString(16).padStart(2, '0');
+  return { color: `#${h2(mean[0])}${h2(mean[1])}${h2(mean[2])}`, same: dist < 24, transparent: mean[3] < 40 };
 }
 
 /**
@@ -160,11 +205,15 @@ function overlayGraph(items, { vIn = '[vout]', firstInput = 1, vOut = '[vfin]' }
     const live = o.kind === 'video';
     inputs.push(...(live ? ['-stream_loop', '-1', '-i', src] : ['-loop', '1', '-framerate', '30', '-i', src]));
     const k = firstInput + j;
+    const dec = decoderArgs(o, o.libvpx);
+    if (dec.length) inputs.splice(inputs.length - 2, 0, ...dec);   // перед «-i файл»
     const s = o.start == null ? 0 : o.start;
     const px = Math.round(o.x * OUT_W), py = Math.round(o.y * OUT_H);
     const media = o.kind === 'image' || o.kind === 'video';
     const w = Math.max(2, Math.round(o.w * OUT_W / 2) * 2);
     const chain = [`[${k}:v]format=rgba`];
+    const kf = keyFilter(o);
+    if (media && kf) chain.push(kf);
     if (media) chain.push(`scale=${w}:-2`); else chain.push('setsar=1');
     if (o.opacity < 1) chain.push(`colorchannelmixer=aa=${o.opacity}`);
     chain.push(`setpts=PTS-STARTPTS+${s}/TB`);
@@ -181,4 +230,4 @@ function overlayGraph(items, { vIn = '[vout]', firstInput = 1, vOut = '[vfin]' }
   return { inputs, filter: `;${parts.join(';')}`, vLabel: vOut };
 }
 
-module.exports = { OUT_W, OUT_H, MAX_ITEMS, KINDS, FONTS, ALIGNS, mediaKind, newItem, normItem, normItems, normTemplates, itemsFor, visualKey, boxPx, textPngArgs, mediaPngArgs, overlayGraph };
+module.exports = { OUT_W, OUT_H, MAX_ITEMS, KINDS, FONTS, ALIGNS, mediaKind, newItem, normItem, normItems, normTemplates, itemsFor, visualKey, boxPx, textPngArgs, mediaPngArgs, rawFrameArgs, cornerColor, keyFilter, decoderArgs, overlayGraph };

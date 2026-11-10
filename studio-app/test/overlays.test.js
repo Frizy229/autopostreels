@@ -39,6 +39,27 @@ const g = O.overlayGraph([{ ...a, file: '/t/a.png' }, { ...O.normItem({ kind: 'v
 assert.ok(g.inputs.join(' ').startsWith('-loop 1 -framerate 30 -i /t/a.png -stream_loop -1 -i /t/v.gif'), g.inputs.join(' '));
 assert.ok(g.filter.includes('[2:v]') && g.filter.includes('[3:v]') && g.filter.includes("enable='between(t,2,5)'") && g.filter.includes('fade=t=out:st=4.5') && g.vLabel === '[vfin]', g.filter);
 
+
+// ---- удаление фона: ключ цвета, пипетка (автоугол), WebM с прозрачностью
+const km = O.normItem({ kind: 'image', path: '/x/a.png', keyColor: '#808080', keyTol: 9, keySoft: -1 });
+assert.ok(km.keyColor === '#808080' && km.keyTol === 0.8 && km.keySoft === 0, JSON.stringify(km));
+assert.strictEqual(O.normItem({ kind: 'image', path: '/x/a.png', keyColor: 'серый' }).keyColor, '', 'не цвет — фон не убирается');
+assert.strictEqual(O.keyFilter(km), 'colorkey=0x808080:0.8:0');
+assert.strictEqual(O.keyFilter(O.normItem({ kind: 'image', path: '/x/a.png' })), '', 'без цвета фильтра нет');
+assert.notStrictEqual(O.visualKey(km), O.visualKey({ ...km, keyColor: '#ffffff' }), 'цвет фона меняет картинку');
+assert.deepStrictEqual(O.decoderArgs({ path: 'a.webm' }, true), ['-c:v', 'libvpx-vp9']);
+assert.deepStrictEqual(O.decoderArgs({ path: 'a.webm' }, false), []);
+assert.deepStrictEqual(O.decoderArgs({ path: 'a.mov' }, true), []);
+const gk = O.overlayGraph([{ ...O.normItem({ kind: 'video', path: '/t/a.webm', keyColor: '#00ff00' }), libvpx: true }]);
+assert.ok(gk.inputs.join(' ') === '-stream_loop -1 -c:v libvpx-vp9 -i /t/a.webm'.replace('-stream_loop -1 -c:v libvpx-vp9 -i', '-stream_loop -1 -c:v libvpx-vp9 -i') && /format=rgba,colorkey=0x00ff00:0.15:0.08,scale=/.test(gk.filter), gk.inputs.join(' ') + ' | ' + gk.filter);
+{
+  const buf = Buffer.alloc(64 * 64 * 4, 0); for (let i = 0; i < buf.length; i += 4) { buf[i] = 128; buf[i + 1] = 128; buf[i + 2] = 128; buf[i + 3] = 255; }
+  for (let y = 20; y < 40; y++) for (let x = 20; x < 40; x++) { const i = (y * 64 + x) * 4; buf[i] = 255; buf[i + 1] = 0; buf[i + 2] = 0; }
+  assert.deepStrictEqual(O.cornerColor(buf), { color: '#808080', same: true, transparent: false });
+  const clear = Buffer.alloc(64 * 64 * 4, 0);
+  assert.strictEqual(O.cornerColor(clear).transparent, true, 'углы прозрачные — убирать нечего');
+}
+
 // ---- настоящий ffmpeg
 if (process.platform !== 'win32' && spawnSync('ffmpeg', ['-version']).status === 0) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-'));
@@ -88,6 +109,41 @@ if (process.platform !== 'win32' && spawnSync('ffmpeg', ['-version']).status ===
   const crop = spawnSync('ffmpeg', ['-v', 'error', '-ss', '1', '-i', out, '-frames:v', '1', '-vf', 'crop=900:230:90:768', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']).stdout;
   let yellow = 0; for (let i = 0; i < crop.length; i += 3) if (crop[i] > 200 && crop[i + 1] > 200 && crop[i + 2] < 80) yellow++;
   assert.ok(yellow > 800, `жёлтый текст виден: ${yellow}`);
+
+  // фон серый → ключ убирает его, красный квадрат остаётся (в предпросмотре и в рендере)
+  {
+    const g = path.join(tmp, 'gray.png');
+    ff(['-f', 'lavfi', '-i', 'color=c=0x808080:s=200x200', '-vf', 'drawbox=x=60:y=60:w=80:h=80:color=0xff0000:t=fill', '-frames:v', '1', g]);
+    const kitem = O.normItem({ kind: 'image', path: g, x: 0.1, y: 0.4, w: 0.4, keyColor: '#808080', keyTol: 0.1, keySoft: 0.02 });
+    const pv = path.join(tmp, 'pv.png'); ff(O.mediaPngArgs(kitem, pv));
+    assert.strictEqual(px(pv, 3, 3)[3], 0, 'серый фон стал прозрачным');
+    const sq = px(pv, 216, 216); assert.ok(sq[0] > 240 && sq[1] < 15 && sq[3] === 255, `квадрат остался: ${sq}`);
+    const rawPv = path.join(tmp, 'pvr.png'); ff(O.mediaPngArgs(kitem, rawPv, { raw: true }));
+    assert.strictEqual(px(rawPv, 3, 3)[3], 255, 'для пипетки фон остаётся');
+    const near = (c, want, tol = 40) => c.slice(0, 3).every((v, i) => Math.abs(v - want[i]) <= tol);
+    const m2 = path.join(tmp, 'm2.mp4'); ff(['-f', 'lavfi', '-i', 'color=c=0x0000ff:s=1080x1920:r=30:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', m2]);
+    const g2 = O.overlayGraph([kitem], { firstInput: 1 });
+    const o2 = path.join(tmp, 'o2.mp4');
+    ff(['-y', '-i', m2, ...g2.inputs, '-filter_complex', `[0:v]setsar=1,format=yuv420p[vout]${g2.filter}`, '-map', g2.vLabel, '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', o2]);
+    // наложение 432×432 в (108, 768): угол (110, 770) — бывший серый фон → виден синий основной
+    assert.ok(near(px(o2, 112, 772, 1), [0, 0, 255]), 'серый фон не виден в ролике');
+    assert.ok(near(px(o2, 108 + 216, 768 + 216, 1), [255, 0, 0]), 'красный квадрат виден');
+  }
+  // WebM с прозрачностью: с libvpx углы прозрачные, без него — чёрные (так и было, пока не добавили декодер)
+  if (spawnSync('ffmpeg', ['-hide_banner', '-decoders']).stdout.toString().includes('libvpx-vp9')) {
+    const wa = path.join(tmp, 'a.webm');
+    ff(['-f', 'lavfi', '-i', 'color=c=0xff0000:s=200x200:r=25:d=1', '-vf', "format=gbrap,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lt(hypot(X-100,Y-100),60),255,0)',format=yuva420p", '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-auto-alt-ref', '0', wa]);
+    const wi = O.normItem({ kind: 'video', path: wa, x: 0.1, y: 0.4, w: 0.4 });
+    const mainBlue = path.join(tmp, 'm3.mp4'); ff(['-f', 'lavfi', '-i', 'color=c=0x0000ff:s=1080x1920:r=30:d=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', mainBlue]);
+    for (const libvpx of [true, false]) {
+      const gg = O.overlayGraph([{ ...wi, file: wa, libvpx }], { firstInput: 1 });
+      const oo = path.join(tmp, `w${libvpx}.mp4`);
+      ff(['-y', '-i', mainBlue, ...gg.inputs, '-filter_complex', `[0:v]setsar=1,format=yuv420p[vout]${gg.filter}`, '-map', gg.vLabel, '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', oo]);
+      const corner = px(oo, 112, 772, 0.5);
+      if (libvpx) assert.ok(near(corner, [0, 0, 255]), `с libvpx углы прозрачные: ${corner}`);
+      else assert.ok(!near(corner, [0, 0, 255], 20), 'без libvpx альфа терялась (фон чёрный)');
+    }
+  }
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 console.log('наложения: все проверки прошли');
@@ -104,6 +160,13 @@ console.log('наложения: все проверки прошли');
   assert.ok(pv.src.startsWith('data:image/png;base64,') && pv.src.length > 500 && pv.item.kind === 'plate');
   await assert.rejects(() => pl.overlayPreview({ kind: 'image', path: '/нет/такого.png' }), /не найден/);
   assert.strictEqual(await pl.overlayFile({ kind: 'image', path: '/нет/такого.png' }), null);
+  const gray0 = path.join(tmp, 'g0.png');
+  assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x808080:s=200x200', '-vf', 'drawbox=x=60:y=60:w=80:h=80:color=0xff0000:t=fill', '-frames:v', '1', gray0]).status, 0);
+  const bg = await pl.overlayBg({ kind: 'image', path: gray0 });
+  assert.deepStrictEqual([bg.color, bg.same, bg.transparent], ['#808080', true, false], 'автоугол находит серый фон');
+  const pvk = await pl.overlayPreview({ kind: 'image', path: gray0, w: 0.4, keyColor: bg.color, keyTol: 0.1 });
+  const pvr = await pl.overlayPreview({ kind: 'image', path: gray0, w: 0.4, keyColor: bg.color, keyTol: 0.1 }, { raw: true });
+  assert.notStrictEqual(pvk.src, pvr.src, 'предпросмотр без фона и «сырой» для пипетки отличаются');
   const src = path.join(tmp, 'src.mp4');
   assert.strictEqual(spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x202020:s=640x360:r=25:d=4', '-f', 'lavfi', '-i', 'sine=d=4', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-shortest', src]).status, 0);
   const warns = [];
