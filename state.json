@@ -594,33 +594,7 @@
   },
   "lanes": {
     "instagram": {
-      "active": {
-        "folder": "006_City-Wall",
-        "date": "2026-11-10",
-        "plan": {
-          "dayzerorules/short-1-four-seconds.mp4": "2026-11-10T10:00+07:00",
-          "dayzerorules/short-2-token-67.mp4": "2026-11-10T12:00+07:00",
-          "dayzerorules/short-3-never-hide-a-cough.mp4": "2026-11-10T14:00+07:00",
-          "dayzerorules/short-4-half-a-cup.mp4": "2026-11-10T16:00+07:00",
-          "dayzerorules/short-5-gray-gate.mp4": "2026-11-10T18:00+07:00",
-          "dayzerorules/short-6-that-wheeze.mp4": "2026-11-10T20:00+07:00",
-          "dayzerorules/short-7-after-seven.mp4": "2026-11-10T22:00+07:00",
-          "rulezerosurvivel/short-1-never-hide-a-cough.mp4": "2026-11-10T10:00+07:00",
-          "rulezerosurvivel/short-2-half-a-cup.mp4": "2026-11-10T12:00+07:00",
-          "rulezerosurvivel/short-3-gray-gate.mp4": "2026-11-10T14:00+07:00",
-          "rulezerosurvivel/short-4-that-wheeze.mp4": "2026-11-10T16:00+07:00",
-          "rulezerosurvivel/short-5-after-seven.mp4": "2026-11-10T18:00+07:00",
-          "rulezerosurvivel/short-6-four-seconds.mp4": "2026-11-10T20:00+07:00",
-          "rulezerosurvivel/short-7-token-67.mp4": "2026-11-10T22:00+07:00",
-          "survivelzerorule/short-1-after-seven.mp4": "2026-11-10T10:00+07:00",
-          "survivelzerorule/short-2-that-wheeze.mp4": "2026-11-10T12:00+07:00",
-          "survivelzerorule/short-3-gray-gate.mp4": "2026-11-10T14:00+07:00",
-          "survivelzerorule/short-4-half-a-cup.mp4": "2026-11-10T16:00+07:00",
-          "survivelzerorule/short-5-never-hide-a-cough.mp4": "2026-11-10T18:00+07:00",
-          "survivelzerorule/short-6-token-67.mp4": "2026-11-10T20:00+07:00",
-          "survivelzerorule/short-7-four-seconds.mp4": "2026-11-10T22:00+07:00"
-        }
-      },
+      "active": null,
       "last_started": "2026-11-10",
       "plans": {
         "2026-11-06": {
@@ -750,8 +724,7 @@
             "survivelzerorule/short-7-four-seconds.mp4": "2026-11-10T22:00+07:00"
           }
         }
-      },
-      "paused": true
+      }
     },
     "tiktok": {}
   },
@@ -814,6 +787,5 @@
       "total": 100,
       "at": "2026-11-10T03:01+00:00"
     }
-  },
-  "paused": true
+  }
 }
