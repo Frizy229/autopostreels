@@ -18,6 +18,7 @@ const { whisperArgs, wavArgs, parseWhisperJson, whisperTags, MODELS } = require(
 const { judgeMoment, excerpt, parseVisual, visualArgs } = require('./judge');
 const { LLM_MODELS, LlmServer, momentText, llmBonus } = require('./llm');
 const Z = require('./zanos');
+const OV = require('./overlays');
 const { OcrReader, ocrAvailable } = require('./ocr');
 
 const hasEntries = (r, out) => { if (!out) return false; try { return parseList(out).length > 0; } catch { return false; } };
@@ -59,6 +60,7 @@ class Pipeline {
         const was = new Map((pr.moments || []).map((m) => [m.id, m]));
         pr.moments = v.map((m) => {
           const o = was.get(m.id);
+          if (m.overlays) m = { ...m, overlays: OV.normItems(m.overlays) };
           const start = Math.max(0, +m.start), end = Math.min(pr.source.duration || Infinity, +m.end);
           if (!(end - start >= 1)) throw new Error('Отрезок должен быть не короче секунды');
           if (o && (o.start !== start || o.end !== end)) { const { words, check, ...rest } = m; return { ...rest, start, end, peak: Math.min(end, Math.max(start, m.peak || start)), trimmed: true }; }
@@ -66,6 +68,7 @@ class Pipeline {
         });
       }
       else if (k === 'blurs') pr.blurs = normBlurs(v);
+      else if (k === 'overlays') pr.overlays = OV.normItems(v);
       else if (['frame', 'title', 'streamer'].includes(k)) pr[k] = v;
     }
     return this.save(pr);
@@ -514,6 +517,49 @@ class Pipeline {
   }
 
   /**
+   * PNG для наложения: текст и плашка рисуются ffmpeg один раз (кэш по виду), для картинок и видео — сам файл.
+   * Возвращает путь к файлу или null, если файла нет или он не нарисовался.
+   */
+  async overlayFile(o, signal) {
+    if (o.kind === 'image' || o.kind === 'video') return fs.existsSync(o.path) ? o.path : null;
+    const dir = path.join(this.dataDir, 'overlay-cache');
+    fs.mkdirSync(dir, { recursive: true });
+    const key = OV.visualKey(o), out = path.join(dir, `${key}.png`);
+    if (fs.existsSync(out)) return out;
+    const tf = path.join(dir, `${key}.txt`);
+    fs.writeFileSync(tf, o.text);
+    try { await this.tools.run(this.tools.ffmpeg, OV.textPngArgs(o, { fontsDir: this.fontsDir, textFile: tf, out }), { signal }); } finally { fs.rmSync(tf, { force: true }); }
+    return fs.existsSync(out) ? out : null;
+  }
+
+  /** Часть графа ffmpeg для набора наложений; недоступные файлы пропускаются с предупреждением. */
+  async overlayPlan(items, firstInput, warn, signal) {
+    const ready = [];
+    for (const o of items) {
+      let file = null;
+      try { file = await this.overlayFile(o, signal); } catch (e) { if (e.code === 'ABORT') throw e; }
+      if (file) ready.push({ ...o, file }); else if (warn) warn(`Наложение пропущено: ${o.path ? path.basename(o.path) : `«${String(o.text).slice(0, 20)}»`} не готово`);
+    }
+    return OV.overlayGraph(ready, { firstInput });
+  }
+
+  /** Картинка наложения для предпросмотра в окне: data URL (текст и плашки — как в рендере; у видео первый кадр). */
+  async overlayPreview(raw) {
+    const o = OV.normItem(raw);
+    if (!o) throw new Error('Наложение не заполнено');
+    let file;
+    if (o.kind === 'image' || o.kind === 'video') {
+      if (!fs.existsSync(o.path)) throw new Error('Файл не найден');
+      const dir = path.join(this.dataDir, 'overlay-cache');
+      fs.mkdirSync(dir, { recursive: true });
+      file = path.join(dir, `p_${OV.visualKey(o)}.png`);
+      if (!fs.existsSync(file)) await this.tools.run(this.tools.ffmpeg, OV.mediaPngArgs(o, file));
+    } else file = await this.overlayFile(o);
+    if (!file) throw new Error('Не удалось нарисовать наложение');
+    return { src: `data:image/png;base64,${fs.readFileSync(file).toString('base64')}`, item: o };
+  }
+
+  /**
    * Нейросеть читает текст каждого не-мусорного момента и ставит 0–10 за «смешное и цепляющее».
    * Сервер поднимается один раз на весь поиск. Нет программы или модели — тихо пропускаем (заметка только если включено, но не установлено).
    * Возвращает заметку для экрана или ''.
@@ -837,8 +883,11 @@ class Pipeline {
         style: v.subStyle || s.subStyle, title: f.title, titleStyle: s.titleStyle, titleDur: s.titleDur, anchors, maxWords: s.maxWords,
       }));
       const filter = buildFilter({ ...base, ass: filterPath(assFile), fontsDir: filterPath(this.fontsDir) });
+      // наложения: шаблон из настроек + свои у момента
+      const tpl = (s.overlayTemplates || []).find((t) => t.id === s.overlayTemplate);
+      const overlay = await this.overlayPlan(OV.itemsFor(tpl && tpl.items, m.overlays, dur), filler ? 2 : 1, (w) => emit({ stage: w, i, total, label, progress: 0.2, warning: w }));
       let kbps = videoKbps(dur);
-      const render = (encoder) => this.tools.run(this.tools.ffmpeg, renderArgs({ input: media.input, start, end, filter, filler, output: f.video, encoder, quality: s.quality, fps: s.fps, loudnorm: s.loudnorm, maxDur: dur.toFixed(3), maxKbps: kbps }), {
+      const render = (encoder) => this.tools.run(this.tools.ffmpeg, renderArgs({ input: media.input, start, end, filter, overlay, filler, output: f.video, encoder, quality: s.quality, fps: s.fps, loudnorm: s.loudnorm, maxDur: dur.toFixed(3), maxKbps: kbps }), {
         signal: o.signal, onStdout: (b) => { const p = parseRenderProgress(b.toString('utf8'), dur); if (p != null) ev('Монтаж', 0.25 + p * 0.7); },
       });
       const enc = encoderFallback ? 'cpu' : s.encoder;

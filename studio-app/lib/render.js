@@ -20,7 +20,7 @@ function videoKbps(durSec, fileMb = MAX_FILE_MB, audioKbps = 192) {
 }
 
 /**
- * o: input, start, end (секунды исходника), filter (из layout.buildFilter), output, encoder, quality, fps, loudnorm.
+ * o: input, start, end (секунды исходника), filter (из layout.buildFilter), overlay (из overlays.overlayGraph), output, encoder, quality, fps, loudnorm.
  * -ss до -i: быстрый переход; с перекодированием кадр точный.
  */
 function renderArgs(o) {
@@ -31,14 +31,17 @@ function renderArgs(o) {
   a.push('-i', o.input);
   // мини-игра для раскладки filler: по кругу, со своего места, без звука
   if (o.filler) a.push('-stream_loop', '-1', '-ss', String(o.filler.offset || 0), '-i', o.filler.path);
-  let filter = o.filter.filter;
+  // наложения (текст, плашки, картинки, видео): их входы идут после основного и фона
+  if (o.overlay && o.overlay.inputs.length) a.push(...o.overlay.inputs);
+  let filter = o.filter.filter + (o.overlay ? o.overlay.filter : '');
+  const vLabel = o.overlay ? o.overlay.vLabel : o.filter.vLabel;
   let aLabel = o.filter.aLabel;
   if (o.loudnorm && aLabel) {
     const src = aLabel === '0:a?' ? '[0:a]' : aLabel;
     filter += `;${src}loudnorm=I=-14:TP=-1.5:LRA=11[anorm]`;
     aLabel = '[anorm]';
   }
-  a.push('-filter_complex', filter, '-map', o.filter.vLabel);
+  a.push('-filter_complex', filter, '-map', vLabel);
   if (aLabel) a.push('-map', aLabel);
   a.push(...enc.args(o.quality, o.maxKbps || MAX_KBPS), '-r', String(o.fps || 30), '-pix_fmt', 'yuv420p');
   if (aLabel) a.push('-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2'); else a.push('-an');

@@ -7,6 +7,7 @@ const { ENCODERS } = require('./render');
 const { MODELS } = require('./transcribe');
 const { LLM_MODELS } = require('./llm');
 const { DEFAULT_RULES } = require('./rules');
+const { normTemplates } = require('./overlays');
 const { BROWSERS, COOKIE_MODES, FILLER_QUERIES, parseQueryLine, NET_MODES } = require('./sources');
 
 const DEFAULTS = {
@@ -41,6 +42,8 @@ const DEFAULTS = {
     source: '',
   },
   rules: { ...DEFAULT_RULES },
+  overlayTemplates: [],  // шаблоны наложений: [{id, name, items}]
+  overlayTemplate: '',   // id шаблона, который накладывается на все ролики при сборке ('' — нет)
   presets: {},           // рамки вебки/контента по стримерам: { "evelone2004": {cam, content, layout} }
   searchMinMin: 20,      // поиск лонгов: от N минут
   ocr: true,             // заносы: читать текст на экране (иксы, суммы), локально
@@ -118,6 +121,8 @@ function normalize(raw) {
   if (s.cookies.mode === 'file' && !s.cookies.file) s.cookies.mode = 'auto';
   const nt = { ...DEFAULTS.net, ...((raw && raw.net && typeof raw.net === 'object') ? raw.net : {}) };
   s.net = { mode: pick(nt.mode, NET_MODES, 'system'), proxy: typeof nt.proxy === 'string' ? nt.proxy.trim().slice(0, 200) : '' };
+  s.overlayTemplates = normTemplates(s.overlayTemplates);
+  s.overlayTemplate = s.overlayTemplates.some((t) => t.id === s.overlayTemplate) ? s.overlayTemplate : '';
   if (!s.presets || typeof s.presets !== 'object') s.presets = {};
   const ig = { ...DEFAULTS.ig, ...((raw && raw.ig && typeof raw.ig === 'object') ? raw.ig : {}) };
   s.ig = {

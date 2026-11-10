@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('api', {
   projects: call('project:list'),
   project: call('project:get'),
   updateProject: call('project:update'),
+  overlayPreview: call('overlay:preview'),
+  overlayMeta: call('overlay:meta'),
   removeProject: call('project:remove'),
   addMoment: call('project:addMoment'),
   frame: call('project:frame'),

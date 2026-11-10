@@ -7,6 +7,7 @@ const { normalize, LANES, igOverride } = require('./lib/settings');
 const { igAccounts } = require('./lib/igsearch');
 const { LAYOUTS, FITS, CAM_LAYOUTS } = require('./lib/layout');
 const handoff = require('./lib/handoff');
+const OV = require('./lib/overlays');
 const { SUB_STYLES, TITLE_STYLES } = require('./lib/subs');
 const { BROWSERS, COOKIE_MODES, NET_MODES, proxyFromPac } = require('./lib/sources');
 const { LLM_MODELS, llamaAssets } = require('./lib/llm');
@@ -227,6 +228,8 @@ function registerIpc() {
   handle('project:update', (id, patch) => slim(pipeline.update(id, patch)));
   handle('project:remove', (id) => pipeline.remove(id));
   handle('project:addMoment', (id, s, e) => pipeline.addMoment(id, s, e));
+  handle('overlay:preview', (item) => pipeline.overlayPreview(item));
+  handle('overlay:meta', () => ({ fonts: Object.fromEntries(Object.entries(OV.FONTS).map(([k, v]) => [k, v.name])), aligns: OV.ALIGNS }));
   handle('project:frame', async (id, t) => `data:image/jpeg;base64,${(await pipeline.frame(id, t)).toString('base64')}`);
   handle('filler:search', (q, o = {}) => pipeline.searchFillers(q, { cc: !!o.cc, limit: o.limit || 30 }));
   handle('filler:list', () => pipeline.fillerLibrary());

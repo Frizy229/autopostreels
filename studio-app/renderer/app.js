@@ -455,6 +455,7 @@ function projectMain(pr) {
           <div class="tools">
             <button class="btn sm icon ghost" data-play title="Посмотреть">${ic('play', 'sm')}</button>
             <button class="btn sm icon ghost" data-edit title="Обрезать и заблюрить">${ic('scissors', 'sm')}</button>
+            <button class="btn sm icon ghost" data-ov title="Текст, плашки, картинки и видео на ролике${(m.overlays || []).length ? ` (сейчас: ${m.overlays.length})` : ''}">${ic('type', 'sm')}${(m.overlays || []).length ? `<span class="faint num">${m.overlays.length}</span>` : ''}</button>
             <button class="btn sm ${m.ok ? 'primary' : 'ghost'}" data-ok title="Эвелон — главное лицо">${ic('scan-face', 'sm')}</button>
           </div>
         </div>`).join('')}</div>
@@ -486,6 +487,7 @@ function bindProject(pr) {
     $('[data-title]', row).onchange = (e) => updFull((ms) => { ms.find((x) => x.id === id).title = e.target.value.trim(); });
     $('[data-play]', row).onclick = () => playMoment(pr, id);
     $('[data-edit]', row).onclick = () => openEditor(pr, id).catch(fail);
+    $('[data-ov]', row).onclick = () => openMomentOverlays(pr, id).catch(fail);
   });
   $('#selAll').onclick = async () => { await updFull((ms) => ms.forEach((m) => { m.selected = true; })); await refreshProjects(); render(); };
   $('#selNone').onclick = async () => { await updFull((ms) => ms.forEach((m) => { m.selected = false; })); await refreshProjects(); render(); };
@@ -764,6 +766,13 @@ function pageEdit(el) {
       </div>
     </div>
     <div class="card">
+      <h3>Наложения: текст, плашки, медиа</h3><p class="hint">Шаблон накладывается на каждый ролик при сборке: логотип, плашка с каналом, подпись, обводка. Свои наложения для одного ролика ставятся кнопкой «Aa» в его строке на вкладке «Моменты». Картинки, гифки и видео берутся с компьютера.</p>
+      <div class="row wrap"><select class="input" id="tplSel" style="min-width:220px"><option value="">Без шаблона</option>${(s.overlayTemplates || []).map((t) => `<option value="${esc(t.id)}" ${s.overlayTemplate === t.id ? 'selected' : ''}>${esc(t.name)} (${t.items.length})</option>`).join('')}</select>
+        <button class="btn sm" id="tplEdit" ${s.overlayTemplate ? '' : 'disabled'}>Изменить</button>
+        <button class="btn sm ghost" id="tplDel" ${s.overlayTemplate ? '' : 'disabled'}>${ic('trash-2', 'sm')}Удалить</button>
+        <input class="input" id="tplName" placeholder="Название нового шаблона" style="width:210px"><button class="btn sm primary" id="tplNew">${ic('plus', 'sm')}Новый шаблон</button></div>
+    </div>
+    <div class="card">
       <h3>Субтитры</h3><p class="hint">Тоже по кругу между каналами. Слово, которое сейчас звучит, подсвечивается.</p>
       <div class="styles">${Object.entries(cat.subStyles).map(([k, st]) => `
         <button class="sty ${s.subStyles.includes(k) ? 'on' : ''}" data-sty="${k}">
@@ -812,6 +821,14 @@ function pageEdit(el) {
   const sw = (id, key) => { $(`#${id}`).onchange = (e) => saveSettings({ [key]: e.target.checked }, true); };
   sw('subsOn', 'subsOn'); sw('vary', 'vary'); sw('mirror', 'allowMirror'); sw('speed', 'allowSpeed'); sw('loud', 'loudnorm');
   $('#lang').onchange = (e) => saveSettings({ lang: e.target.value }, true);
+  $('#tplSel').onchange = async (e) => { await saveSettings({ overlayTemplate: e.target.value }, true); render(); };
+  $('#tplEdit').onclick = () => openTemplateEditor(S.settings.overlayTemplate).catch(fail);
+  $('#tplNew').onclick = () => openTemplateEditor('').catch(fail);
+  $('#tplDel').onclick = async () => {
+    const t = (S.settings.overlayTemplates || []).find((x) => x.id === S.settings.overlayTemplate);
+    if (!t || !confirm(`Удалить шаблон «${t.name}»?`)) return;
+    await saveSettings({ overlayTemplates: S.settings.overlayTemplates.filter((x) => x.id !== t.id), overlayTemplate: '' }, true); render();
+  };
   $('#titleDur').onchange = (e) => saveSettings({ titleDur: +e.target.value }, true);
   $('#fillerPick').onclick = async () => { const d = await call('pickFolder', 'Папка с мини-играми'); if (d) { await saveSettings({ fillerDir: d }); render(); } };
 }
