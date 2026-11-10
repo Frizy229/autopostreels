@@ -33,5 +33,7 @@
       "mode": "inbox"
     }
   ],
-  "paused": []
+  "paused": [
+    "instagram"
+  ]
 }
