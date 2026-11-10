@@ -437,7 +437,7 @@ if (process.env.REELS_WIDGET_TEST) global.__reelsTest = { oauthWindow }; // дл
 // вход: в окне виджета (по умолчанию) или в обычном браузере, тогда адрес страницы после входа вставляют руками
 let pendingAuth = null;
 function igPrep() {
-  if (!igAppId() || !igRedirect()) throw Object.assign(new Error('Сначала впиши ID и секрет приложения Instagram.'), { code: 'NO_IG_SECRET' });
+  if (!igAppId() || !igRedirect()) throw Object.assign(new Error('Для входа через Instagram нужны «ID приложения Instagram» и «Секрет приложения Instagram» (это другие ключи, не Meta): developers.facebook.com → приложение → Варианты использования → Instagram → «Настройка API со входом через Instagram». Проще войти через Facebook.'), { code: 'NO_IG_SECRET' });
   if (!igSecret()) throw Object.assign(new Error('Сначала впиши секрет приложения Instagram.'), { code: 'NO_IG_SECRET' });
   const state = crypto.randomBytes(12).toString('hex');
   return { redirect: igRedirect(), state, url: accounts.instagramAuthUrl({ appId: igAppId(), redirectUri: igRedirect(), state }) };

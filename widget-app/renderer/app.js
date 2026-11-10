@@ -814,7 +814,12 @@ $('accLoginFb').addEventListener('click', () => accRun($('accLoginFb'), async ()
   showLogin(r);
 }));
 $('accBrowser').addEventListener('click', () => accRun($('accLogin'), async () => {
-  await bridge.loginStart({ platform: accNet === 'instagram' && hasFbKeys() ? 'facebook' : accNet, browser: true });
+  // Instagram: в браузере тот же вход, что на главной кнопке (через Facebook), через Instagram только если есть его ключи
+  if (accNet === 'instagram' && !hasFbKeys() && !hasIgKeys()) {
+    show('accKeys', true);
+    throw new Error('Сначала вставь «ID приложения Meta» и «Секрет приложения Meta» в поля выше и нажми «Сохранить ключ» (где их взять — под полями). Потом снова «Войти через браузер».');
+  }
+  await bridge.loginStart({ platform: accNet === 'instagram' ? (hasFbKeys() || !hasIgKeys() ? 'facebook' : 'instagram') : accNet, browser: true });
   browserHint();
 }));
 $('accPasteGo').addEventListener('click', () => accRun($('accPasteGo'), async () => showLogin(await bridge.loginPasted($('accPasted').value))));
