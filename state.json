@@ -195,7 +195,8 @@
     "rulezerosurvivel|instagram:003_Night-Shift/rulezerosurvivel/short-6-the-notebook.mp4": "3 неудачные попытки: Ошибка загрузки видео 400: {\"debug_info\":{\"retriable\":false,\"type\":\"ProcessingFailedError\",\"message\":\"Request processing failed\"}}",
     "survivelzerorule|instagram:004_Metro/survivelzerorule/short-7-6-40-pm.mp4": "3 неудачные попытки: Ошибка загрузки видео 400: {\"debug_info\":{\"retriable\":false,\"type\":\"ProcessingFailedError\",\"message\":\"Request processing failed\"}}",
     "rulezerosurvivel|instagram:005_Last-Human/rulezerosurvivel/short-6-everyone-is-gone.mp4": "3 неудачные попытки: Ошибка загрузки видео 400: {\"debug_info\":{\"retriable\":false,\"type\":\"ProcessingFailedError\",\"message\":\"Request processing failed\"}}",
-    "rulezerosurvivel|instagram:005_Last-Human/rulezerosurvivel/short-7-the-radio-that-never-stops.mp4": "3 неудачные попытки: Ошибка загрузки видео 500: {\"debug_info\":{\"retriable\":false,\"type\":\"ProcessingFailedError\",\"message\":\"{\\\"success\\\":false,\\\"error\\\":{\\\"message\\\":\\\"{\\\\\\\"message\\\\\\\":\\\\\\\"Generic Internal Error: An internal server error occurred. Please try again later.\\\\\\\"}\\\"}}\"}}"
+    "rulezerosurvivel|instagram:005_Last-Human/rulezerosurvivel/short-7-the-radio-that-never-stops.mp4": "3 неудачные попытки: Ошибка загрузки видео 500: {\"debug_info\":{\"retriable\":false,\"type\":\"ProcessingFailedError\",\"message\":\"{\\\"success\\\":false,\\\"error\\\":{\\\"message\\\":\\\"{\\\\\\\"message\\\\\\\":\\\\\\\"Generic Internal Error: An internal server error occurred. Please try again later.\\\\\\\"}\\\"}}\"}}",
+    "mell012911|instagram:006_mellstroy-melstroy-podnyal-700k-v-kazike/mell012911/short-5-moment.mp4": "3 неудачные попытки: Ошибка загрузки видео 400: {\"debug_info\":{\"retriable\":false,\"type\":\"ProcessingFailedError\",\"message\":\"Request processing failed\"}}"
   },
   "last_started": "2026-11-04",
   "failures": {
@@ -205,7 +206,7 @@
     "survivelzerorule|instagram:004_Metro/survivelzerorule/short-7-6-40-pm.mp4": 3,
     "rulezerosurvivel|instagram:005_Last-Human/rulezerosurvivel/short-6-everyone-is-gone.mp4": 3,
     "rulezerosurvivel|instagram:005_Last-Human/rulezerosurvivel/short-7-the-radio-that-never-stops.mp4": 3,
-    "mell012911|instagram:006_mellstroy-melstroy-podnyal-700k-v-kazike/mell012911/short-5-moment.mp4": 2
+    "mell012911|instagram:006_mellstroy-melstroy-podnyal-700k-v-kazike/mell012911/short-5-moment.mp4": 3
   },
   "active": null,
   "plans": {
@@ -749,37 +750,7 @@
   },
   "lanes": {
     "instagram": {
-      "active": {
-        "folder": "006_mellstroy-melstroy-podnyal-700k-v-kazike",
-        "date": "2026-11-11",
-        "plan": {
-          "mell00175/short-1-moment.mp4": "2026-11-11T08:00+07:00",
-          "mell00175/short-2-moment.mp4": "2026-11-11T11:45+07:00",
-          "mell00175/short-3-moment.mp4": "2026-11-11T15:30+07:00",
-          "mell00175/short-4-moment.mp4": "2026-11-11T19:15+07:00",
-          "mell00175/short-5-moment.mp4": "2026-11-11T23:00+07:00",
-          "mell012911/short-1-moment.mp4": "2026-11-11T08:00+07:00",
-          "mell012911/short-2-moment.mp4": "2026-11-11T11:45+07:00",
-          "mell012911/short-3-moment.mp4": "2026-11-11T15:30+07:00",
-          "mell012911/short-4-moment.mp4": "2026-11-11T19:15+07:00",
-          "mell012911/short-5-moment.mp4": "2026-11-11T23:00+07:00",
-          "mell01836/short-1-moment.mp4": "2026-11-11T08:00+07:00",
-          "mell01836/short-2-moment.mp4": "2026-11-11T11:45+07:00",
-          "mell01836/short-3-moment.mp4": "2026-11-11T15:30+07:00",
-          "mell01836/short-4-moment.mp4": "2026-11-11T19:15+07:00",
-          "mell01836/short-5-moment.mp4": "2026-11-11T23:00+07:00",
-          "mell01844/short-1-moment.mp4": "2026-11-11T08:00+07:00",
-          "mell01844/short-2-moment.mp4": "2026-11-11T11:45+07:00",
-          "mell01844/short-3-moment.mp4": "2026-11-11T15:30+07:00",
-          "mell01844/short-4-moment.mp4": "2026-11-11T19:15+07:00",
-          "mell01844/short-5-moment.mp4": "2026-11-11T23:00+07:00",
-          "mell01873/short-1-moment.mp4": "2026-11-11T08:00+07:00",
-          "mell01873/short-2-moment.mp4": "2026-11-11T11:45+07:00",
-          "mell01873/short-3-moment.mp4": "2026-11-11T15:30+07:00",
-          "mell01873/short-4-moment.mp4": "2026-11-11T19:15+07:00",
-          "mell01873/short-5-moment.mp4": "2026-11-11T23:00+07:00"
-        }
-      },
+      "active": null,
       "last_started": "2026-11-11",
       "plans": {
         "2026-11-06": {
@@ -1052,5 +1023,32 @@
       "total": 100,
       "at": "2026-11-11T16:02+00:00"
     }
+  },
+  "media_done": {
+    "732074302": "2026-11-11T23:10+07:00",
+    "732073654": "2026-11-11T23:10+07:00",
+    "732073008": "2026-11-11T23:10+07:00",
+    "732073289": "2026-11-11T23:10+07:00",
+    "732075063": "2026-11-11T23:10+07:00",
+    "732078976": "2026-11-11T23:10+07:00",
+    "732078405": "2026-11-11T23:10+07:00",
+    "732077241": "2026-11-11T23:10+07:00",
+    "732077954": "2026-11-11T23:10+07:00",
+    "732079438": "2026-11-11T23:10+07:00",
+    "732081358": "2026-11-11T23:10+07:00",
+    "732081110": "2026-11-11T23:10+07:00",
+    "732079994": "2026-11-11T23:10+07:00",
+    "732080375": "2026-11-11T23:10+07:00",
+    "732081710": "2026-11-11T23:10+07:00",
+    "732076416": "2026-11-11T23:10+07:00",
+    "732076200": "2026-11-11T23:10+07:00",
+    "732075443": "2026-11-11T23:10+07:00",
+    "732075785": "2026-11-11T23:10+07:00",
+    "732076899": "2026-11-11T23:10+07:00",
+    "732072350": "2026-11-11T23:10+07:00",
+    "732070970": "2026-11-11T23:10+07:00",
+    "732070232": "2026-11-11T23:10+07:00",
+    "732070617": "2026-11-11T23:10+07:00",
+    "732072642": "2026-11-11T23:10+07:00"
   }
 }
